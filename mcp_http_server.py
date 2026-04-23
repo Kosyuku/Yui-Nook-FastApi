@@ -1,41 +1,49 @@
-import os
+from __future__ import annotations
+
+import logging
+
 import uvicorn
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
-# 引入已注册好 tools 的 mcp 实例（最大化复用 tools 与路由背后的逻辑）
+from config import settings
 from mcp_server import mcp
+from oauth_mcp import install_oauth_routes, oauth_mcp_lifespan
 
-class TokenAuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        # 如果配置了 MCP_API_KEY，进行校验
-        expected_token = os.environ.get("MCP_API_KEY")
-        if expected_token:
-            auth_header = request.headers.get("Authorization")
-            # 格式预期：Bearer <YOUR_TOKEN>
-            if not auth_header or auth_header != f"Bearer {expected_token}":
-                return JSONResponse(
-                    {"detail": "Unauthorized: Invalid or missing Bearer token."}, 
-                    status_code=401
-                )
-        return await call_next(request)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
-# mcp.sse_app() 自动生成包含 /sse 与 /messages 端点的 Starlette 应用实例
+
 mcp_app = mcp.sse_app()
 
-# 添加认证鉴权层
-mcp_app.add_middleware(TokenAuthMiddleware)
+app = FastAPI(
+    title="YUI Nook MCP HTTP Server",
+    version="0.1.0",
+    lifespan=oauth_mcp_lifespan,
+)
+
+install_oauth_routes(app)
+
+
+@app.get("/healthz")
+async def healthz():
+    return JSONResponse(
+        {
+            "status": "ok",
+            "service": "mcp_http_server",
+            "sse_url": f"{settings.mcp_public_base_url.rstrip('/')}/sse" if settings.mcp_public_base_url else "/sse",
+        }
+    )
+
+
+app.mount("/", mcp_app)
+
 
 if __name__ == "__main__":
-    # 配置从环境变量获取，适合部署并支持反代
-    host = os.environ.get("MCP_HOST", "0.0.0.0")
-    port = int(os.environ.get("MCP_PORT", "8001"))
-    
-    print("-" * 50)
-    print(f"🚀 Starting Remote HTTP MCP Server")
-    print(f"🔗 Endpoint URL: http://{host}:{port}/sse")
-    print(f"🔒 Authenticated: {'Yes (Using MCP_API_KEY)' if os.environ.get('MCP_API_KEY') else 'No (Warning: Publicly Accessible)'}")
-    print("-" * 50)
-    
-    # 启动 ASGI 服务器
-    uvicorn.run(mcp_app, host=host, port=port)
+    logger.info("Starting MCP HTTP server with OAuth on %s:%s", settings.mcp_host, settings.mcp_port)
+    if settings.mcp_public_base_url:
+        logger.info("Public SSE endpoint: %s/sse", settings.mcp_public_base_url.rstrip("/"))
+    uvicorn.run(app, host=settings.mcp_host, port=settings.mcp_port)

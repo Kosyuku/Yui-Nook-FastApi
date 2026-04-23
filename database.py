@@ -59,6 +59,32 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_session
     ON messages(session_id, created_at);
 
+CREATE TABLE IF NOT EXISTS cot_logs (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL,
+    agent_id    TEXT NOT NULL DEFAULT 'default',
+    source      TEXT NOT NULL DEFAULT 'chat',
+    log_type    TEXT NOT NULL,
+    title       TEXT NOT NULL DEFAULT '',
+    summary     TEXT NOT NULL DEFAULT '',
+    content     TEXT NOT NULL DEFAULT '',
+    tool_name   TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT '',
+    token_count INTEGER NOT NULL DEFAULT 0,
+    pinned      INTEGER NOT NULL DEFAULT 0,
+    expires_at  TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cot_logs_session_time
+    ON cot_logs(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cot_logs_agent_time
+    ON cot_logs(agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cot_logs_cleanup
+    ON cot_logs(session_id, pinned, created_at);
+CREATE INDEX IF NOT EXISTS idx_cot_logs_expires
+    ON cot_logs(expires_at);
+
 CREATE TABLE IF NOT EXISTS rp_rooms (
     room_id        TEXT PRIMARY KEY,
     name           TEXT NOT NULL,
@@ -1582,6 +1608,34 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     )
     await db.execute("CREATE INDEX IF NOT EXISTS idx_rp_rooms_agent_last_active ON rp_rooms(agent_id, last_active_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_rp_messages_room_time ON rp_messages(room_id, timestamp)")
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cot_logs (
+            id          TEXT PRIMARY KEY,
+            session_id  TEXT NOT NULL,
+            agent_id    TEXT NOT NULL DEFAULT 'default',
+            source      TEXT NOT NULL DEFAULT 'chat',
+            log_type    TEXT NOT NULL,
+            title       TEXT NOT NULL DEFAULT '',
+            summary     TEXT NOT NULL DEFAULT '',
+            content     TEXT NOT NULL DEFAULT '',
+            tool_name   TEXT NOT NULL DEFAULT '',
+            status      TEXT NOT NULL DEFAULT '',
+            token_count INTEGER NOT NULL DEFAULT 0,
+            pinned      INTEGER NOT NULL DEFAULT 0,
+            expires_at  TEXT NOT NULL DEFAULT '',
+            created_at  TEXT NOT NULL
+        )
+        """
+    )
+    if not await _sqlite_column_exists(db, "cot_logs", "source"):
+        await db.execute("ALTER TABLE cot_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'chat'")
+    if not await _sqlite_column_exists(db, "cot_logs", "content"):
+        await db.execute("ALTER TABLE cot_logs ADD COLUMN content TEXT NOT NULL DEFAULT ''")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_cot_logs_session_time ON cot_logs(session_id, created_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_cot_logs_agent_time ON cot_logs(agent_id, created_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_cot_logs_cleanup ON cot_logs(session_id, pinned, created_at)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_cot_logs_expires ON cot_logs(expires_at)")
     # memory_labels + memory_label_items migration
     await db.execute(
         """
@@ -1687,6 +1741,33 @@ async def set_setting(key: str, value: str) -> dict[str, Any]:
     return {"key": key, "value": value, "updated_at": now}
 
 
+async def delete_setting(key: str) -> bool:
+    if _use_supabase_settings():
+        await _supabase_delete(settings.supabase_settings_table, {"key": f"eq.{key}"})
+        return True
+    db = await get_db()
+    cursor = await db.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+    await db.commit()
+    return cursor.rowcount > 0
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _agent_persona_setting_key(agent_id: str | None) -> str:
     return f"agent_persona:{normalize_agent_id(agent_id)}"
 
@@ -1736,6 +1817,87 @@ async def set_agent_proactive_style(agent_id: str | None, style: str) -> dict[st
         "style": str(row.get("value") or "normal"),
         "updated_at": str(row.get("updated_at") or ""),
     }
+
+
+async def safe_delete_agent(agent_id: str | None) -> dict[str, Any]:
+    normalized_agent_id = normalize_agent_id(agent_id)
+    orphan_agent_id = f"orphan:{normalized_agent_id}"
+    result = {
+        "agent_id": normalized_agent_id,
+        "companion_state_deleted": 0,
+        "proactive_deleted": 0,
+        "sessions_detached": 0,
+        "memories_detached": 0,
+        "memories_source_detached": 0,
+        "persona_deleted": False,
+        "proactive_style_deleted": False,
+    }
+
+    if _use_supabase_data():
+        companion_rows = await _supabase_delete(
+            settings.supabase_companion_state_table,
+            {"agent_id": f"eq.{normalized_agent_id}"},
+        )
+        proactive_rows = await _supabase_delete(
+            settings.supabase_proactive_messages_table,
+            {"agent_id": f"eq.{normalized_agent_id}"},
+        )
+        session_rows = await _supabase_update(
+            settings.supabase_sessions_table,
+            {"agent_id": f"eq.{normalized_agent_id}"},
+            {"agent_id": orphan_agent_id},
+        )
+        memory_rows = await _supabase_update(
+            settings.supabase_memories_table,
+            {"agent_id": f"eq.{normalized_agent_id}"},
+            {"agent_id": orphan_agent_id},
+        )
+        memory_source_rows = await _supabase_update(
+            settings.supabase_memories_table,
+            {"source_agent_id": f"eq.{normalized_agent_id}"},
+            {"source_agent_id": orphan_agent_id},
+        )
+        result.update({
+            "companion_state_deleted": len(companion_rows or []),
+            "proactive_deleted": len(proactive_rows or []),
+            "sessions_detached": len(session_rows or []),
+            "memories_detached": len(memory_rows or []),
+            "memories_source_detached": len(memory_source_rows or []),
+        })
+    else:
+        db = await get_db()
+        companion_cursor = await db.execute(
+            "DELETE FROM companion_state WHERE agent_id = ?",
+            (normalized_agent_id,),
+        )
+        proactive_cursor = await db.execute(
+            "DELETE FROM proactive_messages WHERE agent_id = ?",
+            (normalized_agent_id,),
+        )
+        sessions_cursor = await db.execute(
+            "UPDATE sessions SET agent_id = ? WHERE agent_id = ?",
+            (orphan_agent_id, normalized_agent_id),
+        )
+        memories_cursor = await db.execute(
+            "UPDATE memories SET agent_id = ? WHERE agent_id = ?",
+            (orphan_agent_id, normalized_agent_id),
+        )
+        memories_source_cursor = await db.execute(
+            "UPDATE memories SET source_agent_id = ? WHERE source_agent_id = ?",
+            (orphan_agent_id, normalized_agent_id),
+        )
+        await db.commit()
+        result.update({
+            "companion_state_deleted": companion_cursor.rowcount,
+            "proactive_deleted": proactive_cursor.rowcount,
+            "sessions_detached": sessions_cursor.rowcount,
+            "memories_detached": memories_cursor.rowcount,
+            "memories_source_detached": memories_source_cursor.rowcount,
+        })
+
+    result["persona_deleted"] = await delete_setting(_agent_persona_setting_key(normalized_agent_id))
+    result["proactive_style_deleted"] = await delete_setting(_agent_proactive_style_setting_key(normalized_agent_id))
+    return result
 
 
 async def get_companion_state(agent_id: str | None = None) -> dict[str, Any]:
@@ -2125,6 +2287,159 @@ async def get_recent_messages(session_id: str, limit: int = 12) -> list[dict[str
     )
     rows = await cursor.fetchall()
     return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+
+
+COT_LOG_MAX_CONTENT_CHARS = 1200
+COT_LOG_MAX_SUMMARY_CHARS = 260
+COT_LOG_MAX_PER_SESSION = 160
+COT_LOG_TTL_DAYS = 14
+
+
+def _compact_log_text(value: str, max_chars: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}..."
+
+
+async def prune_cot_logs(session_id: str | None = None, *, max_per_session: int = COT_LOG_MAX_PER_SESSION) -> None:
+    """Keep COT logs useful instead of letting them grow forever."""
+    now = _now()
+    if _use_supabase_data():
+        try:
+            await _supabase_delete("cot_logs", {"expires_at": f"lt.{now}", "pinned": "eq.0"})
+        except Exception as exc:
+            logger.debug("Supabase cot_logs cleanup skipped: %s", exc)
+        return
+
+    db = await get_db()
+    await db.execute(
+        "DELETE FROM cot_logs WHERE pinned = 0 AND expires_at <> '' AND expires_at < ?",
+        (now,),
+    )
+    if session_id:
+        cursor = await db.execute(
+            """
+            SELECT id FROM cot_logs
+            WHERE session_id = ? AND pinned = 0
+            ORDER BY created_at DESC
+            LIMIT -1 OFFSET ?
+            """,
+            (session_id, max_per_session),
+        )
+        stale = [row["id"] for row in await cursor.fetchall()]
+        if stale:
+            placeholders = ",".join("?" for _ in stale)
+            await db.execute(f"DELETE FROM cot_logs WHERE id IN ({placeholders})", stale)
+    await db.commit()
+
+
+async def add_cot_log(
+    session_id: str,
+    *,
+    agent_id: str | None = None,
+    source: str = "chat",
+    log_type: str = "event",
+    title: str = "",
+    summary: str = "",
+    content: str = "",
+    tool_name: str = "",
+    status: str = "",
+    pinned: bool = False,
+    ttl_days: int = COT_LOG_TTL_DAYS,
+) -> dict[str, Any]:
+    now = _now()
+    compact_content = _compact_log_text(content, COT_LOG_MAX_CONTENT_CHARS)
+    compact_summary = _compact_log_text(summary or compact_content, COT_LOG_MAX_SUMMARY_CHARS)
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(days=max(1, ttl_days))
+    ).isoformat()
+    payload = {
+        "id": _new_id(),
+        "session_id": session_id,
+        "agent_id": normalize_agent_id(agent_id),
+        "source": source or "chat",
+        "log_type": log_type or "event",
+        "title": _compact_log_text(title or log_type or "log", 80),
+        "summary": compact_summary,
+        "content": compact_content,
+        "tool_name": _compact_log_text(tool_name, 80),
+        "status": _compact_log_text(status, 40),
+        "token_count": max(0, len(compact_content) // 4),
+        "pinned": 1 if pinned else 0,
+        "expires_at": expires_at,
+        "created_at": now,
+    }
+    if _use_supabase_data():
+        try:
+            rows = await _supabase_insert("cot_logs", payload)
+            await prune_cot_logs(session_id)
+            return rows[0] if rows else payload
+        except Exception as exc:
+            logger.debug("Supabase cot_logs insert skipped: %s", exc)
+            return payload
+
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO cot_logs (
+            id, session_id, agent_id, source, log_type, title, summary, content,
+            tool_name, status, token_count, pinned, expires_at, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["id"],
+            payload["session_id"],
+            payload["agent_id"],
+            payload["source"],
+            payload["log_type"],
+            payload["title"],
+            payload["summary"],
+            payload["content"],
+            payload["tool_name"],
+            payload["status"],
+            payload["token_count"],
+            payload["pinned"],
+            payload["expires_at"],
+            payload["created_at"],
+        ),
+    )
+    await db.commit()
+    await prune_cot_logs(session_id)
+    return payload
+
+
+async def list_cot_logs(session_id: str, *, limit: int = 40, before: str | None = None) -> list[dict[str, Any]]:
+    safe_limit = min(max(int(limit or 40), 1), 100)
+    filters = {"session_id": f"eq.{session_id}"}
+    if _use_supabase_data():
+        try:
+            if before:
+                filters["created_at"] = f"lt.{before}"
+            return await _supabase_select(
+                "cot_logs",
+                filters=filters,
+                order="created_at.desc",
+                limit=safe_limit,
+            )
+        except Exception as exc:
+            logger.debug("Supabase cot_logs select skipped: %s", exc)
+            return []
+
+    db = await get_db()
+    if before:
+        cursor = await db.execute(
+            "SELECT * FROM cot_logs WHERE session_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?",
+            (session_id, before, safe_limit),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT * FROM cot_logs WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+            (session_id, safe_limit),
+        )
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
 
 
 def _normalize_rp_room_row(row: dict[str, Any]) -> dict[str, Any]:

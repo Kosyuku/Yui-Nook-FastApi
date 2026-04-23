@@ -136,10 +136,29 @@ class AppConfig:
     memory_async_enabled: bool = True
     memory_async_startup_backfill_limit: int = 50
     allow_client_provider_override: bool = True
+    mcp_host: str = "0.0.0.0"
+    mcp_port: int = 8001
+    mcp_public_base_url: str = ""
+    oauth_issuer: str = ""
+    oauth_session_secret: str = ""
+    oauth_admin_username: str = "admin"
+    oauth_admin_password_hash: str = ""
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+    oauth_client_name: str = "Claude MCP Connector"
+    oauth_redirect_uris: list[str] = field(default_factory=list)
+    oauth_default_scope: str = "mcp"
+    oauth_auth_code_ttl_seconds: int = 600
+    oauth_access_token_ttl_seconds: int = 3600
+    oauth_refresh_token_ttl_seconds: int = 2592000
 
     @classmethod
     def from_env(cls) -> "AppConfig":
         """从环境变量加载配置"""
+        raw_redirect_uris = os.getenv(
+            "OAUTH_REDIRECT_URIS",
+            "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback",
+        )
         config = cls(
             host=os.getenv("HOST", "127.0.0.1"),
             port=int(os.getenv("PORT", "8000")),
@@ -249,6 +268,21 @@ class AppConfig:
             memory_async_enabled=os.getenv("MEMORY_ASYNC_ENABLED", "true").lower() == "true",
             memory_async_startup_backfill_limit=int(os.getenv("MEMORY_ASYNC_STARTUP_BACKFILL_LIMIT", "50")),
             allow_client_provider_override=os.getenv("ALLOW_CLIENT_PROVIDER_OVERRIDE", "true").lower() == "true",
+            mcp_host=os.getenv("MCP_HOST", "0.0.0.0"),
+            mcp_port=int(os.getenv("MCP_PORT", "8001")),
+            mcp_public_base_url=os.getenv("MCP_PUBLIC_BASE_URL", "").rstrip("/"),
+            oauth_issuer=os.getenv("OAUTH_ISSUER", "").rstrip("/"),
+            oauth_session_secret=os.getenv("OAUTH_SESSION_SECRET", "").strip(),
+            oauth_admin_username=os.getenv("OAUTH_ADMIN_USERNAME", "admin").strip() or "admin",
+            oauth_admin_password_hash=os.getenv("OAUTH_ADMIN_PASSWORD_HASH", "").strip(),
+            oauth_client_id=os.getenv("OAUTH_CLIENT_ID", "").strip(),
+            oauth_client_secret=os.getenv("OAUTH_CLIENT_SECRET", "").strip(),
+            oauth_client_name=os.getenv("OAUTH_CLIENT_NAME", "Claude MCP Connector").strip() or "Claude MCP Connector",
+            oauth_redirect_uris=[item.strip() for item in raw_redirect_uris.split(",") if item.strip()],
+            oauth_default_scope=os.getenv("OAUTH_DEFAULT_SCOPE", "mcp").strip() or "mcp",
+            oauth_auth_code_ttl_seconds=int(os.getenv("OAUTH_AUTH_CODE_TTL_SECONDS", "600")),
+            oauth_access_token_ttl_seconds=int(os.getenv("OAUTH_ACCESS_TOKEN_TTL_SECONDS", "3600")),
+            oauth_refresh_token_ttl_seconds=int(os.getenv("OAUTH_REFRESH_TOKEN_TTL_SECONDS", "2592000")),
         )
 
         # 确保数据目录存在
