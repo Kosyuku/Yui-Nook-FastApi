@@ -136,6 +136,7 @@ def _validate_authorize_request(params: dict[str, str]) -> tuple[dict[str, str] 
             status_code=400,
         )
     return {
+        "response_type": response_type,
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "state": state_param,
@@ -284,16 +285,19 @@ def _render_login_page(request: Request, authorize_params: dict[str, str], error
     )
 
 
-def _render_consent_page(authorize_params: dict[str, str], client: dict[str, Any]) -> HTMLResponse:
+def _render_consent_page(request: Request, authorize_params: dict[str, str], client: dict[str, Any]) -> HTMLResponse:
     hidden_inputs = "".join(
         f'<input type="hidden" name="{html.escape(key)}" value="{html.escape(value)}" />'
         for key, value in authorize_params.items()
     )
     redirect_uri = authorize_params["redirect_uri"]
+    form_action = request.url.path
+    if request.url.query:
+        form_action = f"{form_action}?{request.url.query}"
     return _render_page(
         "MCP 授权确认",
         f"""
-        <form class="card" method="post" action="/oauth/authorize">
+        <form class="card" method="post" action="{html.escape(form_action)}">
           <h1>授权访问</h1>
           <p><strong>{html.escape(client.get("client_name") or client["client_id"])}</strong> 将通过 OAuth 访问你的 MCP SSE 资源。</p>
           <div class="row">
@@ -408,7 +412,7 @@ def install_oauth_routes(app: FastAPI) -> None:
             return client_error
         if request.session.get("oauth_admin") != settings.oauth_admin_username:
             return _render_login_page(request, authorize_params)
-        return _render_consent_page(authorize_params, client)
+        return _render_consent_page(request, authorize_params, client)
 
     @app.post("/oauth/authorize")
     async def oauth_authorize_submit(
@@ -417,6 +421,7 @@ def install_oauth_routes(app: FastAPI) -> None:
         query_string: str = Form(""),
         username: str = Form(""),
         password: str = Form(""),
+        response_type: str = Form(""),
         client_id: str = Form(""),
         redirect_uri: str = Form(""),
         state_param: str = Form("", alias="state"),
@@ -440,6 +445,7 @@ def install_oauth_routes(app: FastAPI) -> None:
             return RedirectResponse(url=target, status_code=303)
 
         authorize_params = {
+            "response_type": response_type,
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "state": state_param,
@@ -447,6 +453,8 @@ def install_oauth_routes(app: FastAPI) -> None:
             "code_challenge_method": code_challenge_method,
             "scope": scope,
         }
+        for key, value in request.query_params.items():
+            authorize_params[key] = str(value)
         authorize_params, error = _validate_authorize_request(authorize_params)
         if error:
             return error
