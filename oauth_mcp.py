@@ -155,6 +155,17 @@ async def _load_client_or_error(authorize_params: dict[str, str]) -> tuple[dict[
     return client, None
 
 
+def _save_pending_authorize_request(request: Request, authorize_params: dict[str, str]) -> None:
+    request.session["oauth_pending_authorize"] = dict(authorize_params)
+
+
+def _load_pending_authorize_request(request: Request) -> dict[str, str]:
+    pending = request.session.get("oauth_pending_authorize")
+    if not isinstance(pending, dict):
+        return {}
+    return {str(key): str(value) for key, value in pending.items()}
+
+
 def _render_page(title: str, body: str) -> HTMLResponse:
     return HTMLResponse(
         f"""<!doctype html>
@@ -407,6 +418,7 @@ def install_oauth_routes(app: FastAPI) -> None:
         authorize_params, error = _validate_authorize_request({key: str(value) for key, value in request.query_params.items()})
         if error:
             return error
+        _save_pending_authorize_request(request, authorize_params)
         client, client_error = await _load_client_or_error(authorize_params)
         if client_error:
             return client_error
@@ -438,6 +450,13 @@ def install_oauth_routes(app: FastAPI) -> None:
                     params = {key: value for key, value in parse_qsl(query_string, keep_blank_values=True)}
                 authorize_params, _ = _validate_authorize_request(params)
                 return _render_login_page(request, authorize_params or {}, "用户名或密码不正确。")
+            if query_string:
+                from urllib.parse import parse_qsl
+
+                params = {key: value for key, value in parse_qsl(query_string, keep_blank_values=True)}
+                authorize_params, error = _validate_authorize_request(params)
+                if not error and authorize_params:
+                    _save_pending_authorize_request(request, authorize_params)
             request.session["oauth_admin"] = settings.oauth_admin_username
             target = "/oauth/authorize"
             if query_string:
@@ -455,6 +474,8 @@ def install_oauth_routes(app: FastAPI) -> None:
         }
         for key, value in request.query_params.items():
             authorize_params[key] = str(value)
+        if not authorize_params.get("response_type"):
+            authorize_params.update(_load_pending_authorize_request(request))
         authorize_params, error = _validate_authorize_request(authorize_params)
         if error:
             return error
