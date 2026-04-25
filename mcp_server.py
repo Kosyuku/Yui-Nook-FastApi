@@ -8,13 +8,13 @@ from mcp.server.fastmcp import FastMCP
 
 import database as db
 from config import settings
-from routes.__init__ import chat, ChatRequest
+from routes import chat, ChatRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastMCP server
-mcp = FastMCP("yui_nook_backend")
+# Initialize FastMCP server with the same public HTTP settings used by uvicorn.
+mcp = FastMCP("yui_nook_backend", host=settings.mcp_host, port=settings.mcp_port)
 
 @mcp.tool()
 async def create_session(agent_id: str, title: str = "new session", source_app: str = "claude_mcp") -> str:
@@ -40,12 +40,13 @@ async def list_sessions(agent_id: str = None, limit: int = 50) -> str:
     List recent sessions.
     Provide an optional agent_id to filter down to sessions matching this agent.
     """
-    sessions = await db.list_sessions(limit=limit * 2 if agent_id else limit)
+    sessions = await db.list_sessions()
     
     # Client-side filtering because standard DB method might not support agent_id directly yet
     if agent_id:
-        filtered = [s for s in sessions if s.get("agent_id") == agent_id]
-        sessions = filtered[:limit]
+        sessions = [s for s in sessions if s.get("agent_id") == agent_id]
+        
+    sessions = sessions[:limit]
         
     return json.dumps(sessions, ensure_ascii=False)
 
@@ -120,18 +121,13 @@ async def create_diary_entry(agent_id: str, content: str, title: str = None, tag
     Create a new diary entry.
     """
     try:
-        import datetime
-        now = datetime.datetime.now().astimezone().isoformat()
-        diary_id = await db.create_diary(
+        diary = await db.add_diary(
             content=content,
-            mood="日常",
-            author_type="user", 
-            topic_id="",
-            author_id="user",
-            source_agent_id=agent_id,
-            agent_id=agent_id
+            title=title or "",
+            agent_id=agent_id,
+            source_agent_id=agent_id
         )
-        return json.dumps({"success": True, "diary_id": diary_id}, ensure_ascii=False)
+        return json.dumps({"success": True, "diary_id": diary.get("id")}, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -160,14 +156,12 @@ async def save_memory(content: str, agent_id: str, source: str = "claude_mcp") -
     """
     try:
         # Standard function
-        mem_id = await db.add_memory(
+        mem = await db.add_memory(
             content=content,
             agent_id=agent_id,
             category="core_profile"  # Default generic
         )
-        # We can also add specifically to the memory_log if needed 
-        # but add_memory does all the job.
-        return json.dumps({"success": True, "memory_id": mem_id}, ensure_ascii=False)
+        return json.dumps({"success": True, "memory_id": mem.get("id")}, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": str(e)})
 

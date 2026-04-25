@@ -87,7 +87,7 @@ def _protected_resource_metadata(request: Request) -> dict[str, Any]:
     issuer = _issuer_url(request)
     base = _base_url(request)
     return {
-        "resource": f"{base}/sse",
+        "resource": f"{base}/mcp",
         "authorization_servers": [issuer],
         "bearer_methods_supported": ["header"],
         "scopes_supported": [settings.oauth_default_scope],
@@ -374,7 +374,7 @@ async def _validate_client_credentials(request: Request, form_data: Any) -> tupl
 class OAuthProtectedResourceMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
-        self.protected_paths = ("/sse", "/messages")
+        self.protected_paths = ("/mcp", "/sse", "/messages")
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
