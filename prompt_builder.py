@@ -118,11 +118,15 @@ def _take_layer_budget(
     item_limit: int,
     layer_char_limit: int,
     item_char_limit: int,
+    current_agent_id: Optional[str] = None,
 ) -> list[dict]:
     chosen: list[dict] = []
     used = 0
     for memory in memories[: max(0, item_limit)]:
-        text = _clip_text(_memory_text(memory), item_char_limit).strip()
+        owner = db.normalize_agent_id(memory.get("agent_id"))
+        current = db.normalize_agent_id(current_agent_id)
+        raw_text = db.format_memory_with_source(memory, current_agent_id) if owner != current else _memory_text(memory)
+        text = _clip_text(raw_text, item_char_limit).strip()
         if not text:
             continue
         extra = len(text) + 2
@@ -287,11 +291,15 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
             category="core_profile",
             limit=max(1, settings.prompt_memory_core_items * 2),
             agent_id=agent_id,
+            include_cross_agent=True,
+            cross_agent_limit=max(0, settings.prompt_memory_cross_agent_items),
         )
         recent = await db.list_memories(
             category="recent_pending",
             limit=max(1, settings.prompt_memory_recent_items * 2),
             agent_id=agent_id,
+            include_cross_agent=True,
+            cross_agent_limit=max(0, settings.prompt_memory_cross_agent_items),
         )
 
         deep_related = await _retrieve_related_memories(
@@ -321,6 +329,7 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
                     item_limit=max(1, settings.prompt_memory_core_items),
                     layer_char_limit=max(60, settings.prompt_memory_core_max_chars),
                     item_char_limit=max(30, settings.prompt_memory_item_max_chars),
+                    current_agent_id=agent_id,
                 ),
             )
         )
@@ -332,6 +341,7 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
                     item_limit=max(1, settings.prompt_memory_recent_items),
                     layer_char_limit=max(60, settings.prompt_memory_recent_max_chars),
                     item_char_limit=max(30, settings.prompt_memory_item_max_chars),
+                    current_agent_id=agent_id,
                 ),
             )
         )
@@ -343,6 +353,7 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
                     item_limit=max(0, settings.prompt_memory_deep_items),
                     layer_char_limit=max(40, settings.prompt_memory_deep_max_chars),
                     item_char_limit=max(24, settings.prompt_memory_item_max_chars),
+                    current_agent_id=agent_id,
                 ),
             )
         )
@@ -356,6 +367,7 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
                         item_limit=max(0, settings.prompt_memory_ephemeral_items),
                         layer_char_limit=max(20, settings.prompt_memory_ephemeral_max_chars),
                         item_char_limit=max(20, settings.prompt_memory_item_max_chars),
+                        current_agent_id=agent_id,
                     ),
                 )
             )

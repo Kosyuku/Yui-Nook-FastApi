@@ -592,12 +592,18 @@ async def seed_default_oauth_client() -> None:
         raise RuntimeError("OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET must be configured for MCP OAuth.")
     if not settings.oauth_admin_password_hash:
         raise RuntimeError("OAUTH_ADMIN_PASSWORD_HASH must be configured for MCP OAuth.")
+    import database as app_db
+
+    default_agent_id = getattr(settings, "default_agent_id", "azheng") or "azheng"
+    await app_db.ensure_default_agents()
+    await app_db.require_agent(default_agent_id)
     await db.upsert_client(
         client_id=settings.oauth_client_id,
         client_secret=settings.oauth_client_secret,
         redirect_uris=settings.oauth_redirect_uris,
         client_name=settings.oauth_client_name,
         scope=settings.oauth_default_scope,
+        default_agent_id=default_agent_id,
     )
     await db.cleanup_expired()
 

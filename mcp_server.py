@@ -22,16 +22,8 @@ async def create_session(agent_id: str, title: str = "new session", source_app: 
     Create a new chat session for an agent.
     Returns the session ID which can be used to send messages.
     """
-    session = await db.create_session(title=title, source_app=source_app)
-    # The default database schema currently might lack agent_id at creation,
-    # but we can call bind immediately.
-    session_id = session.get("id")
-    if session_id and agent_id:
-        try:
-            await db.bind_session_agent(session_id, agent_id)
-        except Exception as e:
-            logger.warning("Agent bind failed during session creation: %s", e)
-    return session_id
+    session = await db.create_session(title=title, source_app=source_app, agent_id=agent_id)
+    return session.get("id")
 
 
 @mcp.tool()
@@ -116,20 +108,188 @@ async def send_message(session_id: str, agent_id: str, message: str) -> str:
 
 
 @mcp.tool()
-async def create_diary_entry(agent_id: str, content: str, title: str = None, tags: list[str] = None) -> str:
+async def create_diary_notebook(
+    agent_id: str,
+    name: str = "",
+    description: str = "",
+    visibility: str = "private",
+    is_default: bool = False,
+) -> str:
+    """
+    Create a diary notebook owned by one agent.
+    """
+    try:
+        notebook = await db.create_agent_diary_notebook(
+            agent_id,
+            name=name or "",
+            description=description or "",
+            visibility=visibility or "private",
+            is_default=is_default,
+        )
+        return json.dumps({"success": True, "notebook": notebook}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def update_diary_notebook(
+    notebook_id: str,
+    agent_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    visibility: str | None = None,
+    is_default: bool | None = None,
+) -> str:
+    """
+    Update an agent-owned diary notebook.
+    """
+    try:
+        notebook = await db.update_agent_diary_notebook(
+            notebook_id,
+            agent_id,
+            name=name,
+            description=description,
+            visibility=visibility,
+            is_default=is_default,
+        )
+        if not notebook:
+            return json.dumps({"success": False, "error": "notebook not found for agent"}, ensure_ascii=False)
+        return json.dumps({"success": True, "notebook": notebook}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def list_diary_notebooks(agent_id: str = None) -> str:
+    """
+    List diary notebooks, optionally filtered to one agent.
+    """
+    try:
+        notebooks = await db.list_diary_notebooks()
+        if agent_id:
+            normalized = db.normalize_agent_id(agent_id)
+            notebooks = [
+                item for item in notebooks
+                if item.get("author_type") == "agent" and item.get("author_id") == normalized
+            ]
+        return json.dumps(notebooks, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def create_diary_entry(agent_id: str, content: str, title: str = None, tags: list[str] = None, notebook_id: str = None) -> str:
     """
     Create a new diary entry.
     """
     try:
-        diary = await db.add_diary(
-            content=content,
-            title=title or "",
-            agent_id=agent_id,
-            source_agent_id=agent_id
-        )
+        tag_text = ",".join([str(tag).strip() for tag in (tags or []) if str(tag).strip()])
+        if notebook_id:
+            diary = await db.create_agent_diary_entry(
+                notebook_id,
+                agent_id,
+                content=content,
+                title=title or "",
+                tags=tag_text,
+            )
+            if not diary:
+                return json.dumps({"success": False, "error": "notebook not found for agent"}, ensure_ascii=False)
+        else:
+            diary = await db.add_diary(
+                content=content,
+                title=title or "",
+                agent_id=agent_id,
+                source_agent_id=agent_id,
+                tags=tag_text,
+            )
         return json.dumps({"success": True, "diary_id": diary.get("id")}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def update_diary_entry(
+    entry_id: str,
+    agent_id: str,
+    content: str | None = None,
+    title: str | None = None,
+    tags: list[str] | None = None,
+) -> str:
+    """
+    Update an entry owned by one agent's diary notebook.
+    """
+    try:
+        tag_text = None if tags is None else ",".join([str(tag).strip() for tag in tags if str(tag).strip()])
+        entry = await db.update_agent_diary_entry(
+            entry_id,
+            agent_id,
+            content=content,
+            title=title,
+            tags=tag_text,
+        )
+        if not entry:
+            return json.dumps({"success": False, "error": "entry not found for agent"}, ensure_ascii=False)
+        return json.dumps({"success": True, "entry": entry}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def delete_diary_entry(entry_id: str, agent_id: str) -> str:
+    """
+    Delete an entry owned by one agent's diary notebook.
+    """
+    try:
+        ok = await db.delete_agent_diary_entry(entry_id, agent_id)
+        return json.dumps({"success": bool(ok)}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def comment_diary_entry(entry_id: str, agent_id: str, content: str) -> str:
+    """
+    Comment on an agent diary entry as another agent.
+    """
+    try:
+        comment = await db.add_diary_comment(
+            entry_id,
+            content=content,
+            author_type="agent",
+            author_id=agent_id,
+        )
+        if not comment:
+            return json.dumps({"success": False, "error": "entry not commentable"}, ensure_ascii=False)
+        return json.dumps({"success": True, "comment": comment}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def underline_diary_entry(
+    entry_id: str,
+    agent_id: str,
+    start_offset: int,
+    end_offset: int,
+    note: str = "",
+) -> str:
+    """
+    Add an underline annotation to a diary entry without changing its text.
+    """
+    try:
+        annotation = await db.add_diary_underline(
+            entry_id,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            author_type="agent",
+            author_id=agent_id,
+            note=note,
+        )
+        if not annotation:
+            return json.dumps({"success": False, "error": "invalid underline range or entry not found"}, ensure_ascii=False)
+        return json.dumps({"success": True, "annotation": annotation}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -150,7 +310,14 @@ async def search_diary(query: str, agent_id: str = None, limit: int = 10) -> str
 
 
 @mcp.tool()
-async def save_memory(content: str, agent_id: str, source: str = "claude_mcp") -> str:
+async def save_memory(
+    content: str,
+    agent_id: str,
+    source: str = "claude_mcp",
+    category: str = "core_profile",
+    visibility: str = "private",
+    source_agent_id: str | None = None,
+) -> str:
     """
     Save an explicit observation or memory about the user.
     """
@@ -159,7 +326,11 @@ async def save_memory(content: str, agent_id: str, source: str = "claude_mcp") -
         mem = await db.add_memory(
             content=content,
             agent_id=agent_id,
-            category="core_profile"  # Default generic
+            category=category or "core_profile",
+            visibility=visibility or "private",
+            source=source or "claude_mcp",
+            source_agent_id=source_agent_id or agent_id,
+            raw_content=content,
         )
         return json.dumps({"success": True, "memory_id": mem.get("id")}, ensure_ascii=False)
     except Exception as e:

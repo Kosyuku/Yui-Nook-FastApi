@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 import httpx
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 
 import ai_runtime
@@ -61,8 +61,17 @@ class DiaryUpdate(BaseModel):
 
 class DiaryNotebookUpdate(BaseModel):
     name: Optional[str] = None
+    description: Optional[str] = None
     visibility: Optional[str] = None
     is_default: Optional[bool] = None
+
+
+class DiaryNotebookCreate(BaseModel):
+    agent_id: str
+    name: str = ""
+    description: str = ""
+    visibility: str = "private"
+    is_default: bool = False
 
 
 class DiaryEntryCreate(BaseModel):
@@ -79,6 +88,16 @@ class DiaryEntryUpdate(BaseModel):
 
 class DiaryCommentCreate(BaseModel):
     content: str
+    author_type: str = "user"
+    author_id: str = "me"
+
+
+class DiaryUnderlineCreate(BaseModel):
+    start_offset: int
+    end_offset: int
+    author_type: str = "user"
+    author_id: str = "me"
+    note: str = ""
 
 
 class MomentCreate(BaseModel):
@@ -114,6 +133,10 @@ class MomentCommentPayload(BaseModel):
 
 class AISettingsPayload(BaseModel):
     settings: dict[str, Any]
+
+
+class PhoneStatePayload(BaseModel):
+    data: dict[str, Any]
 
 
 class TranslatePayload(BaseModel):
@@ -193,9 +216,274 @@ class SyncPushPayload(BaseModel):
     client_updated_at: Optional[str] = None
 
 
+class ChatProfilePayload(BaseModel):
+    avatar: Optional[str] = None
+    nickname: Optional[str] = None
+    signature: Optional[str] = None
+
+
+class AgentProfilePayload(BaseModel):
+    avatar: Optional[str] = None
+    name: Optional[str] = None
+    bio: Optional[str] = None
+    theme: Optional[str] = None
+    settings: Optional[dict[str, Any]] = None
+    roomBackground: Optional[str] = None
+    bubbleTheme: Optional[str] = None
+    quickActions: Optional[list[dict[str, Any]]] = None
+
+
+class AgentCreatePayload(BaseModel):
+    agent_id: str
+    display_name: str
+    avatar: str = ""
+    description: str = ""
+    persona: str = ""
+    source: str = "native"
+    metadata: dict[str, Any] | str | None = None
+
+
+class AgentUpdatePayload(BaseModel):
+    display_name: Optional[str] = None
+    avatar: Optional[str] = None
+    description: Optional[str] = None
+    persona: Optional[str] = None
+    source: Optional[str] = None
+    metadata: dict[str, Any] | str | None = None
+    is_active: Optional[bool] = None
+
+
+class AgentResolvePayload(BaseModel):
+    agent_id: Optional[str] = None
+    session_id: Optional[str] = None
+    room_id: Optional[str] = None
+    source: Optional[str] = None
+    external_id: Optional[str] = None
+    external_name: Optional[str] = None
+    oauth_client_id: Optional[str] = None
+
+
+class AgentExternalLinkCreatePayload(BaseModel):
+    source: str
+    external_id: str
+    agent_id: str
+    external_name: str = ""
+    metadata: dict[str, Any] | str | None = None
+
+
+class AgentExternalLinkUpdatePayload(BaseModel):
+    agent_id: Optional[str] = None
+    external_name: Optional[str] = None
+    metadata: dict[str, Any] | str | None = None
+
+
 AI_SETTINGS_KEY = "ai_settings"
 HEALTH_LATEST_KEY = "health_latest"
 SYNC_GLOBAL_KEY = "sync_global_state"
+CHAT_PROFILE_KEY = "chat_profile"
+
+
+def _safe_profile_payload(data: Any) -> dict[str, Any]:
+    return data if isinstance(data, dict) else {}
+
+
+async def _load_setting_dict(key: str) -> tuple[dict[str, Any], Optional[str]]:
+    row = await db.get_setting(key)
+    if not row or not row.get("value"):
+        return {}, None
+    try:
+        payload = json.loads(row["value"])
+    except Exception:
+        return {}, row.get("updated_at")
+    return _safe_profile_payload(payload), row.get("updated_at")
+
+
+async def _load_legacy_sync_payload() -> dict[str, Any]:
+    data, _ = await _load_setting_dict(SYNC_GLOBAL_KEY)
+    return _safe_profile_payload(data.get("payload"))
+
+
+def _agent_profile_key(agent_id: str) -> str:
+    safe_agent = db.normalize_agent_id(agent_id)
+    return f"agent_profile_{safe_agent}"
+
+
+def _compact_profile(data: dict[str, Any], fields: set[str]) -> dict[str, Any]:
+    return {key: value for key, value in data.items() if key in fields and value not in (None, "")}
+
+
+def _agent_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, db.AgentNeedsBinding):
+        return HTTPException(status_code=409, detail=exc.payload())
+    if isinstance(exc, db.AgentResolutionError):
+        return HTTPException(status_code=400, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
+
+
+@extra_api.get("/agents")
+async def list_agents(include_inactive: bool = False):
+    return {"agents": await db.list_agents(include_inactive=include_inactive)}
+
+
+@extra_api.post("/agents")
+async def create_agent(body: AgentCreatePayload):
+    try:
+        agent = await db.create_agent(**body.model_dump())
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    return {"agent": agent}
+
+
+@extra_api.post("/agents/resolve")
+async def resolve_agent(body: AgentResolvePayload):
+    try:
+        context = await db.resolve_agent_context(
+            agent_id=body.agent_id,
+            session_id=body.session_id,
+            room_id=body.room_id,
+            source=body.source,
+            external_id=body.external_id,
+            external_name=body.external_name,
+            oauth_client_id=body.oauth_client_id,
+            allow_default=False,
+        )
+    except db.AgentNeedsBinding as exc:
+        return exc.payload()
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    agent = context.get("agent") or {}
+    return {
+        "resolved": True,
+        "agent_id": context["agent_id"],
+        "display_name": agent.get("display_name") or context["agent_id"],
+        "via": context.get("via"),
+    }
+
+
+@extra_api.get("/agents/{agent_id}")
+async def get_agent(agent_id: str):
+    try:
+        agent = await db.get_agent(agent_id, include_inactive=True)
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    if not agent:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return {"agent": agent}
+
+
+@extra_api.patch("/agents/{agent_id}")
+async def update_agent(agent_id: str, body: AgentUpdatePayload):
+    try:
+        agent = await db.update_agent(agent_id, **{k: v for k, v in body.model_dump().items() if v is not None})
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    if not agent:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return {"ok": True, "agent": agent}
+
+
+@extra_api.delete("/agents/{agent_id}")
+async def delete_agent(agent_id: str):
+    try:
+        ok = await db.deactivate_agent(agent_id)
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    if not ok:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return {"ok": True}
+
+
+@extra_api.get("/agent-external-links")
+async def list_agent_external_links(source: Optional[str] = None, agent_id: Optional[str] = None):
+    try:
+        links = await db.list_agent_external_links(source=source, agent_id=agent_id)
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    return {"links": links}
+
+
+@extra_api.post("/agent-external-links")
+async def create_agent_external_link(body: AgentExternalLinkCreatePayload):
+    try:
+        link = await db.create_agent_external_link(**body.model_dump())
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    return {"link": link}
+
+
+@extra_api.patch("/agent-external-links/{link_id}")
+async def update_agent_external_link(link_id: str, body: AgentExternalLinkUpdatePayload):
+    try:
+        link = await db.update_agent_external_link(
+            link_id,
+            **{k: v for k, v in body.model_dump().items() if v is not None},
+        )
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    if not link:
+        raise HTTPException(status_code=404, detail="external link not found")
+    return {"ok": True, "link": link}
+
+
+@extra_api.delete("/agent-external-links/{link_id}")
+async def delete_agent_external_link(link_id: str):
+    ok = await db.delete_agent_external_link(link_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="external link not found")
+    return {"ok": True}
+
+
+@extra_api.get("/chat/profile")
+async def get_chat_profile():
+    profile, updated_at = await _load_setting_dict(CHAT_PROFILE_KEY)
+    if not profile:
+        legacy = await _load_legacy_sync_payload()
+        profile = _compact_profile(_safe_profile_payload(legacy.get("accountProfile")), {"avatar", "nickname", "signature"})
+    return {"ok": True, "profile": profile, "updated_at": updated_at, "storage": "supabase"}
+
+
+@extra_api.put("/chat/profile")
+async def save_chat_profile(body: ChatProfilePayload):
+    current, _ = await _load_setting_dict(CHAT_PROFILE_KEY)
+    incoming = _compact_profile(body.dict(), {"avatar", "nickname", "signature"})
+    profile = {**current, **incoming}
+    row = await db.set_setting(CHAT_PROFILE_KEY, json.dumps(profile, ensure_ascii=False))
+    return {"ok": True, "profile": profile, "updated_at": row.get("updated_at"), "storage": "supabase"}
+
+
+@extra_api.get("/agents/{agent_id}/profile")
+async def get_agent_profile(agent_id: str):
+    try:
+        safe_agent = await db.require_agent(agent_id)
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    profile, updated_at = await _load_setting_dict(_agent_profile_key(safe_agent))
+    if not profile:
+        legacy = await _load_legacy_sync_payload()
+        contacts = legacy.get("contacts") if isinstance(legacy.get("contacts"), list) else []
+        matched = next((item for item in contacts if str(item.get("id") or "") == safe_agent), {})
+        profile = _compact_profile(
+            _safe_profile_payload(matched),
+            {"avatar", "name", "bio", "theme", "settings", "roomBackground", "bubbleTheme", "quickActions"},
+        )
+    return {"ok": True, "agent_id": safe_agent, "profile": profile, "updated_at": updated_at, "storage": "supabase"}
+
+
+@extra_api.put("/agents/{agent_id}/profile")
+async def save_agent_profile(agent_id: str, body: AgentProfilePayload):
+    try:
+        safe_agent = await db.require_agent(agent_id)
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    current, _ = await _load_setting_dict(_agent_profile_key(safe_agent))
+    incoming = _compact_profile(
+        body.dict(),
+        {"avatar", "name", "bio", "theme", "settings", "roomBackground", "bubbleTheme", "quickActions"},
+    )
+    profile = {**current, **incoming}
+    row = await db.set_setting(_agent_profile_key(safe_agent), json.dumps(profile, ensure_ascii=False))
+    return {"ok": True, "agent_id": safe_agent, "profile": profile, "updated_at": row.get("updated_at"), "storage": "supabase"}
+
 
 
 @extra_api.get("/settings/ai")
@@ -218,6 +506,30 @@ async def save_ai_settings(body: AISettingsPayload):
         "settings": normalized,
         "storage": "supabase",
     }
+
+
+@extra_api.get("/phone/state/{key}")
+async def get_phone_state(key: str):
+    safe_key = "".join(ch for ch in key if ch.isalnum() or ch in {"_", "-"}).strip()
+    if not safe_key:
+        raise HTTPException(status_code=400, detail="key is required")
+    row = await db.get_setting(f"phone_state_{safe_key}")
+    if not row or not row.get("value"):
+        return {"key": safe_key, "data": {}, "updated_at": None}
+    try:
+        data = json.loads(row["value"])
+    except Exception:
+        data = {}
+    return {"key": safe_key, "data": data if isinstance(data, dict) else {}, "updated_at": row.get("updated_at")}
+
+
+@extra_api.put("/phone/state/{key}")
+async def save_phone_state(key: str, body: PhoneStatePayload):
+    safe_key = "".join(ch for ch in key if ch.isalnum() or ch in {"_", "-"}).strip()
+    if not safe_key:
+        raise HTTPException(status_code=400, detail="key is required")
+    row = await db.set_setting(f"phone_state_{safe_key}", json.dumps(body.data, ensure_ascii=False))
+    return {"ok": True, "key": safe_key, "data": body.data, "updated_at": row.get("updated_at")}
 
 
 async def _collect_slot_text(
@@ -405,24 +717,30 @@ async def get_companion_state(agent_id: Optional[str] = None):
 
 @extra_api.put("/companion-state")
 async def save_companion_state(body: CompanionStatePayload, agent_id: Optional[str] = None):
-    state = await db.set_companion_state(
-        agent_id=agent_id,
-        recent_topics=body.recent_topics,
-        current_mood=body.current_mood,
-        open_loops=body.open_loops,
-        proactive_cooldown_until=body.proactive_cooldown_until,
-    )
+    try:
+        state = await db.set_companion_state(
+            agent_id=agent_id,
+            recent_topics=body.recent_topics,
+            current_mood=body.current_mood,
+            open_loops=body.open_loops,
+            proactive_cooldown_until=body.proactive_cooldown_until,
+        )
+    except Exception as exc:
+        raise _agent_http_error(exc)
     return {"ok": True, "state": state}
 
 
 @extra_api.put("/companion-state/summary")
 async def update_companion_state_summary(body: CompanionStateSummaryPayload):
-    state = await db.set_companion_state_summary(
-        agent_id=body.agentId,
-        impression=body.impression,
-        relationship_progress=body.relationshipProgress,
-        likes_summary=body.likesSummary,
-    )
+    try:
+        state = await db.set_companion_state_summary(
+            agent_id=body.agentId,
+            impression=body.impression,
+            relationship_progress=body.relationshipProgress,
+            likes_summary=body.likesSummary,
+        )
+    except Exception as exc:
+        raise _agent_http_error(exc)
     return {"ok": True, "state": state}
 
 
@@ -434,6 +752,30 @@ async def get_agent_persona(agent_id: str):
 @extra_api.put("/agents/{agent_id}/persona")
 async def save_agent_persona(agent_id: str, body: AgentPersonaPayload):
     return {"ok": True, **await db.set_agent_persona(agent_id, body.persona)}
+
+
+@extra_api.delete("/agents/{agent_id}/safe-delete")
+async def safe_delete_agent(agent_id: str):
+    # 1. Cascade delete all linked states
+    result = await db.safe_delete_agent(agent_id)
+    
+    # 2. Remove the agent from ai_settings list
+    try:
+        from ai_runtime import load_ai_settings_container
+        settings_payload = await load_ai_settings_container()
+        agents = settings_payload.get("agents", [])
+        original_count = len(agents)
+        settings_payload["agents"] = [a for a in agents if a.get("id") != agent_id]
+        if len(settings_payload["agents"]) < original_count:
+            await db.set_setting(AI_SETTINGS_KEY, json.dumps(settings_payload, ensure_ascii=False))
+            result["agent_record_deleted"] = True
+        else:
+            result["agent_record_deleted"] = False
+    except Exception as exc:
+        logger.error(f"failed to remove agent from config: {exc}")
+        result["agent_record_deleted"] = False
+
+    return {"ok": True, **result}
 
 
 @extra_api.post("/settings/ai/discover-models")
@@ -571,8 +913,12 @@ async def sync_push(body: SyncPushPayload):
         "server_updated_at": now,
         "payload": body.payload,
     }
-    row = await db.set_setting(SYNC_GLOBAL_KEY, json.dumps(data, ensure_ascii=False))
-    return {"ok": True, "server_updated_at": row.get("updated_at") or now}
+    try:
+        row = await db.set_setting(SYNC_GLOBAL_KEY, json.dumps(data, ensure_ascii=False))
+        return {"ok": True, "server_updated_at": row.get("updated_at") or now}
+    except Exception as exc:
+        logger.exception("sync push failed")
+        raise HTTPException(status_code=502, detail=f"Database sync failed: {exc}")
 
 
 @extra_api.get("/sync/pull")
@@ -656,11 +1002,27 @@ async def get_diary_notebooks():
     return {"notebooks": await db.list_diary_notebooks()}
 
 
+@extra_api.post("/diary/notebooks")
+async def create_diary_notebook(body: DiaryNotebookCreate):
+    try:
+        notebook = await db.create_agent_diary_notebook(
+            body.agent_id,
+            name=body.name,
+            description=body.description,
+            visibility=body.visibility,
+            is_default=body.is_default,
+        )
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    return {"notebook": notebook}
+
+
 @extra_api.patch("/diary/notebooks/{notebook_id}")
 async def patch_diary_notebook(notebook_id: str, body: DiaryNotebookUpdate):
     notebook = await db.update_diary_notebook(
         notebook_id,
         name=body.name,
+        description=body.description,
         visibility=body.visibility,
         is_default=body.is_default,
     )
@@ -718,10 +1080,35 @@ async def get_diary_entry_comments(entry_id: str):
 async def create_diary_entry_comment(entry_id: str, body: DiaryCommentCreate):
     if not body.content.strip():
         raise HTTPException(status_code=400, detail="评论内容不能为空")
-    comment = await db.add_diary_comment(entry_id, content=body.content.strip())
+    comment = await db.add_diary_comment(
+        entry_id,
+        content=body.content.strip(),
+        author_type=body.author_type,
+        author_id=body.author_id,
+    )
     if not comment:
         raise HTTPException(status_code=404, detail="该条目不可评论或不存在")
     return {"comment": comment}
+
+
+@extra_api.get("/diary/entries/{entry_id}/annotations")
+async def get_diary_entry_annotations(entry_id: str):
+    return {"annotations": await db.list_diary_annotations(entry_id)}
+
+
+@extra_api.post("/diary/entries/{entry_id}/annotations")
+async def create_diary_entry_annotation(entry_id: str, body: DiaryUnderlineCreate):
+    annotation = await db.add_diary_underline(
+        entry_id,
+        start_offset=body.start_offset,
+        end_offset=body.end_offset,
+        author_type=body.author_type,
+        author_id=body.author_id,
+        note=body.note,
+    )
+    if not annotation:
+        raise HTTPException(status_code=404, detail="underline range invalid or diary entry not found")
+    return {"annotation": annotation}
 
 @extra_api.get("/diary")
 async def get_diary(agent_id: Optional[str] = None, limit: int = 50):
@@ -730,8 +1117,8 @@ async def get_diary(agent_id: Optional[str] = None, limit: int = 50):
 
 @extra_api.post("/diary")
 async def create_diary(body: DiaryCreate, agent_id: Optional[str] = None):
-    return {
-        "entry": await db.add_diary(
+    try:
+        entry = await db.add_diary(
             content=body.content,
             title=body.title,
             tags=body.tags,
@@ -739,7 +1126,9 @@ async def create_diary(body: DiaryCreate, agent_id: Optional[str] = None):
             source_agent_id=body.source_agent_id,
             agent_id=agent_id,
         )
-    }
+    except Exception as exc:
+        raise _agent_http_error(exc)
+    return {"entry": entry}
 
 
 @extra_api.patch("/diary/{diary_id}")
@@ -962,3 +1351,71 @@ async def amber_add_memory_to_label(label_id: str, payload: AmberLabelMemoryAdd)
 async def amber_remove_memory_from_label(label_id: str, memory_id: str):
     await db.remove_memory_from_label(label_id, memory_id)
     return {"ok": True}
+
+
+# ── Perle Media API ──
+
+@extra_api.post("/perle/upload")
+async def perle_upload_file(bucket: str = Form(...), file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="no file")
+    ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
+    file_path = f"{db._new_id()}.{ext}"
+    bytes_data = await file.read()
+    
+    url = await db._supabase_upload_storage(bucket, file_path, bytes_data, file.content_type or "application/octet-stream")
+    return {"url": url}
+
+class PerlePhoto(BaseModel):
+    cat: str = "all"
+    tint: str = "#e2d5d8"
+    url: str
+    label: str = ""
+
+@extra_api.post("/perle/photos")
+async def add_perle_photo(photo: PerlePhoto):
+    payload = {
+        "id": db._new_id(),
+        "cat": photo.cat,
+        "tint": photo.tint,
+        "url": photo.url,
+        "label": photo.label,
+        "created_at": db._now()
+    }
+    await db._supabase_insert("perle_photos", payload)
+    return {"ok": True, "photo": payload}
+
+@extra_api.get("/perle/photos")
+async def get_perle_photos():
+    rows = await db._supabase_select("perle_photos", order="created_at.desc", limit=500)
+    return {"photos": rows}
+
+class PerleTrack(BaseModel):
+    title: str
+    title_en: str = ""
+    artist: str = "Unknown"
+    album: str = "Unknown"
+    duration: int = 0
+    accent: str = "#C9A7BB"
+    url: str
+
+@extra_api.post("/perle/tracks")
+async def add_perle_track(track: PerleTrack):
+    payload = {
+        "id": db._new_id(),
+        "title": track.title,
+        "title_en": track.title_en,
+        "artist": track.artist,
+        "album": track.album,
+        "duration": track.duration,
+        "accent": track.accent,
+        "url": track.url,
+        "created_at": db._now()
+    }
+    await db._supabase_insert("perle_tracks", payload)
+    return {"ok": True, "track": payload}
+
+@extra_api.get("/perle/tracks")
+async def get_perle_tracks():
+    rows = await db._supabase_select("perle_tracks", order="created_at.desc", limit=500)
+    return {"tracks": rows}

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id           TEXT PRIMARY KEY,
     client_secret_hash  TEXT NOT NULL,
     client_name         TEXT NOT NULL DEFAULT '',
+    default_agent_id    TEXT NOT NULL DEFAULT 'azheng',
     redirect_uris_json  TEXT NOT NULL DEFAULT '[]',
     grant_types_json    TEXT NOT NULL DEFAULT '["authorization_code","refresh_token"]',
     scope               TEXT NOT NULL DEFAULT 'mcp',
@@ -112,8 +113,21 @@ async def get_db() -> aiosqlite.Connection:
         await _db.execute("PRAGMA journal_mode=WAL")
         await _db.execute("PRAGMA foreign_keys=ON")
         await _db.executescript(SCHEMA)
+        await _ensure_schema(_db)
         await _db.commit()
     return _db
+
+
+async def _column_exists(db: aiosqlite.Connection, table: str, column: str) -> bool:
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    rows = await cursor.fetchall()
+    return column in {str(row["name"]) for row in rows}
+
+
+async def _ensure_schema(db: aiosqlite.Connection) -> None:
+    if not await _column_exists(db, "oauth_clients", "default_agent_id"):
+        await db.execute("ALTER TABLE oauth_clients ADD COLUMN default_agent_id TEXT NOT NULL DEFAULT 'azheng'")
+    await db.execute("UPDATE oauth_clients SET default_agent_id = 'azheng' WHERE COALESCE(default_agent_id, '') = ''")
 
 
 async def close_db() -> None:
@@ -148,17 +162,19 @@ async def upsert_client(
     redirect_uris: list[str],
     client_name: str = "",
     scope: str = "mcp",
+    default_agent_id: str = "azheng",
 ) -> dict[str, Any]:
     db = await get_db()
     now = _now()
     await db.execute(
         """
         INSERT INTO oauth_clients (
-            client_id, client_secret_hash, client_name, redirect_uris_json, grant_types_json, scope, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            client_id, client_secret_hash, client_name, default_agent_id, redirect_uris_json, grant_types_json, scope, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(client_id) DO UPDATE SET
             client_secret_hash = excluded.client_secret_hash,
             client_name = excluded.client_name,
+            default_agent_id = excluded.default_agent_id,
             redirect_uris_json = excluded.redirect_uris_json,
             grant_types_json = excluded.grant_types_json,
             scope = excluded.scope,
@@ -168,6 +184,7 @@ async def upsert_client(
             str(client_id or "").strip(),
             _hash(client_secret),
             str(client_name or "").strip(),
+            str(default_agent_id or "azheng").strip().lower() or "azheng",
             json.dumps(redirect_uris or [], ensure_ascii=False),
             json.dumps(["authorization_code", "refresh_token"], ensure_ascii=False),
             str(scope or "mcp").strip() or "mcp",

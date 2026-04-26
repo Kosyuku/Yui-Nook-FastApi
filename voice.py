@@ -39,13 +39,20 @@ async def _resolve_voice_config(
 ) -> dict[str, Any]:
     slot = await ai_runtime.resolve_model_slot("voice")
     if not slot:
-        raise VoiceConfigError("voice default model is not configured")
+        raise VoiceConfigError("语音模型未配置。请在系统设置中指定默认的 Voice 模型。")
+        
+    provider = str(slot.get("provider") or "").strip().lower()
     service_url = _pick_url(slot)
     if not service_url:
-        raise VoiceConfigError("voice service_url is not configured")
+        raise VoiceConfigError(f"语音模型配置缺失: 未找到 service_url。如果你使用的是 {provider or '自定义'} 服务，请填写基础 URL 或配置环境变量 VOICE_SERVICE_URL。")
+        
     resolved_voice_id = str(voice_id or slot.get("voice_id") or slot.get("voiceId") or "").strip()
     if not resolved_voice_id:
-        raise VoiceConfigError("voice_id is not configured")
+        raise VoiceConfigError("语音模型配置缺失: 未指定 voice_id。请在模型设定或者系统默认配置中指定一个音色 ID。")
+        
+    if provider and provider not in ("local", "system") and not settings.voice_service_api_key and not slot.get("api_key"):
+        raise VoiceConfigError(f"语音模型配置缺失: 供应商 '{provider}' 需要填写 API 密钥 (API Key)。请在安全设置或环境变量中配置。")
+        
     return {
         "provider": str(slot.get("provider") or "").strip(),
         "service_url": service_url,

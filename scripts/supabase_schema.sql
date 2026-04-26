@@ -1,5 +1,46 @@
 create extension if not exists vector;
 
+create table if not exists agents (
+    agent_id text primary key check (agent_id ~ '^[a-z0-9_-]+$'),
+    display_name text not null,
+    avatar text default '',
+    description text default '',
+    persona text default '',
+    source text default 'native',
+    metadata jsonb default '{}'::jsonb,
+    is_active boolean not null default true,
+    created_at text not null,
+    updated_at text not null
+);
+
+create index if not exists idx_agents_active
+    on agents(is_active, updated_at desc);
+create index if not exists idx_agents_source
+    on agents(source, updated_at desc);
+
+insert into agents (agent_id, display_name, avatar, description, persona, source, metadata, is_active, created_at, updated_at)
+values ('azheng', '阿筝', '', '', '', 'native', '{}'::jsonb, true, now()::text, now()::text)
+on conflict (agent_id) do update set
+    display_name = case when coalesce(agents.display_name, '') = '' then excluded.display_name else agents.display_name end,
+    source = case when coalesce(agents.source, '') = '' then excluded.source else agents.source end,
+    is_active = true,
+    updated_at = excluded.updated_at;
+
+create table if not exists agent_external_links (
+    id text primary key,
+    source text not null,
+    external_id text not null,
+    external_name text default '',
+    agent_id text not null references agents(agent_id),
+    metadata jsonb default '{}'::jsonb,
+    created_at text not null,
+    updated_at text not null,
+    unique(source, external_id)
+);
+
+create index if not exists idx_agent_external_links_agent
+    on agent_external_links(agent_id);
+
 create table if not exists sessions (
     id text primary key,
     title text not null default '新对话',
@@ -28,6 +69,35 @@ create table if not exists messages (
 
 create index if not exists idx_messages_session
     on messages(session_id, created_at);
+
+create table if not exists cot_logs (
+    id text primary key,
+    session_id text not null,
+    agent_id text not null default 'default',
+    source text not null default 'chat',
+    log_type text not null,
+    title text not null default '',
+    summary text not null default '',
+    content text not null default '',
+    tool_name text not null default '',
+    status text not null default '',
+    token_count integer not null default 0,
+    pinned integer not null default 0,
+    expires_at text not null default '',
+    created_at text not null
+);
+
+alter table cot_logs add column if not exists source text not null default 'chat';
+alter table cot_logs add column if not exists content text not null default '';
+
+create index if not exists idx_cot_logs_session_time
+    on cot_logs(session_id, created_at desc);
+create index if not exists idx_cot_logs_agent_time
+    on cot_logs(agent_id, created_at desc);
+create index if not exists idx_cot_logs_cleanup
+    on cot_logs(session_id, pinned, created_at);
+create index if not exists idx_cot_logs_expires
+    on cot_logs(expires_at);
 
 create table if not exists rp_rooms (
     room_id text primary key,
@@ -85,7 +155,6 @@ alter table memories add column if not exists last_touched_at timestamptz null;
 alter table memories add column if not exists touch_count integer not null default 0;
 
 update memories set visibility = 'private' where coalesce(visibility, '') = '';
-update memories set visibility = 'public' where visibility = 'global';
 update memories set visibility = 'shared' where visibility = 'restricted';
 update memories set source_agent_id = agent_id where coalesce(source_agent_id, '') = '';
 
@@ -225,6 +294,13 @@ create table if not exists companion_state (
     recent_topics jsonb not null default '[]'::jsonb,
     current_mood text,
     open_loops jsonb not null default '[]'::jsonb,
+    open_loops_summary text default '',
+    open_loops_count integer default 0,
+    high_importance_memories jsonb default '[]'::jsonb,
+    high_importance_memory_count integer default 0,
+    background_activity_candidates jsonb default '[]'::jsonb,
+    presence_gap text default '',
+    consciousness_updated_at timestamptz,
     proactive_cooldown_until timestamptz,
     impression text,
     relationship_progress text,
@@ -234,6 +310,13 @@ create table if not exists companion_state (
 );
 
 alter table companion_state add column if not exists agent_id text not null default 'default';
+alter table companion_state add column if not exists open_loops_summary text default '';
+alter table companion_state add column if not exists open_loops_count integer default 0;
+alter table companion_state add column if not exists high_importance_memories jsonb default '[]'::jsonb;
+alter table companion_state add column if not exists high_importance_memory_count integer default 0;
+alter table companion_state add column if not exists background_activity_candidates jsonb default '[]'::jsonb;
+alter table companion_state add column if not exists presence_gap text default '';
+alter table companion_state add column if not exists consciousness_updated_at timestamptz;
 alter table companion_state add column if not exists impression text;
 alter table companion_state add column if not exists relationship_progress text;
 alter table companion_state add column if not exists likes_summary text;
@@ -254,7 +337,6 @@ create table if not exists diary (
 );
 
 update diary set visibility = 'private' where coalesce(visibility, '') = '';
-update diary set visibility = 'public' where visibility = 'global';
 update diary set visibility = 'shared' where visibility = 'restricted';
 update diary set source_agent_id = agent_id where coalesce(source_agent_id, '') = '';
 
@@ -270,7 +352,8 @@ create table if not exists diary_notebooks (
     author_type text not null check (author_type in ('user', 'agent')),
     author_id text not null,
     name text not null,
-    visibility text not null default 'private' check (visibility in ('private', 'shared', 'public')),
+    description text not null default '',
+    visibility text not null default 'private' check (visibility in ('private', 'shared', 'global', 'public')),
     is_default boolean not null default false,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
@@ -285,6 +368,9 @@ create index if not exists idx_diary_notebooks_author_updated
 create unique index if not exists idx_diary_notebooks_default_author
     on diary_notebooks(author_type, author_id)
     where is_default = true;
+
+alter table diary_notebooks
+    add column if not exists description text not null default '';
 
 create table if not exists diary_entries (
     id text primary key,
@@ -314,6 +400,25 @@ create index if not exists idx_diary_comments_entry_created
 create index if not exists idx_diary_comments_author
     on diary_comments(author_type, author_id);
 
+create table if not exists diary_annotations (
+    id text primary key,
+    entry_id text not null references diary_entries(id) on delete cascade,
+    author_type text not null check (author_type in ('user', 'agent')),
+    author_id text not null,
+    kind text not null default 'underline',
+    start_offset integer not null default 0,
+    end_offset integer not null default 0,
+    text text not null default '',
+    note text not null default '',
+    created_at timestamptz not null default now()
+);
+
+create index if not exists idx_diary_annotations_entry
+    on diary_annotations(entry_id, start_offset asc, created_at asc);
+
+create index if not exists idx_diary_annotations_author
+    on diary_annotations(author_type, author_id);
+
 create table if not exists moments (
     id text primary key,
     author_type text not null,
@@ -338,3 +443,26 @@ create index if not exists idx_moments_author_created
 
 create index if not exists idx_moments_created
     on moments(created_at desc);
+
+-- OAuth client metadata mirror for Supabase deployments/checks.
+-- The runtime OAuth token store is SQLite, but Supabase gets the same column shape.
+create table if not exists oauth_clients (
+    client_id text primary key,
+    client_secret_hash text not null default '',
+    client_name text not null default '',
+    default_agent_id text not null default 'azheng' references agents(agent_id),
+    redirect_uris_json text not null default '[]',
+    grant_types_json text not null default '["authorization_code","refresh_token"]',
+    scope text not null default 'mcp',
+    created_at text not null default now()::text,
+    updated_at text not null default now()::text
+);
+
+alter table oauth_clients
+    add column if not exists default_agent_id text not null default 'azheng' references agents(agent_id);
+
+insert into oauth_clients (client_id, client_secret_hash, client_name, default_agent_id, redirect_uris_json, grant_types_json, scope, created_at, updated_at)
+values ('claude-mcp', '', 'Claude MCP Connector', 'azheng', '[]', '["authorization_code","refresh_token"]', 'mcp', now()::text, now()::text)
+on conflict (client_id) do update set
+    default_agent_id = 'azheng',
+    updated_at = excluded.updated_at;

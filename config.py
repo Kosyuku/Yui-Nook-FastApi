@@ -46,6 +46,7 @@ class AppConfig:
     supabase_diary_notebooks_table: str = "diary_notebooks"
     supabase_diary_entries_table: str = "diary_entries"
     supabase_diary_comments_table: str = "diary_comments"
+    supabase_diary_annotations_table: str = "diary_annotations"
     supabase_moments_table: str = "moments"
     supabase_proactive_messages_table: str = "proactive_messages"
     supabase_memory_logs_table: str = "memory_logs"
@@ -69,7 +70,8 @@ class AppConfig:
     # ── 人设 ──
     persona_name: str = "Pyro"
     persona_description: str = ""
-    current_agent_id: str = "default"
+    default_agent_id: str = "azheng"
+    current_agent_id: str = "azheng"
 
     # ── 天气 ──
     weather_api_key: str = ""
@@ -143,7 +145,7 @@ class AppConfig:
     oauth_session_secret: str = ""
     oauth_admin_username: str = "admin"
     oauth_admin_password_hash: str = ""
-    oauth_client_id: str = ""
+    oauth_client_id: str = "claude-mcp"
     oauth_client_secret: str = ""
     oauth_client_name: str = "Claude MCP Connector"
     oauth_redirect_uris: list[str] = field(default_factory=list)
@@ -179,6 +181,7 @@ class AppConfig:
             supabase_diary_notebooks_table=os.getenv("SUPABASE_DIARY_NOTEBOOKS_TABLE", "diary_notebooks"),
             supabase_diary_entries_table=os.getenv("SUPABASE_DIARY_ENTRIES_TABLE", "diary_entries"),
             supabase_diary_comments_table=os.getenv("SUPABASE_DIARY_COMMENTS_TABLE", "diary_comments"),
+            supabase_diary_annotations_table=os.getenv("SUPABASE_DIARY_ANNOTATIONS_TABLE", "diary_annotations"),
             supabase_moments_table=os.getenv("SUPABASE_MOMENTS_TABLE", "moments"),
             supabase_proactive_messages_table=os.getenv("SUPABASE_PROACTIVE_MESSAGES_TABLE", "proactive_messages"),
             supabase_memory_logs_table=os.getenv("SUPABASE_MEMORY_LOGS_TABLE", "memory_logs"),
@@ -210,7 +213,8 @@ class AppConfig:
             # 人设
             persona_name=os.getenv("PERSONA_NAME", "Pyro"),
             persona_description=os.getenv("PERSONA_DESCRIPTION", ""),
-            current_agent_id=os.getenv("CURRENT_AGENT_ID", os.getenv("AGENT_ID", "default")).strip() or "default",
+            default_agent_id=os.getenv("DEFAULT_AGENT_ID", os.getenv("CURRENT_AGENT_ID", os.getenv("AGENT_ID", "azheng"))).strip() or "azheng",
+            current_agent_id=os.getenv("CURRENT_AGENT_ID", os.getenv("DEFAULT_AGENT_ID", os.getenv("AGENT_ID", "azheng"))).strip() or "azheng",
             # 天气
             weather_api_key=os.getenv("WEATHER_API_KEY", ""),
             default_city=os.getenv("DEFAULT_CITY", "Shanghai"),
@@ -275,7 +279,7 @@ class AppConfig:
             oauth_session_secret=os.getenv("OAUTH_SESSION_SECRET", "").strip(),
             oauth_admin_username=os.getenv("OAUTH_ADMIN_USERNAME", "admin").strip() or "admin",
             oauth_admin_password_hash=os.getenv("OAUTH_ADMIN_PASSWORD_HASH", "").strip(),
-            oauth_client_id=os.getenv("OAUTH_CLIENT_ID", "").strip(),
+            oauth_client_id=os.getenv("OAUTH_CLIENT_ID", "claude-mcp").strip() or "claude-mcp",
             oauth_client_secret=os.getenv("OAUTH_CLIENT_SECRET", "").strip(),
             oauth_client_name=os.getenv("OAUTH_CLIENT_NAME", "Claude MCP Connector").strip() or "Claude MCP Connector",
             oauth_redirect_uris=[item.strip() for item in raw_redirect_uris.split(",") if item.strip()],

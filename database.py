@@ -35,7 +35,43 @@ MEMORY_CATEGORY_ALIASES = {
     "ephemeral": "ephemeral",
 }
 
+AGENT_ID_RE = re.compile(r"^[a-z0-9_-]+$")
+AGENTS_TABLE = "agents"
+AGENT_EXTERNAL_LINKS_TABLE = "agent_external_links"
+DEFAULT_AGENT_ID = "azheng"
+
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS agents (
+    agent_id     TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    avatar       TEXT DEFAULT '',
+    description  TEXT DEFAULT '',
+    persona      TEXT DEFAULT '',
+    source       TEXT DEFAULT 'native',
+    metadata     TEXT DEFAULT '{}',
+    is_active    INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agents_active
+    ON agents(is_active, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agents_source
+    ON agents(source, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_external_links (
+    id            TEXT PRIMARY KEY,
+    source        TEXT NOT NULL,
+    external_id   TEXT NOT NULL,
+    external_name TEXT DEFAULT '',
+    agent_id      TEXT NOT NULL REFERENCES agents(agent_id),
+    metadata      TEXT DEFAULT '{}',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    UNIQUE(source, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_external_links_agent
+    ON agent_external_links(agent_id);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT PRIMARY KEY,
     title       TEXT NOT NULL DEFAULT 'new session',
@@ -257,6 +293,7 @@ CREATE TABLE IF NOT EXISTS diary_notebooks (
     author_type TEXT NOT NULL,
     author_id   TEXT NOT NULL,
     name        TEXT NOT NULL,
+    description TEXT DEFAULT '',
     visibility  TEXT NOT NULL DEFAULT 'private',
     is_default  INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL,
@@ -295,6 +332,23 @@ CREATE INDEX IF NOT EXISTS idx_diary_comments_entry_created
 CREATE INDEX IF NOT EXISTS idx_diary_comments_author
     ON diary_comments(author_type, author_id);
 
+CREATE TABLE IF NOT EXISTS diary_annotations (
+    id          TEXT PRIMARY KEY,
+    entry_id    TEXT NOT NULL REFERENCES diary_entries(id) ON DELETE CASCADE,
+    author_type TEXT NOT NULL,
+    author_id   TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'underline',
+    start_offset INTEGER NOT NULL DEFAULT 0,
+    end_offset   INTEGER NOT NULL DEFAULT 0,
+    text        TEXT NOT NULL DEFAULT '',
+    note        TEXT DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diary_annotations_entry
+    ON diary_annotations(entry_id, start_offset ASC, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_diary_annotations_author
+    ON diary_annotations(author_type, author_id);
+
 CREATE TABLE IF NOT EXISTS memory_embeddings (
     memory_id     TEXT PRIMARY KEY,
     content_hash  TEXT NOT NULL,
@@ -329,27 +383,72 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+class AgentResolutionError(ValueError):
+    """Raised when an agent context cannot be resolved safely."""
+
+
+class AgentNeedsBinding(AgentResolutionError):
+    def __init__(self, *, source: str, external_id: str, external_name: str = ""):
+        super().__init__(f"external role needs binding: {source}/{external_id}")
+        self.source = source
+        self.external_id = external_id
+        self.external_name = external_name
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "resolved": False,
+            "needs_binding": True,
+            "source": self.source,
+            "external_id": self.external_id,
+            "external_name": self.external_name,
+        }
+
+
+def _configured_default_agent_id() -> str:
+    value = (
+        getattr(settings, "default_agent_id", "")
+        or getattr(settings, "current_agent_id", "")
+        or DEFAULT_AGENT_ID
+    )
+    return normalize_agent_id_value(value)
+
+
+def normalize_agent_id_value(agent_id: str | None) -> str:
+    value = str(agent_id or "").strip().lower()
+    if value.startswith("@"):
+        value = value[1:]
+    if not value:
+        raise AgentResolutionError("agent_id is required")
+    if not AGENT_ID_RE.fullmatch(value):
+        raise AgentResolutionError("agent_id must use lowercase letters, digits, underscore, or dash")
+    return value
+
+
 def normalize_agent_id(agent_id: str | None) -> str:
     value = str(agent_id or "").strip()
     if not value:
-        value = getattr(settings, "current_agent_id", "default")
-    value = value.strip().lower().replace(" ", "_")
-    return value or "default"
+        value = _configured_default_agent_id()
+    return normalize_agent_id_value(value)
 
 
 def normalize_visibility(visibility: str | None) -> str:
     value = str(visibility or "private").strip().lower()
     aliases = {
-        "global": "public",
         "restricted": "shared",
     }
     value = aliases.get(value, value)
-    return value if value in {"private", "shared", "public"} else "private"
+    return value if value in {"private", "shared", "global", "public"} else "private"
 
 
 def resolve_source_agent_id(agent_id: str | None, source_agent_id: str | None) -> str:
     owner = normalize_agent_id(agent_id)
     source = normalize_agent_id(source_agent_id) if source_agent_id else owner
+    return source or owner
+
+
+async def resolve_source_agent_id_checked(agent_id: str | None, source_agent_id: str | None) -> str:
+    owner = await require_agent(agent_id)
+    source = await require_agent(source_agent_id) if source_agent_id else owner
     return source or owner
 
 
@@ -390,7 +489,7 @@ def memory_owner_label(memory: dict[str, Any], current_agent_id: str | None = No
         return "current persona record"
     if source_agent != owner:
         return f"{owner} processed / source {source_agent}"
-        return f"{owner} record"
+    return f"{owner} record"
 
 
 def format_memory_with_source(memory: dict[str, Any], current_agent_id: str | None = None) -> str:
@@ -411,7 +510,7 @@ def _memory_active_where_clause() -> str:
 
 def _memory_visibility_where_clause(include_cross_agent: bool) -> str:
     if include_cross_agent:
-        return "((agent_id = ?) OR (agent_id != ? AND visibility IN ('shared','public')))"
+        return "((agent_id = ?) OR (agent_id != ? AND visibility IN ('shared','global','public')))"
     return "(agent_id = ?)"
 
 
@@ -436,7 +535,7 @@ def _memory_scope_post_filter(
         if owner == current:
             own.append(row)
             continue
-        if include_cross_agent and visibility in {"shared", "public"}:
+        if include_cross_agent and visibility in {"shared", "global", "public"}:
             shared.append(row)
     if include_cross_agent:
         limit_value = max(0, int(cross_agent_limit if cross_agent_limit is not None else len(shared)))
@@ -620,7 +719,7 @@ def _default_diary_notebook_name(author_type: str, author_id: str) -> str:
     normalized_id = normalize_subject_id(normalized_type, author_id)
     if normalized_type == "user":
         return "my notebook"
-        return f"{normalized_id} notebook"
+    return f"{normalized_id} notebook"
 
 
 def _diary_notebook_is_editable(notebook: dict[str, Any] | None) -> bool:
@@ -641,6 +740,7 @@ def _normalize_diary_notebook_row(row: dict[str, Any] | None) -> dict[str, Any] 
     notebook = dict(row)
     notebook["author_type"] = normalize_subject_type(row.get("author_type"))
     notebook["author_id"] = normalize_subject_id(notebook["author_type"], row.get("author_id"))
+    notebook["description"] = str(row.get("description") or "")
     notebook["visibility"] = normalize_visibility(row.get("visibility") or "private")
     notebook["is_default"] = bool(row.get("is_default"))
     notebook["entry_count"] = _safe_int(row.get("entry_count"), 0)
@@ -668,11 +768,34 @@ def _normalize_diary_comment_row(row: dict[str, Any] | None) -> dict[str, Any] |
     }
 
 
+def _normalize_diary_annotation_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    author_type = normalize_subject_type(row.get("author_type"))
+    author_id = normalize_subject_id(author_type, row.get("author_id"))
+    start_offset = max(0, _safe_int(row.get("start_offset"), 0))
+    end_offset = max(start_offset, _safe_int(row.get("end_offset"), start_offset))
+    return {
+        "id": str(row.get("id") or ""),
+        "entry_id": str(row.get("entry_id") or ""),
+        "author_type": author_type,
+        "author_id": author_id,
+        "author_name": ("\u6211" if author_type == "user" and author_id == "me" else author_id),
+        "kind": str(row.get("kind") or "underline"),
+        "start_offset": start_offset,
+        "end_offset": end_offset,
+        "text": str(row.get("text") or ""),
+        "note": str(row.get("note") or ""),
+        "created_at": str(row.get("created_at") or ""),
+    }
+
+
 def _normalize_diary_entry_row(
     row: dict[str, Any] | None,
     *,
     notebook: dict[str, Any] | None = None,
     comments: list[dict[str, Any]] | None = None,
+    annotations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if not row:
         return None
@@ -681,7 +804,9 @@ def _normalize_diary_entry_row(
     entry["content"] = str(row.get("content") or "")
     entry["tags"] = str(row.get("tags") or "")
     entry["comments"] = comments or []
+    entry["annotations"] = annotations or []
     entry["comment_count"] = len(entry["comments"])
+    entry["annotation_count"] = len(entry["annotations"])
     if notebook:
         entry["notebook"] = notebook
         entry["can_edit"] = bool(notebook.get("can_edit_entries"))
@@ -1016,7 +1141,7 @@ async def _supabase_list_memories(
             active_or = params["or"]
             params["or"] = (
                 f"and({active_or},agent_id.eq.{normalized_agent}),"
-                f"and({active_or},agent_id.neq.{normalized_agent},visibility.in.(shared,public))"
+                f"and({active_or},agent_id.neq.{normalized_agent},visibility.in.(shared,global,public))"
             )
         else:
             params["agent_id"] = f"eq.{normalized_agent}"
@@ -1130,7 +1255,7 @@ async def _supabase_get_memory_stats(
             active_or = params["or"]
             params["or"] = (
                 f"and({active_or},agent_id.eq.{normalized_agent}),"
-                f"and({active_or},agent_id.neq.{normalized_agent},visibility.in.(shared,public))"
+                f"and({active_or},agent_id.neq.{normalized_agent},visibility.in.(shared,global,public))"
             )
         else:
             params["agent_id"] = f"eq.{normalized_agent}"
@@ -1219,6 +1344,19 @@ async def _supabase_delete(table: str, filters: dict[str, str]) -> list[dict[str
         if resp.status_code >= 300:
             raise RuntimeError(f"Supabase delete({table}) failed: {resp.status_code} {resp.text[:200]}")
         return resp.json()
+
+
+async def _supabase_upload_storage(bucket: str, file_path: str, file_bytes: bytes, content_type: str) -> str:
+    url = f"{settings.supabase_url}/storage/v1/object/{bucket}/{file_path}"
+    headers = {
+        "Authorization": f"Bearer {settings.supabase_key}",
+        "Content-Type": content_type,
+    }
+    async with httpx.AsyncClient(timeout=60.0, trust_env=settings.supabase_httpx_trust_env) as client:
+        resp = await client.post(url, headers=headers, content=file_bytes)
+        if resp.status_code >= 300:
+            raise RuntimeError(f"Supabase storage upload failed: {resp.status_code} {resp.text[:200]}")
+    return f"{settings.supabase_url}/storage/v1/object/public/{bucket}/{file_path}"
 
 
 async def _supabase_rpc(function_name: str, payload: dict[str, Any]) -> Any:
@@ -1455,6 +1593,53 @@ async def _sqlite_column_exists(db: aiosqlite.Connection, table: str, column: st
 
 
 async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
+    now = _now()
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agents (
+            agent_id     TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            avatar       TEXT DEFAULT '',
+            description  TEXT DEFAULT '',
+            persona      TEXT DEFAULT '',
+            source       TEXT DEFAULT 'native',
+            metadata     TEXT DEFAULT '{}',
+            is_active    INTEGER NOT NULL DEFAULT 1,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        )
+        """
+    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_agents_active ON agents(is_active, updated_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_agents_source ON agents(source, updated_at DESC)")
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_external_links (
+            id            TEXT PRIMARY KEY,
+            source        TEXT NOT NULL,
+            external_id   TEXT NOT NULL,
+            external_name TEXT DEFAULT '',
+            agent_id      TEXT NOT NULL REFERENCES agents(agent_id),
+            metadata      TEXT DEFAULT '{}',
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            UNIQUE(source, external_id)
+        )
+        """
+    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_agent_external_links_agent ON agent_external_links(agent_id)")
+    await db.execute(
+        """
+        INSERT INTO agents (agent_id, display_name, avatar, description, persona, source, metadata, is_active, created_at, updated_at)
+        VALUES ('azheng', '阿筝', '', '', '', 'native', '{}', 1, ?, ?)
+        ON CONFLICT(agent_id) DO UPDATE SET
+            display_name = CASE WHEN COALESCE(display_name, '') = '' THEN excluded.display_name ELSE display_name END,
+            source = CASE WHEN COALESCE(source, '') = '' THEN excluded.source ELSE source END,
+            is_active = 1,
+            updated_at = excluded.updated_at
+        """,
+        (now, now),
+    )
     alter_statements: list[str] = []
     if not await _sqlite_column_exists(db, "sessions", "source_app"):
         await db.execute("ALTER TABLE sessions ADD COLUMN source_app TEXT NOT NULL DEFAULT 'yui_nook'")
@@ -1506,7 +1691,6 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     )
     await db.execute("UPDATE memories SET agent_id = 'default' WHERE COALESCE(agent_id, '') = ''")
     await db.execute("UPDATE memories SET visibility = 'private' WHERE COALESCE(visibility, '') = ''")
-    await db.execute("UPDATE memories SET visibility = 'public' WHERE visibility = 'global'")
     await db.execute("UPDATE memories SET visibility = 'shared' WHERE visibility = 'restricted'")
     await db.execute("UPDATE memories SET source_agent_id = agent_id WHERE COALESCE(source_agent_id, '') = ''")
     await db.execute(
@@ -1521,6 +1705,26 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     await db.execute("CREATE INDEX IF NOT EXISTS idx_diary_agent_created_at ON diary(agent_id, created_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_diary_agent_updated_at ON diary(agent_id, updated_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_diary_agent_visibility ON diary(agent_id, visibility)")
+    if not await _sqlite_column_exists(db, "diary_notebooks", "description"):
+        await db.execute("ALTER TABLE diary_notebooks ADD COLUMN description TEXT DEFAULT ''")
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS diary_annotations (
+            id          TEXT PRIMARY KEY,
+            entry_id    TEXT NOT NULL REFERENCES diary_entries(id) ON DELETE CASCADE,
+            author_type TEXT NOT NULL,
+            author_id   TEXT NOT NULL,
+            kind        TEXT NOT NULL DEFAULT 'underline',
+            start_offset INTEGER NOT NULL DEFAULT 0,
+            end_offset   INTEGER NOT NULL DEFAULT 0,
+            text        TEXT NOT NULL DEFAULT '',
+            note        TEXT DEFAULT '',
+            created_at  TEXT NOT NULL
+        )
+        """
+    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_diary_annotations_entry ON diary_annotations(entry_id, start_offset ASC, created_at ASC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_diary_annotations_author ON diary_annotations(author_type, author_id)")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS rp_rooms (
@@ -1576,7 +1780,6 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     await db.execute("UPDATE moments SET visibility = 'public' WHERE visibility = 'global'")
     await db.execute("UPDATE moments SET visibility = 'shared' WHERE visibility = 'restricted'")
     await db.execute("UPDATE diary SET visibility = 'private' WHERE COALESCE(visibility, '') = ''")
-    await db.execute("UPDATE diary SET visibility = 'public' WHERE visibility = 'global'")
     await db.execute("UPDATE diary SET visibility = 'shared' WHERE visibility = 'restricted'")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_moments_author ON moments(author_type, author_id, created_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_moments_created_at ON moments(created_at DESC)")
@@ -1709,6 +1912,430 @@ async def close_db():
         _db = None
 
 
+# ==================== Agents ====================
+
+def _agent_metadata_value(metadata: Any) -> str:
+    if metadata in (None, ""):
+        return "{}"
+    if isinstance(metadata, str):
+        return metadata
+    try:
+        return json.dumps(metadata, ensure_ascii=False)
+    except Exception:
+        return "{}"
+
+
+def _normalize_agent_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    item["agent_id"] = normalize_agent_id_value(item.get("agent_id"))
+    item["display_handle"] = f"@{item['agent_id']}"
+    item["display_name"] = str(item.get("display_name") or item["agent_id"])
+    item["avatar"] = str(item.get("avatar") or "")
+    item["description"] = str(item.get("description") or "")
+    item["persona"] = str(item.get("persona") or "")
+    item["source"] = str(item.get("source") or "")
+    item["metadata"] = item.get("metadata") or "{}"
+    item["is_active"] = bool(item.get("is_active", True))
+    item["created_at"] = str(item.get("created_at") or "")
+    item["updated_at"] = str(item.get("updated_at") or "")
+    return item
+
+
+async def ensure_default_agents() -> None:
+    now = _now()
+    payload = {
+        "agent_id": "azheng",
+        "display_name": "阿筝",
+        "avatar": "",
+        "description": "",
+        "persona": "",
+        "source": "native",
+        "metadata": "{}",
+        "is_active": True,
+        "created_at": now,
+        "updated_at": now,
+    }
+    if _use_supabase_data():
+        try:
+            await _supabase_insert(AGENTS_TABLE, payload, on_conflict="agent_id")
+        except Exception as exc:
+            logger.warning("Failed to seed default Supabase agent azheng: %s", exc)
+        return
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO agents (agent_id, display_name, avatar, description, persona, source, metadata, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(agent_id) DO UPDATE SET
+            display_name = CASE WHEN COALESCE(display_name, '') = '' THEN excluded.display_name ELSE display_name END,
+            source = CASE WHEN COALESCE(source, '') = '' THEN excluded.source ELSE source END,
+            is_active = 1,
+            updated_at = excluded.updated_at
+        """,
+        (
+            payload["agent_id"],
+            payload["display_name"],
+            payload["avatar"],
+            payload["description"],
+            payload["persona"],
+            payload["source"],
+            payload["metadata"],
+            now,
+            now,
+        ),
+    )
+    await db.commit()
+
+
+async def get_agent(agent_id: str | None, *, include_inactive: bool = False) -> dict[str, Any] | None:
+    normalized = normalize_agent_id_value(agent_id)
+    await ensure_default_agents()
+    if _use_supabase_data():
+        filters = {"agent_id": f"eq.{normalized}"}
+        if not include_inactive:
+            filters["is_active"] = "eq.true"
+        rows = await _supabase_select(AGENTS_TABLE, filters=filters, limit=1)
+        return _normalize_agent_row(rows[0] if rows else None)
+    db = await get_db()
+    sql = "SELECT * FROM agents WHERE agent_id = ?"
+    params: list[Any] = [normalized]
+    if not include_inactive:
+        sql += " AND is_active = 1"
+    cursor = await db.execute(sql + " LIMIT 1", params)
+    row = await cursor.fetchone()
+    return _normalize_agent_row(dict(row) if row else None)
+
+
+async def agent_exists(agent_id: str | None) -> bool:
+    return bool(await get_agent(agent_id))
+
+
+async def require_agent(agent_id: str | None) -> str:
+    normalized = normalize_agent_id_value(agent_id)
+    if not await agent_exists(normalized):
+        raise AgentResolutionError(f"agent_id not found: {normalized}")
+    return normalized
+
+
+async def list_agents(*, include_inactive: bool = False) -> list[dict[str, Any]]:
+    await ensure_default_agents()
+    if _use_supabase_data():
+        filters = {} if include_inactive else {"is_active": "eq.true"}
+        rows = await _supabase_select(AGENTS_TABLE, filters=filters, order="updated_at.desc")
+        return [item for item in (_normalize_agent_row(row) for row in rows) if item]
+    db = await get_db()
+    sql = "SELECT * FROM agents"
+    if not include_inactive:
+        sql += " WHERE is_active = 1"
+    sql += " ORDER BY updated_at DESC"
+    cursor = await db.execute(sql)
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_agent_row(dict(row)) for row in rows) if item]
+
+
+async def create_agent(
+    *,
+    agent_id: str,
+    display_name: str,
+    avatar: str = "",
+    description: str = "",
+    persona: str = "",
+    source: str = "native",
+    metadata: Any = None,
+) -> dict[str, Any]:
+    normalized = normalize_agent_id_value(agent_id)
+    now = _now()
+    payload = {
+        "agent_id": normalized,
+        "display_name": str(display_name or "").strip() or normalized,
+        "avatar": str(avatar or ""),
+        "description": str(description or ""),
+        "persona": str(persona or ""),
+        "source": str(source or "native").strip() or "native",
+        "metadata": _agent_metadata_value(metadata),
+        "is_active": True,
+        "created_at": now,
+        "updated_at": now,
+    }
+    if _use_supabase_data():
+        rows = await _supabase_insert(AGENTS_TABLE, payload)
+        return _normalize_agent_row(rows[0] if rows else payload) or payload
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO agents (agent_id, display_name, avatar, description, persona, source, metadata, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        """,
+        (
+            payload["agent_id"],
+            payload["display_name"],
+            payload["avatar"],
+            payload["description"],
+            payload["persona"],
+            payload["source"],
+            payload["metadata"],
+            payload["created_at"],
+            payload["updated_at"],
+        ),
+    )
+    await db.commit()
+    return _normalize_agent_row(payload) or payload
+
+
+async def update_agent(agent_id: str, **updates: Any) -> dict[str, Any] | None:
+    normalized = await require_agent(agent_id)
+    allowed = {"display_name", "avatar", "description", "persona", "source", "metadata", "is_active"}
+    payload = {k: v for k, v in updates.items() if k in allowed and v is not None}
+    if "metadata" in payload:
+        payload["metadata"] = _agent_metadata_value(payload["metadata"])
+    if not payload:
+        return await get_agent(normalized, include_inactive=True)
+    payload["updated_at"] = _now()
+    if _use_supabase_data():
+        rows = await _supabase_update(AGENTS_TABLE, {"agent_id": f"eq.{normalized}"}, payload)
+        return _normalize_agent_row(rows[0] if rows else None)
+    db = await get_db()
+    sets = ", ".join(f"{key} = ?" for key in payload)
+    values = list(payload.values()) + [normalized]
+    await db.execute(f"UPDATE agents SET {sets} WHERE agent_id = ?", values)
+    await db.commit()
+    return await get_agent(normalized, include_inactive=True)
+
+
+async def deactivate_agent(agent_id: str) -> bool:
+    updated = await update_agent(agent_id, is_active=False)
+    return bool(updated)
+
+
+def _normalize_external_link_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    item["id"] = str(item.get("id") or "")
+    item["source"] = str(item.get("source") or "")
+    item["external_id"] = str(item.get("external_id") or "")
+    item["external_name"] = str(item.get("external_name") or "")
+    item["agent_id"] = normalize_agent_id_value(item.get("agent_id"))
+    item["metadata"] = item.get("metadata") or "{}"
+    item["created_at"] = str(item.get("created_at") or "")
+    item["updated_at"] = str(item.get("updated_at") or "")
+    return item
+
+
+async def list_agent_external_links(source: str | None = None, agent_id: str | None = None) -> list[dict[str, Any]]:
+    filters: dict[str, str] = {}
+    if source:
+        filters["source"] = f"eq.{source}"
+    if agent_id:
+        filters["agent_id"] = f"eq.{await require_agent(agent_id)}"
+    if _use_supabase_data():
+        rows = await _supabase_select(AGENT_EXTERNAL_LINKS_TABLE, filters=filters or None, order="updated_at.desc")
+        return [item for item in (_normalize_external_link_row(row) for row in rows) if item]
+    db = await get_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if source:
+        clauses.append("source = ?")
+        params.append(source)
+    if agent_id:
+        clauses.append("agent_id = ?")
+        params.append(await require_agent(agent_id))
+    sql = "SELECT * FROM agent_external_links"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY updated_at DESC"
+    cursor = await db.execute(sql, params)
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_external_link_row(dict(row)) for row in rows) if item]
+
+
+async def get_agent_external_link(source: str, external_id: str) -> dict[str, Any] | None:
+    src = str(source or "").strip()
+    ext = str(external_id or "").strip()
+    if not src or not ext:
+        return None
+    if _use_supabase_data():
+        rows = await _supabase_select(
+            AGENT_EXTERNAL_LINKS_TABLE,
+            filters={"source": f"eq.{src}", "external_id": f"eq.{ext}"},
+            limit=1,
+        )
+        return _normalize_external_link_row(rows[0] if rows else None)
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM agent_external_links WHERE source = ? AND external_id = ? LIMIT 1",
+        (src, ext),
+    )
+    row = await cursor.fetchone()
+    return _normalize_external_link_row(dict(row) if row else None)
+
+
+async def create_agent_external_link(
+    *,
+    source: str,
+    external_id: str,
+    agent_id: str,
+    external_name: str = "",
+    metadata: Any = None,
+) -> dict[str, Any]:
+    normalized_agent = await require_agent(agent_id)
+    now = _now()
+    payload = {
+        "id": _new_id(),
+        "source": str(source or "").strip(),
+        "external_id": str(external_id or "").strip(),
+        "external_name": str(external_name or "").strip(),
+        "agent_id": normalized_agent,
+        "metadata": _agent_metadata_value(metadata),
+        "created_at": now,
+        "updated_at": now,
+    }
+    if not payload["source"] or not payload["external_id"]:
+        raise AgentResolutionError("source and external_id are required")
+    if _use_supabase_data():
+        rows = await _supabase_insert(AGENT_EXTERNAL_LINKS_TABLE, payload, on_conflict="source,external_id")
+        return _normalize_external_link_row(rows[0] if rows else payload) or payload
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO agent_external_links (id, source, external_id, external_name, agent_id, metadata, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, external_id) DO UPDATE SET
+            external_name = excluded.external_name,
+            agent_id = excluded.agent_id,
+            metadata = excluded.metadata,
+            updated_at = excluded.updated_at
+        """,
+        (
+            payload["id"],
+            payload["source"],
+            payload["external_id"],
+            payload["external_name"],
+            payload["agent_id"],
+            payload["metadata"],
+            payload["created_at"],
+            payload["updated_at"],
+        ),
+    )
+    await db.commit()
+    link = await get_agent_external_link(payload["source"], payload["external_id"])
+    return link or payload
+
+
+async def update_agent_external_link(link_id: str, **updates: Any) -> dict[str, Any] | None:
+    allowed = {"external_name", "agent_id", "metadata"}
+    payload = {k: v for k, v in updates.items() if k in allowed and v is not None}
+    if "agent_id" in payload:
+        payload["agent_id"] = await require_agent(payload["agent_id"])
+    if "metadata" in payload:
+        payload["metadata"] = _agent_metadata_value(payload["metadata"])
+    if not payload:
+        return None
+    payload["updated_at"] = _now()
+    if _use_supabase_data():
+        rows = await _supabase_update(AGENT_EXTERNAL_LINKS_TABLE, {"id": f"eq.{link_id}"}, payload)
+        return _normalize_external_link_row(rows[0] if rows else None)
+    db = await get_db()
+    sets = ", ".join(f"{key} = ?" for key in payload)
+    values = list(payload.values()) + [link_id]
+    await db.execute(f"UPDATE agent_external_links SET {sets} WHERE id = ?", values)
+    await db.commit()
+    cursor = await db.execute("SELECT * FROM agent_external_links WHERE id = ?", (link_id,))
+    row = await cursor.fetchone()
+    return _normalize_external_link_row(dict(row) if row else None)
+
+
+async def delete_agent_external_link(link_id: str) -> bool:
+    if _use_supabase_data():
+        rows = await _supabase_delete(AGENT_EXTERNAL_LINKS_TABLE, {"id": f"eq.{link_id}"})
+        return len(rows) > 0
+    db = await get_db()
+    result = await db.execute("DELETE FROM agent_external_links WHERE id = ?", (link_id,))
+    await db.commit()
+    return result.rowcount > 0
+
+
+async def resolve_agent_context(
+    *,
+    agent_id: str | None = None,
+    session_id: str | None = None,
+    room_id: str | None = None,
+    source: str | None = None,
+    external_id: str | None = None,
+    external_name: str | None = None,
+    oauth_client_id: str | None = None,
+    allow_default: bool = True,
+    purpose: str = "",
+) -> dict[str, Any]:
+    await ensure_default_agents()
+    if agent_id:
+        normalized = await require_agent(agent_id)
+        agent = await get_agent(normalized)
+        return {"resolved": True, "agent_id": normalized, "agent": agent, "via": "agent_id"}
+
+    if session_id:
+        session = await get_session(session_id)
+        if not session:
+            raise AgentResolutionError(f"session not found: {session_id}")
+        normalized = await require_agent(session.get("agent_id"))
+        agent = await get_agent(normalized)
+        return {"resolved": True, "agent_id": normalized, "agent": agent, "via": "session_id"}
+
+    if room_id:
+        room = await get_rp_room(room_id)
+        if not room:
+            raise AgentResolutionError(f"rp room not found: {room_id}")
+        normalized = await require_agent(room.get("agent_id"))
+        agent = await get_agent(normalized)
+        return {"resolved": True, "agent_id": normalized, "agent": agent, "via": "room_id"}
+
+    if source and external_id:
+        link = await get_agent_external_link(source, external_id)
+        if not link:
+            raise AgentNeedsBinding(
+                source=str(source or "").strip(),
+                external_id=str(external_id or "").strip(),
+                external_name=str(external_name or "").strip(),
+            )
+        normalized = await require_agent(link.get("agent_id"))
+        agent = await get_agent(normalized)
+        return {"resolved": True, "agent_id": normalized, "agent": agent, "via": "external_link", "link": link}
+
+    if oauth_client_id:
+        if str(oauth_client_id or "").strip() in {"claude-mcp", getattr(settings, "oauth_client_id", "")}:
+            normalized = await require_agent(_configured_default_agent_id())
+            agent = await get_agent(normalized)
+            return {"resolved": True, "agent_id": normalized, "agent": agent, "via": "oauth_client_id_default"}
+        try:
+            import oauth_store
+
+            client = await oauth_store.get_client(str(oauth_client_id or "").strip())
+        except Exception as exc:
+            logger.warning("resolve_agent_context oauth client lookup failed: %s", exc)
+            client = None
+        if client and client.get("default_agent_id"):
+            normalized = await require_agent(client.get("default_agent_id"))
+            agent = await get_agent(normalized)
+            return {"resolved": True, "agent_id": normalized, "agent": agent, "via": "oauth_client_id"}
+        raise AgentResolutionError(f"oauth client has no valid default agent: {oauth_client_id}")
+
+    if allow_default:
+        normalized = await require_agent(_configured_default_agent_id())
+        if purpose:
+            logger.warning("Agent context fallback to DEFAULT_AGENT_ID=%s for %s", normalized, purpose)
+        agent = await get_agent(normalized)
+        return {"resolved": True, "agent_id": normalized, "agent": agent, "via": "default"}
+
+    raise AgentResolutionError("agent context is required")
+
+
+async def resolve_agent_id(**kwargs: Any) -> str:
+    context = await resolve_agent_context(**kwargs)
+    return str(context["agent_id"])
+
+
 # ==================== ???? ====================
 
 async def get_setting(key: str) -> dict[str, Any] | None:
@@ -1821,7 +2448,7 @@ async def set_agent_proactive_style(agent_id: str | None, style: str) -> dict[st
 
 async def safe_delete_agent(agent_id: str | None) -> dict[str, Any]:
     normalized_agent_id = normalize_agent_id(agent_id)
-    orphan_agent_id = f"orphan:{normalized_agent_id}"
+    orphan_agent_id = f"orphan_{normalized_agent_id}"
     result = {
         "agent_id": normalized_agent_id,
         "companion_state_deleted": 0,
@@ -1935,7 +2562,7 @@ async def set_companion_state(
     proactive_cooldown_until: str | None = None,
 ) -> dict[str, Any]:
     now = _now()
-    normalized_agent_id = normalize_agent_id(agent_id)
+    normalized_agent_id = await resolve_agent_id(agent_id=agent_id, purpose="set_companion_state")
     payload = {
         "id": normalized_agent_id,
         "agent_id": normalized_agent_id,
@@ -1946,10 +2573,17 @@ async def set_companion_state(
         "updated_at": now,
     }
     if _use_supabase_data():
+        rows = await _supabase_update(
+            settings.supabase_companion_state_table,
+            {"agent_id": f"eq.{normalized_agent_id}"},
+            payload,
+        )
+        if rows:
+            return _normalize_companion_state(rows[0])
         rows = await _supabase_insert(
             settings.supabase_companion_state_table,
             payload,
-            on_conflict="id",
+            on_conflict="agent_id",
         )
         row = rows[0] if rows else payload
         return _normalize_companion_state(row)
@@ -2004,19 +2638,40 @@ async def set_companion_state_summary(
     likes_summary: str | None = None,
 ) -> dict[str, Any]:
     now = _now()
-    normalized_agent_id = normalize_agent_id(agent_id)
+    normalized_agent_id = await resolve_agent_id(agent_id=agent_id, purpose="set_companion_state_summary")
     if _use_supabase_data():
-        await _supabase_update(
+        summary_payload = {
+            "impression": impression,
+            "relationship_progress": relationship_progress,
+            "likes_summary": likes_summary,
+            "summary_updated_at": now,
+        }
+        rows = await _supabase_update(
             settings.supabase_companion_state_table,
             {"agent_id": f"eq.{normalized_agent_id}"},
-            {
-                "impression": impression,
-                "relationship_progress": relationship_progress,
-                "likes_summary": likes_summary,
-                "summary_updated_at": now,
-            },
+            summary_payload,
         )
-        return await get_companion_state(agent_id=agent_id)
+        if rows:
+            return _normalize_companion_state(rows[0])
+        base_payload = {
+            "id": normalized_agent_id,
+            "agent_id": normalized_agent_id,
+            "recent_topics": [],
+            "open_loops": [],
+            "updated_at": now,
+        }
+        await _supabase_insert(
+            settings.supabase_companion_state_table,
+            base_payload,
+            on_conflict="agent_id",
+        )
+        rows = await _supabase_update(
+            settings.supabase_companion_state_table,
+            {"agent_id": f"eq.{normalized_agent_id}"},
+            summary_payload,
+        )
+        row = rows[0] if rows else {**base_payload, **summary_payload}
+        return _normalize_companion_state(row)
     db_conn = await get_db()
     # Ensure the row exists (no-op if already present)
     await db_conn.execute(
@@ -2054,7 +2709,7 @@ async def set_consciousness_snapshot(
 ) -> dict[str, Any]:
     """Update the companion consciousness snapshot."""
     now = _now()
-    normalized_agent_id = normalize_agent_id(agent_id)
+    normalized_agent_id = await resolve_agent_id(agent_id=agent_id, purpose="set_consciousness_snapshot")
     high_importance_memories = high_importance_memories or []
     background_activity_candidates = background_activity_candidates or []
 
@@ -2132,7 +2787,21 @@ async def create_session(
     title: str = "\u65b0\u5bf9\u8bdd",
     model: str = "echo",
     source_app: str | None = "yui_nook",
+    *,
+    agent_id: str | None = None,
+    source: str | None = None,
+    external_id: str | None = None,
+    external_name: str | None = None,
+    oauth_client_id: str | None = None,
 ) -> dict[str, Any]:
+    resolved_agent_id = await resolve_agent_id(
+        agent_id=agent_id,
+        source=source,
+        external_id=external_id,
+        external_name=external_name,
+        oauth_client_id=oauth_client_id,
+        purpose="create_session",
+    )
     if _use_supabase_data():
         sid = _new_id()
         now = _now()
@@ -2141,7 +2810,7 @@ async def create_session(
             "title": title,
             "model": model,
             "source_app": normalize_source_app(source_app),
-            "agent_id": normalize_agent_id(None),
+            "agent_id": resolved_agent_id,
             "last_summarized_message_id": "",
             "created_at": now,
             "updated_at": now,
@@ -2154,7 +2823,7 @@ async def create_session(
     normalized_source_app = normalize_source_app(source_app)
     await db.execute(
         "INSERT INTO sessions (id, title, model, source_app, agent_id, last_summarized_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (sid, title, model, normalized_source_app, normalize_agent_id(None), "", now, now),
+        (sid, title, model, normalized_source_app, resolved_agent_id, "", now, now),
     )
     await db.commit()
     return _normalize_session_row(
@@ -2163,7 +2832,7 @@ async def create_session(
             "title": title,
             "model": model,
             "source_app": normalized_source_app,
-            "agent_id": normalize_agent_id(None),
+            "agent_id": resolved_agent_id,
             "last_summarized_message_id": "",
             "created_at": now,
             "updated_at": now,
@@ -2198,6 +2867,8 @@ async def get_session(session_id: str) -> dict[str, Any] | None:
 async def update_session(session_id: str, **kwargs) -> bool:
     if "source_app" in kwargs:
         kwargs["source_app"] = normalize_source_app(kwargs.get("source_app"))
+    if "agent_id" in kwargs:
+        kwargs["agent_id"] = await require_agent(kwargs.get("agent_id"))
     if _use_supabase_data():
         payload = dict(kwargs)
         payload["updated_at"] = _now()
@@ -2496,13 +3167,14 @@ async def create_rp_room(
     ai_role: str = "",
 ) -> dict[str, Any]:
     now = _now()
+    normalized_agent = await resolve_agent_id(agent_id=agent_id, purpose="create_rp_room")
     payload = {
         "room_id": _new_id(),
         "name": (name or "").strip() or "\u65b0\u623f\u95f4",
         "world_setting": (world_setting or "").strip(),
         "user_role": (user_role or "").strip(),
         "ai_role": (ai_role or "").strip(),
-        "agent_id": normalize_agent_id(agent_id),
+        "agent_id": normalized_agent,
         "created_at": now,
         "last_active_at": now,
     }
@@ -2540,7 +3212,7 @@ async def update_rp_room(room_id: str, **kwargs) -> dict[str, Any] | None:
     if not updates:
         return await get_rp_room(room_id)
     if "agent_id" in updates:
-        updates["agent_id"] = normalize_agent_id(updates["agent_id"])
+        updates["agent_id"] = await require_agent(updates["agent_id"])
     if "name" in updates:
         updates["name"] = str(updates["name"]).strip() or "\u65b0\u623f\u95f4"
     if _use_supabase_data():
@@ -2636,7 +3308,7 @@ async def get_recent_rp_messages(room_id: str, limit: int = 12) -> list[dict[str
 
 
 async def bind_session_agent(session_id: str, agent_id: str | None) -> bool:
-    return await update_session(session_id, agent_id=normalize_agent_id(agent_id))
+    return await update_session(session_id, agent_id=await require_agent(agent_id))
 
 
 async def mark_session_summarized(session_id: str, message_id: str, *, agent_id: str | None = None) -> bool:
@@ -2674,7 +3346,21 @@ async def add_memory(
     compressed_content: str | None = None,
     importance: int | None = None,
     expires_at: str | None = None,
+    session_id: str | None = None,
+    room_id: str | None = None,
+    external_source: str | None = None,
+    external_id: str | None = None,
+    oauth_client_id: str | None = None,
 ) -> dict[str, Any]:
+    normalized_agent = await resolve_agent_id(
+        agent_id=agent_id,
+        session_id=session_id,
+        room_id=room_id,
+        source=external_source,
+        external_id=external_id,
+        oauth_client_id=oauth_client_id,
+        purpose="add_memory",
+    )
     normalized_category = normalize_memory_category(category)
     raw_text = (raw_content or content or "").strip()
     compressed_text = (compressed_content or "").strip()
@@ -2682,9 +3368,9 @@ async def add_memory(
     importance_value = max(1, min(5, int(importance or 3)))
     if _use_supabase_memory():
         memory = await _supabase_add_memory(
-            agent_id=normalize_agent_id(agent_id),
+            agent_id=normalized_agent,
             visibility=normalize_visibility(visibility),
-            source_agent_id=resolve_source_agent_id(agent_id, source_agent_id),
+            source_agent_id=await resolve_source_agent_id_checked(normalized_agent, source_agent_id),
             content=stored_content,
             raw_content=raw_text,
             compressed_content=compressed_text,
@@ -2710,9 +3396,9 @@ async def add_memory(
         """,
         (
             mid,
-            normalize_agent_id(agent_id),
+            normalized_agent,
             normalize_visibility(visibility),
-            resolve_source_agent_id(agent_id, source_agent_id),
+            await resolve_source_agent_id_checked(normalized_agent, source_agent_id),
             stored_content,
             raw_text,
             compressed_text,
@@ -2728,9 +3414,9 @@ async def add_memory(
     await db.commit()
     memory = {
         "id": mid,
-        "agent_id": normalize_agent_id(agent_id),
+        "agent_id": normalized_agent,
         "visibility": normalize_visibility(visibility),
-        "source_agent_id": resolve_source_agent_id(agent_id, source_agent_id),
+        "source_agent_id": await resolve_source_agent_id_checked(normalized_agent, source_agent_id),
         "content": stored_content,
         "raw_content": raw_text,
         "compressed_content": compressed_text,
@@ -2759,6 +3445,8 @@ async def list_memories(
     agent_id: str | None = None,
     sort_by: str = "updated_at",
     order: str = "desc",
+    include_cross_agent: bool = False,
+    cross_agent_limit: int | None = None,
 ) -> list[dict[str, Any]]:
     field, direction = _normalize_memory_sort(sort_by, order)
     if _use_supabase_memory():
@@ -2766,13 +3454,15 @@ async def list_memories(
             category=category,
             limit=limit,
             agent_id=agent_id,
+            include_cross_agent=include_cross_agent,
+            cross_agent_limit=cross_agent_limit,
             sort_by=field,
             order=direction,
         )
     db = await get_db()
     active_where = _memory_active_where_clause()
-    scope_where = _memory_visibility_where_clause(False)
-    scope_params = _memory_scope_params(normalize_agent_id(agent_id), False)
+    scope_where = _memory_visibility_where_clause(include_cross_agent)
+    scope_params = _memory_scope_params(normalize_agent_id(agent_id), include_cross_agent)
     now = _now()
     sqlite_order = {
         "updated_at": f"updated_at {direction.upper()}",
@@ -2794,16 +3484,24 @@ async def list_memories(
             (*scope_params, now, limit),
         )
     rows = await cursor.fetchall()
-    return [dict(row) for row in rows]
+    result = [dict(row) for row in rows]
+    return _memory_scope_post_filter(
+        result,
+        agent_id=normalize_agent_id(agent_id),
+        include_cross_agent=include_cross_agent,
+        cross_agent_limit=cross_agent_limit,
+    )
 
 
 async def update_memory(memory_id: str, **kwargs) -> bool:
     if "category" in kwargs:
         kwargs["category"] = normalize_memory_category(kwargs["category"])
+    if "agent_id" in kwargs:
+        kwargs["agent_id"] = await require_agent(kwargs["agent_id"])
     if "visibility" in kwargs:
         kwargs["visibility"] = normalize_visibility(kwargs["visibility"])
     if "source_agent_id" in kwargs:
-        kwargs["source_agent_id"] = resolve_source_agent_id(kwargs.get("agent_id"), kwargs["source_agent_id"])
+        kwargs["source_agent_id"] = await require_agent(kwargs["source_agent_id"])
     schedule_raw_text = ""
     if "raw_content" in kwargs:
         raw_text = (kwargs.get("raw_content") or "").strip()
@@ -3608,6 +4306,7 @@ async def _create_diary_notebook_record(
     author_type: str,
     author_id: str,
     name: str,
+    description: str = "",
     visibility: str = "private",
     is_default: bool = False,
 ) -> dict[str, Any]:
@@ -3617,6 +4316,7 @@ async def _create_diary_notebook_record(
         "author_type": normalize_subject_type(author_type),
         "author_id": normalize_subject_id(author_type, author_id),
         "name": (name or "").strip() or _default_diary_notebook_name(author_type, author_id),
+        "description": str(description or "").strip(),
         "visibility": normalize_visibility(visibility),
         "is_default": bool(is_default),
         "created_at": now,
@@ -3633,14 +4333,15 @@ async def _create_diary_notebook_record(
     await db.execute(
         """
         INSERT OR IGNORE INTO diary_notebooks
-        (id, author_type, author_id, name, visibility, is_default, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (id, author_type, author_id, name, description, visibility, is_default, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["id"],
             payload["author_type"],
             payload["author_id"],
             payload["name"],
+            payload["description"],
             payload["visibility"],
             1 if payload["is_default"] else 0,
             payload["created_at"],
@@ -3779,13 +4480,22 @@ async def list_diary_notebooks() -> list[dict[str, Any]]:
     return [row for row in (_normalize_diary_notebook_row(dict(item)) for item in rows) if row]
 
 
-async def update_diary_notebook(notebook_id: str, *, name: str | None = None, visibility: str | None = None, is_default: bool | None = None) -> dict[str, Any] | None:
+async def update_diary_notebook(
+    notebook_id: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    visibility: str | None = None,
+    is_default: bool | None = None,
+) -> dict[str, Any] | None:
     notebook = await _get_diary_notebook_row(notebook_id)
     if not notebook or not _diary_notebook_is_editable(notebook):
         return None
     payload: dict[str, Any] = {"updated_at": _now()}
     if name is not None:
         payload["name"] = str(name or "").strip() or notebook["name"]
+    if description is not None:
+        payload["description"] = str(description or "").strip()
     if visibility is not None:
         payload["visibility"] = normalize_visibility(visibility)
     if is_default is not None:
@@ -3804,6 +4514,100 @@ async def update_diary_notebook(notebook_id: str, *, name: str | None = None, vi
             await db.execute(
                 "UPDATE diary_notebooks SET is_default = 0, updated_at = ? WHERE author_type = ? AND author_id = ? AND is_default = 1",
                 (payload["updated_at"], author_type, author_id),
+            )
+            await db.commit()
+    if _use_supabase_data():
+        rows = await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook_id}"}, payload)
+        return _normalize_diary_notebook_row(rows[0] if rows else None)
+    db = await get_db()
+    sets = ", ".join(f"{key} = ?" for key in payload)
+    values = [1 if value is True else 0 if value is False and key == "is_default" else value for key, value in payload.items()]
+    values.append(notebook_id)
+    await db.execute(f"UPDATE diary_notebooks SET {sets} WHERE id = ?", values)
+    await db.commit()
+    return await _get_diary_notebook_row(notebook_id)
+
+
+def _diary_notebook_belongs_to_agent(notebook: dict[str, Any] | None, agent_id: str | None) -> bool:
+    if not notebook:
+        return False
+    return (
+        normalize_subject_type(notebook.get("author_type")) == "agent"
+        and normalize_subject_id("agent", notebook.get("author_id")) == normalize_agent_id(agent_id)
+    )
+
+
+async def create_agent_diary_notebook(
+    agent_id: str | None,
+    *,
+    name: str = "",
+    description: str = "",
+    visibility: str = "private",
+    is_default: bool = False,
+) -> dict[str, Any]:
+    normalized_agent = await resolve_agent_id(agent_id=agent_id, purpose="create_agent_diary_notebook")
+    now = _now()
+    notebook_id = _default_diary_notebook_id("agent", normalized_agent) if is_default else _new_id()
+    if is_default:
+        if _use_supabase_data():
+            await _supabase_update(
+                settings.supabase_diary_notebooks_table,
+                {"author_type": "eq.agent", "author_id": f"eq.{normalized_agent}", "is_default": "eq.true"},
+                {"is_default": False, "updated_at": now},
+            )
+        else:
+            db = await get_db()
+            await db.execute(
+                "UPDATE diary_notebooks SET is_default = 0, updated_at = ? WHERE author_type = 'agent' AND author_id = ? AND is_default = 1",
+                (now, normalized_agent),
+            )
+            await db.commit()
+    return await _create_diary_notebook_record(
+        notebook_id=notebook_id,
+        author_type="agent",
+        author_id=normalized_agent,
+        name=name or _default_diary_notebook_name("agent", normalized_agent),
+        description=description,
+        visibility=visibility,
+        is_default=is_default,
+    )
+
+
+async def update_agent_diary_notebook(
+    notebook_id: str,
+    agent_id: str | None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    visibility: str | None = None,
+    is_default: bool | None = None,
+) -> dict[str, Any] | None:
+    await require_agent(agent_id)
+    notebook = await _get_diary_notebook_row(notebook_id)
+    if not _diary_notebook_belongs_to_agent(notebook, agent_id):
+        return None
+    payload: dict[str, Any] = {"updated_at": _now()}
+    if name is not None:
+        payload["name"] = str(name or "").strip() or notebook["name"]
+    if description is not None:
+        payload["description"] = str(description or "").strip()
+    if visibility is not None:
+        payload["visibility"] = normalize_visibility(visibility)
+    if is_default is not None:
+        payload["is_default"] = bool(is_default)
+    if bool(is_default):
+        normalized_agent = normalize_agent_id(agent_id)
+        if _use_supabase_data():
+            await _supabase_update(
+                settings.supabase_diary_notebooks_table,
+                {"author_type": "eq.agent", "author_id": f"eq.{normalized_agent}", "is_default": "eq.true"},
+                {"is_default": False, "updated_at": payload["updated_at"]},
+            )
+        else:
+            db = await get_db()
+            await db.execute(
+                "UPDATE diary_notebooks SET is_default = 0, updated_at = ? WHERE author_type = 'agent' AND author_id = ? AND is_default = 1",
+                (payload["updated_at"], normalized_agent),
             )
             await db.commit()
     if _use_supabase_data():
@@ -3846,6 +4650,24 @@ async def list_diary_comments(entry_id: str) -> list[dict[str, Any]]:
     return [row for row in (_normalize_diary_comment_row(dict(item)) for item in rows) if row]
 
 
+async def list_diary_annotations(entry_id: str) -> list[dict[str, Any]]:
+    if _use_supabase_data():
+        rows = await _supabase_select(
+            settings.supabase_diary_annotations_table,
+            filters={"entry_id": f"eq.{entry_id}"},
+            order="start_offset.asc,created_at.asc",
+            limit=300,
+        )
+        return [row for row in (_normalize_diary_annotation_row(item) for item in rows) if row]
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM diary_annotations WHERE entry_id = ? ORDER BY start_offset ASC, created_at ASC",
+        (entry_id,),
+    )
+    rows = await cursor.fetchall()
+    return [row for row in (_normalize_diary_annotation_row(dict(item)) for item in rows) if row]
+
+
 async def list_diary_entries(notebook_id: str, limit: int = 100) -> list[dict[str, Any]]:
     await _ensure_diary_bootstrap()
     notebook = await _get_diary_notebook_row(notebook_id)
@@ -3867,8 +4689,10 @@ async def list_diary_entries(notebook_id: str, limit: int = 100) -> list[dict[st
         rows = [dict(row) for row in await cursor.fetchall()]
     entries: list[dict[str, Any]] = []
     for row in rows:
-        comments = await list_diary_comments(str(row.get("id") or ""))
-        normalized = _normalize_diary_entry_row(row, notebook=notebook, comments=comments)
+        entry_id = str(row.get("id") or "")
+        comments = await list_diary_comments(entry_id)
+        annotations = await list_diary_annotations(entry_id)
+        normalized = _normalize_diary_entry_row(row, notebook=notebook, comments=comments, annotations=annotations)
         if normalized:
             entries.append(normalized)
     return entries
@@ -3891,7 +4715,7 @@ async def create_diary_entry(notebook_id: str, *, title: str = "", content: str,
     if _use_supabase_data():
         rows = await _supabase_insert(settings.supabase_diary_entries_table, payload)
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook_id}"}, {"updated_at": now})
-        return _normalize_diary_entry_row(rows[0] if rows else payload, notebook=notebook, comments=[])
+        return _normalize_diary_entry_row(rows[0] if rows else payload, notebook=notebook, comments=[], annotations=[])
     db = await get_db()
     await db.execute(
         """
@@ -3910,7 +4734,100 @@ async def create_diary_entry(notebook_id: str, *, title: str = "", content: str,
     )
     await db.execute("UPDATE diary_notebooks SET updated_at = ? WHERE id = ?", (now, notebook_id))
     await db.commit()
-    return _normalize_diary_entry_row(payload, notebook=notebook, comments=[])
+    return _normalize_diary_entry_row(payload, notebook=notebook, comments=[], annotations=[])
+
+
+async def create_agent_diary_entry(
+    notebook_id: str,
+    agent_id: str | None,
+    *,
+    title: str = "",
+    content: str,
+    tags: str = "",
+) -> dict[str, Any] | None:
+    await require_agent(agent_id)
+    notebook = await _get_diary_notebook_row(notebook_id)
+    if not _diary_notebook_belongs_to_agent(notebook, agent_id):
+        return None
+    now = _now()
+    entry = await _create_diary_entry_record(
+        entry_id=_new_id(),
+        notebook_id=notebook_id,
+        title=title,
+        content=content,
+        tags=tags,
+        created_at=now,
+        updated_at=now,
+    )
+    if _use_supabase_data():
+        await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook_id}"}, {"updated_at": now})
+    else:
+        db = await get_db()
+        await db.execute("UPDATE diary_notebooks SET updated_at = ? WHERE id = ?", (now, notebook_id))
+        await db.commit()
+    return _normalize_diary_entry_row(entry, notebook=notebook, comments=[], annotations=[]) or entry
+
+
+async def update_agent_diary_entry(
+    entry_id: str,
+    agent_id: str | None,
+    *,
+    title: str | None = None,
+    content: str | None = None,
+    tags: str | None = None,
+) -> dict[str, Any] | None:
+    row = await _get_diary_entry_row(entry_id)
+    if not row:
+        return None
+    notebook = await _get_diary_notebook_row(str(row.get("notebook_id") or ""))
+    if not _diary_notebook_belongs_to_agent(notebook, agent_id):
+        return None
+    payload: dict[str, Any] = {"updated_at": _now()}
+    if title is not None:
+        payload["title"] = (title or "").strip()
+    if content is not None:
+        payload["content"] = content
+    if tags is not None:
+        payload["tags"] = tags
+    if _use_supabase_data():
+        rows = await _supabase_update(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"}, payload)
+        await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": payload["updated_at"]})
+        comments = await list_diary_comments(entry_id)
+        annotations = await list_diary_annotations(entry_id)
+        return _normalize_diary_entry_row(rows[0] if rows else None, notebook=notebook, comments=comments, annotations=annotations)
+    db = await get_db()
+    sets = ", ".join(f"{key} = ?" for key in payload)
+    values = list(payload.values()) + [entry_id]
+    await db.execute(f"UPDATE diary_entries SET {sets} WHERE id = ?", values)
+    await db.execute("UPDATE diary_notebooks SET updated_at = ? WHERE id = ?", (payload["updated_at"], notebook["id"]))
+    await db.commit()
+    updated_row = await _get_diary_entry_row(entry_id)
+    comments = await list_diary_comments(entry_id)
+    annotations = await list_diary_annotations(entry_id)
+    return _normalize_diary_entry_row(updated_row, notebook=notebook, comments=comments, annotations=annotations)
+
+
+async def delete_agent_diary_entry(entry_id: str, agent_id: str | None) -> bool:
+    row = await _get_diary_entry_row(entry_id)
+    if not row:
+        return False
+    notebook = await _get_diary_notebook_row(str(row.get("notebook_id") or ""))
+    if not _diary_notebook_belongs_to_agent(notebook, agent_id):
+        return False
+    now = _now()
+    if _use_supabase_data():
+        await _supabase_delete(settings.supabase_diary_annotations_table, {"entry_id": f"eq.{entry_id}"})
+        await _supabase_delete(settings.supabase_diary_comments_table, {"entry_id": f"eq.{entry_id}"})
+        rows = await _supabase_delete(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"})
+        await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": now})
+        return len(rows) > 0
+    db = await get_db()
+    await db.execute("DELETE FROM diary_annotations WHERE entry_id = ?", (entry_id,))
+    await db.execute("DELETE FROM diary_comments WHERE entry_id = ?", (entry_id,))
+    result = await db.execute("DELETE FROM diary_entries WHERE id = ?", (entry_id,))
+    await db.execute("UPDATE diary_notebooks SET updated_at = ? WHERE id = ?", (now, notebook["id"]))
+    await db.commit()
+    return result.rowcount > 0
 
 
 async def update_diary_entry(entry_id: str, *, title: str | None = None, content: str | None = None, tags: str | None = None) -> dict[str, Any] | None:
@@ -3964,14 +4881,24 @@ async def delete_diary_entry(entry_id: str) -> bool:
     return result.rowcount > 0
 
 
-async def add_diary_comment(entry_id: str, *, content: str) -> dict[str, Any] | None:
+async def add_diary_comment(
+    entry_id: str,
+    *,
+    content: str,
+    author_type: str | None = None,
+    author_id: str | None = None,
+) -> dict[str, Any] | None:
     row = await _get_diary_entry_row(entry_id)
     if not row:
         return None
     notebook = await _get_diary_notebook_row(str(row.get("notebook_id") or ""))
     if not notebook or not _diary_notebook_can_comment(notebook):
         return None
-    author_type, author_id = _current_user_subject()
+    fallback_author_type, fallback_author_id = _current_user_subject()
+    author_type = normalize_subject_type(author_type or fallback_author_type)
+    author_id = normalize_subject_id(author_type, author_id or fallback_author_id)
+    if author_type == "agent":
+        author_id = await require_agent(author_id)
     now = _now()
     payload = {
         "id": _new_id(),
@@ -4005,6 +4932,73 @@ async def add_diary_comment(entry_id: str, *, content: str) -> dict[str, Any] | 
     return _normalize_diary_comment_row(payload)
 
 
+async def add_diary_underline(
+    entry_id: str,
+    *,
+    start_offset: int,
+    end_offset: int,
+    author_type: str | None = None,
+    author_id: str | None = None,
+    note: str = "",
+) -> dict[str, Any] | None:
+    row = await _get_diary_entry_row(entry_id)
+    if not row:
+        return None
+    notebook = await _get_diary_notebook_row(str(row.get("notebook_id") or ""))
+    if not notebook:
+        return None
+    content = str(row.get("content") or "")
+    start = max(0, min(len(content), int(start_offset)))
+    end = max(start, min(len(content), int(end_offset)))
+    if end <= start:
+        return None
+    fallback_author_type, fallback_author_id = _current_user_subject()
+    normalized_author_type = normalize_subject_type(author_type or fallback_author_type)
+    normalized_author_id = normalize_subject_id(normalized_author_type, author_id or fallback_author_id)
+    if normalized_author_type == "agent":
+        normalized_author_id = await require_agent(normalized_author_id)
+    now = _now()
+    payload = {
+        "id": _new_id(),
+        "entry_id": entry_id,
+        "author_type": normalized_author_type,
+        "author_id": normalized_author_id,
+        "kind": "underline",
+        "start_offset": start,
+        "end_offset": end,
+        "text": content[start:end],
+        "note": str(note or "").strip(),
+        "created_at": now,
+    }
+    if _use_supabase_data():
+        rows = await _supabase_insert(settings.supabase_diary_annotations_table, payload)
+        await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": now})
+        return _normalize_diary_annotation_row(rows[0] if rows else payload)
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO diary_annotations
+        (id, entry_id, author_type, author_id, kind, start_offset, end_offset, text, note, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["id"],
+            payload["entry_id"],
+            payload["author_type"],
+            payload["author_id"],
+            payload["kind"],
+            payload["start_offset"],
+            payload["end_offset"],
+            payload["text"],
+            payload["note"],
+            payload["created_at"],
+        ),
+    )
+    await db.execute("UPDATE diary_notebooks SET updated_at = ? WHERE id = ?", (now, notebook["id"]))
+    await db.commit()
+    return _normalize_diary_annotation_row(payload)
+
+
 # compatibility wrappers
 async def add_diary(
     content: str,
@@ -4016,14 +5010,15 @@ async def add_diary(
     source_agent_id: str | None = None,
 ) -> dict[str, Any]:
     await _ensure_diary_bootstrap()
-    notebook_id = _default_diary_notebook_id("agent", normalize_agent_id(agent_id))
+    normalized_agent = await resolve_agent_id(agent_id=agent_id, purpose="add_diary")
+    notebook_id = _default_diary_notebook_id("agent", normalized_agent)
     notebook = await _get_diary_notebook_row(notebook_id)
     if not notebook:
         notebook = await _create_diary_notebook_record(
             notebook_id=notebook_id,
             author_type="agent",
-            author_id=normalize_agent_id(agent_id),
-            name=_default_diary_notebook_name("agent", normalize_agent_id(agent_id)),
+            author_id=normalized_agent,
+            name=_default_diary_notebook_name("agent", normalized_agent),
             visibility=visibility,
             is_default=True,
         )
