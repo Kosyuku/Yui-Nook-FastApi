@@ -1002,7 +1002,12 @@ async def _supabase_set_setting_to_table(key: str, value: str) -> dict[str, Any]
         if resp.status_code >= 300:
             raise RuntimeError(f"Supabase set_setting(table) failed: {resp.status_code} {resp.text[:200]}")
         rows = resp.json()
-        return rows[0] if rows else payload
+    if rows:
+        return rows[0]
+    verified_rows = await _supabase_select(settings.supabase_settings_table, filters={"key": f"eq.{key}"}, limit=1)
+    if verified_rows:
+        return verified_rows[0]
+    raise RuntimeError(f"Supabase set_setting(table) failed: key {key} could not be verified")
 
 
 async def _supabase_get_setting_from_memory(key: str) -> dict[str, Any] | None:
@@ -1039,8 +1044,14 @@ async def _supabase_set_setting_to_memory(key: str, value: str) -> dict[str, Any
         if resp.status_code >= 300:
             raise RuntimeError(f"Supabase set_setting(memory) failed: {resp.status_code} {resp.text[:200]}")
         rows = resp.json()
-        row = rows[0] if rows else payload
-        return {"key": key, "value": row.get("content", value), "updated_at": row.get("updated_at", now)}
+    if rows:
+        row = rows[0]
+    else:
+        verified_rows = await _supabase_select(settings.supabase_memories_table, filters={"id": f"eq.{memory_id}"}, limit=1)
+        if not verified_rows:
+            raise RuntimeError(f"Supabase set_setting(memory) failed: key {key} could not be verified")
+        row = verified_rows[0]
+    return {"key": key, "value": row.get("content", value), "updated_at": row.get("updated_at", now)}
 
 
 async def _supabase_get_setting(key: str) -> dict[str, Any] | None:
@@ -1377,6 +1388,41 @@ async def _supabase_delete(table: str, filters: dict[str, str]) -> list[dict[str
         if resp.status_code >= 300:
             raise RuntimeError(f"Supabase delete({table}) failed: {resp.status_code} {resp.text[:200]}")
         return resp.json()
+
+
+async def _supabase_insert_verified(
+    table: str,
+    payload: dict[str, Any],
+    *,
+    on_conflict: str | None = None,
+    id_column: str = "id",
+    verify_filters: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    rows = await _supabase_insert(table, payload, on_conflict=on_conflict)
+    if rows:
+        return rows[0]
+    filters = verify_filters
+    if filters is None and id_column in payload:
+        filters = {id_column: f"eq.{payload[id_column]}"}
+    if filters:
+        verified_rows = await _supabase_select(table, filters=filters, limit=1)
+        if verified_rows:
+            return verified_rows[0]
+    raise RuntimeError(f"Supabase insert({table}) did not return or verify a row")
+
+
+async def _supabase_update_verified(
+    table: str,
+    filters: dict[str, str],
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    rows = await _supabase_update(table, filters, payload)
+    return rows[0] if rows else None
+
+
+async def _supabase_delete_verified(table: str, filters: dict[str, str]) -> bool:
+    rows = await _supabase_delete(table, filters)
+    return len(rows) > 0
 
 
 async def _supabase_upload_storage(bucket: str, file_path: str, file_bytes: bytes, content_type: str) -> str:
@@ -1992,7 +2038,7 @@ async def ensure_default_agents() -> None:
     }
     if _use_supabase_data():
         try:
-            await _supabase_insert(AGENTS_TABLE, payload, on_conflict="agent_id")
+            await _supabase_insert_verified(AGENTS_TABLE, payload, on_conflict="agent_id", id_column="agent_id")
         except Exception as exc:
             logger.warning("Failed to seed default Supabase agent azheng: %s", exc)
         return
@@ -2093,8 +2139,8 @@ async def create_agent(
         "updated_at": now,
     }
     if _use_supabase_data():
-        rows = await _supabase_insert(AGENTS_TABLE, payload)
-        return _normalize_agent_row(rows[0] if rows else payload) or payload
+        row = await _supabase_insert_verified(AGENTS_TABLE, payload, id_column="agent_id")
+        return _normalize_agent_row(row) or row
     db = await get_db()
     await db.execute(
         """
@@ -2228,8 +2274,13 @@ async def create_agent_external_link(
     if not payload["source"] or not payload["external_id"]:
         raise AgentResolutionError("source and external_id are required")
     if _use_supabase_data():
-        rows = await _supabase_insert(AGENT_EXTERNAL_LINKS_TABLE, payload, on_conflict="source,external_id")
-        return _normalize_external_link_row(rows[0] if rows else payload) or payload
+        row = await _supabase_insert_verified(
+            AGENT_EXTERNAL_LINKS_TABLE,
+            payload,
+            on_conflict="source,external_id",
+            verify_filters={"source": f"eq.{payload['source']}", "external_id": f"eq.{payload['external_id']}"},
+        )
+        return _normalize_external_link_row(row) or row
     db = await get_db()
     await db.execute(
         """
@@ -2403,8 +2454,7 @@ async def set_setting(key: str, value: str) -> dict[str, Any]:
 
 async def delete_setting(key: str) -> bool:
     if _use_supabase_settings():
-        await _supabase_delete(settings.supabase_settings_table, {"key": f"eq.{key}"})
-        return True
+        return await _supabase_delete_verified(settings.supabase_settings_table, {"key": f"eq.{key}"})
     db = await get_db()
     cursor = await db.execute("DELETE FROM app_settings WHERE key = ?", (key,))
     await db.commit()
@@ -2613,12 +2663,11 @@ async def set_companion_state(
         )
         if rows:
             return _normalize_companion_state(rows[0])
-        rows = await _supabase_insert(
+        row = await _supabase_insert_verified(
             settings.supabase_companion_state_table,
             payload,
             on_conflict="agent_id",
         )
-        row = rows[0] if rows else payload
         return _normalize_companion_state(row)
     db = await get_db()
     await db.execute(
@@ -2693,7 +2742,7 @@ async def set_companion_state_summary(
             "open_loops": [],
             "updated_at": now,
         }
-        await _supabase_insert(
+        await _supabase_insert_verified(
             settings.supabase_companion_state_table,
             base_payload,
             on_conflict="agent_id",
@@ -2703,7 +2752,9 @@ async def set_companion_state_summary(
             {"agent_id": f"eq.{normalized_agent_id}"},
             summary_payload,
         )
-        row = rows[0] if rows else {**base_payload, **summary_payload}
+        row = rows[0] if rows else None
+        if not row:
+            raise RuntimeError(f"Supabase companion_state summary update failed for agent {normalized_agent_id}")
         return _normalize_companion_state(row)
     db_conn = await get_db()
     # Ensure the row exists (no-op if already present)
@@ -2767,10 +2818,10 @@ async def set_consciousness_snapshot(
             payload["agent_id"] = normalized_agent_id
             payload["recent_topics"] = "[]"
             payload["open_loops"] = "[]"
-            await _supabase_insert(
+            await _supabase_insert_verified(
                 settings.supabase_companion_state_table,
                 payload,
-                on_conflict="id"
+                on_conflict="agent_id"
             )
         return await get_companion_state(agent_id=agent_id)
 
@@ -2848,8 +2899,8 @@ async def create_session(
             "created_at": now,
             "updated_at": now,
         }
-        rows = await _supabase_insert(settings.supabase_sessions_table, payload)
-        return _normalize_session_row(rows[0] if rows else payload)
+        row = await _supabase_insert_verified(settings.supabase_sessions_table, payload)
+        return _normalize_session_row(row)
     db = await get_db()
     sid = _new_id()
     now = _now()
@@ -2940,9 +2991,9 @@ async def add_message(session_id: str, role: str, content: str, model: str = "")
             "model": model,
             "created_at": now,
         }
-        rows = await _supabase_insert(settings.supabase_messages_table, payload)
+        row = await _supabase_insert_verified(settings.supabase_messages_table, payload)
         await _supabase_update(settings.supabase_sessions_table, {"id": f"eq.{session_id}"}, {"updated_at": now})
-        return rows[0] if rows else payload
+        return row
     db = await get_db()
     mid = _new_id()
     now = _now()
@@ -3076,9 +3127,9 @@ async def add_cot_log(
     }
     if _use_supabase_data():
         try:
-            rows = await _supabase_insert("cot_logs", payload)
+            row = await _supabase_insert_verified("cot_logs", payload)
             await prune_cot_logs(session_id)
-            return rows[0] if rows else payload
+            return row
         except Exception as exc:
             logger.debug("Supabase cot_logs insert skipped: %s", exc)
             return payload
@@ -3212,8 +3263,8 @@ async def create_rp_room(
         "last_active_at": now,
     }
     if _use_supabase_data():
-        rows = await _supabase_insert(settings.supabase_rp_rooms_table, payload)
-        return _normalize_rp_room_row(rows[0] if rows else payload)
+        row = await _supabase_insert_verified(settings.supabase_rp_rooms_table, payload, id_column="room_id")
+        return _normalize_rp_room_row(row)
     db = await get_db()
     await db.execute(
         """
@@ -3287,13 +3338,13 @@ async def add_rp_message(room_id: str, role: str, content: str, model: str = "")
         "timestamp": now,
     }
     if _use_supabase_data():
-        rows = await _supabase_insert(settings.supabase_rp_messages_table, payload)
+        row = await _supabase_insert_verified(settings.supabase_rp_messages_table, payload)
         await _supabase_update(
             settings.supabase_rp_rooms_table,
             {"room_id": f"eq.{room_id}"},
             {"last_active_at": now},
         )
-        return rows[0] if rows else payload
+        return row
     db = await get_db()
     await db.execute(
         "INSERT INTO rp_messages (id, room_id, role, content, model, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
@@ -3845,8 +3896,7 @@ async def create_memory_label(name: str, color: str = "#a78ec7") -> dict[str, An
     now = _now()
     payload = {"id": lid, "name": name.strip()[:64], "color": color, "created_at": now}
     if _use_supabase_data():
-        rows = await _supabase_insert("memory_labels", payload)
-        row = rows[0] if rows else payload
+        row = await _supabase_insert_verified("memory_labels", payload)
         return {**row, "count": 0}
     db = await get_db()
     await db.execute(
@@ -3866,8 +3916,8 @@ async def update_memory_label(label_id: str, name: str | None = None, color: str
     if not updates:
         return False
     if _use_supabase_data():
-        await _supabase_update("memory_labels", {"id": f"eq.{label_id}"}, updates)
-        return True
+        row = await _supabase_update_verified("memory_labels", {"id": f"eq.{label_id}"}, updates)
+        return row is not None
     db = await get_db()
     fields = [f"{k} = ?" for k in updates]
     values = list(updates.values()) + [label_id]
@@ -3879,8 +3929,7 @@ async def update_memory_label(label_id: str, name: str | None = None, color: str
 async def delete_memory_label(label_id: str) -> bool:
     if _use_supabase_data():
         await _supabase_delete("memory_label_items", {"label_id": f"eq.{label_id}"})
-        await _supabase_delete("memory_labels", {"id": f"eq.{label_id}"})
-        return True
+        return await _supabase_delete_verified("memory_labels", {"id": f"eq.{label_id}"})
     db = await get_db()
     await db.execute("DELETE FROM memory_label_items WHERE label_id = ?", (label_id,))
     await db.execute("DELETE FROM memory_labels WHERE id = ?", (label_id,))
@@ -3892,13 +3941,14 @@ async def assign_memory_to_label(label_id: str, memory_id: str) -> bool:
     now = _now()
     if _use_supabase_data():
         try:
-            await _supabase_insert(
+            await _supabase_insert_verified(
                 "memory_label_items",
                 {"label_id": label_id, "memory_id": memory_id, "created_at": now},
                 on_conflict="label_id,memory_id",
+                verify_filters={"label_id": f"eq.{label_id}", "memory_id": f"eq.{memory_id}"},
             )
         except Exception:
-            pass
+            return False
         return True
     db = await get_db()
     await db.execute(
@@ -3911,11 +3961,10 @@ async def assign_memory_to_label(label_id: str, memory_id: str) -> bool:
 
 async def remove_memory_from_label(label_id: str, memory_id: str) -> bool:
     if _use_supabase_data():
-        await _supabase_delete(
+        return await _supabase_delete_verified(
             "memory_label_items",
             {"label_id": f"eq.{label_id}", "memory_id": f"eq.{memory_id}"},
         )
-        return True
     db = await get_db()
     await db.execute(
         "DELETE FROM memory_label_items WHERE label_id = ? AND memory_id = ?",
@@ -4069,8 +4118,7 @@ async def add_context_summary(session_id: str, summary: str, msg_start: str = ""
             "msg_range_end": msg_end,
             "created_at": now,
         }
-        rows = await _supabase_insert(settings.supabase_context_summaries_table, payload)
-        return rows[0] if rows else payload
+        return await _supabase_insert_verified(settings.supabase_context_summaries_table, payload)
     db = await get_db()
     sid = _new_id()
     now = _now()
@@ -4173,8 +4221,7 @@ async def add_todo(content: str, due_date: str = "", tags: str = "") -> dict[str
             "created_at": now,
             "updated_at": now,
         }
-        rows = await _supabase_insert(settings.supabase_todos_table, payload)
-        return rows[0] if rows else payload
+        return await _supabase_insert_verified(settings.supabase_todos_table, payload)
     db = await get_db()
     tid = _new_id()
     now = _now()
@@ -4233,8 +4280,7 @@ async def add_note(content: str, tags: str = "", date: str = None) -> dict[str, 
         if not date:
             date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         payload = {"id": nid, "content": content, "tags": tags, "date": date, "created_at": now}
-        rows = await _supabase_insert(settings.supabase_notes_table, payload)
-        return rows[0] if rows else payload
+        return await _supabase_insert_verified(settings.supabase_notes_table, payload)
     db = await get_db()
     nid = _new_id()
     now = _now()
@@ -4356,12 +4402,12 @@ async def _create_diary_notebook_record(
         "updated_at": now,
     }
     if _use_supabase_data():
-        rows = await _supabase_insert(
+        row = await _supabase_insert_verified(
             settings.supabase_diary_notebooks_table,
             payload,
             on_conflict="id",
         )
-        return _normalize_diary_notebook_row(rows[0] if rows else payload) or payload
+        return _normalize_diary_notebook_row(row) or row
     db = await get_db()
     await db.execute(
         """
@@ -4407,8 +4453,7 @@ async def _create_diary_entry_record(
         "updated_at": updated,
     }
     if _use_supabase_data():
-        rows = await _supabase_insert(settings.supabase_diary_entries_table, payload, on_conflict="id")
-        return rows[0] if rows else payload
+        return await _supabase_insert_verified(settings.supabase_diary_entries_table, payload, on_conflict="id")
     db = await get_db()
     await db.execute(
         """
@@ -4550,8 +4595,8 @@ async def update_diary_notebook(
             )
             await db.commit()
     if _use_supabase_data():
-        rows = await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook_id}"}, payload)
-        return _normalize_diary_notebook_row(rows[0] if rows else None)
+        row = await _supabase_update_verified(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook_id}"}, payload)
+        return _normalize_diary_notebook_row(row)
     db = await get_db()
     sets = ", ".join(f"{key} = ?" for key in payload)
     values = [1 if value is True else 0 if value is False and key == "is_default" else value for key, value in payload.items()]
@@ -4644,8 +4689,8 @@ async def update_agent_diary_notebook(
             )
             await db.commit()
     if _use_supabase_data():
-        rows = await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook_id}"}, payload)
-        return _normalize_diary_notebook_row(rows[0] if rows else None)
+        row = await _supabase_update_verified(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook_id}"}, payload)
+        return _normalize_diary_notebook_row(row)
     db = await get_db()
     sets = ", ".join(f"{key} = ?" for key in payload)
     values = [1 if value is True else 0 if value is False and key == "is_default" else value for key, value in payload.items()]
@@ -4746,9 +4791,9 @@ async def create_diary_entry(notebook_id: str, *, title: str = "", content: str,
         "updated_at": now,
     }
     if _use_supabase_data():
-        rows = await _supabase_insert(settings.supabase_diary_entries_table, payload)
+        row = await _supabase_insert_verified(settings.supabase_diary_entries_table, payload)
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook_id}"}, {"updated_at": now})
-        return _normalize_diary_entry_row(rows[0] if rows else payload, notebook=notebook, comments=[], annotations=[])
+        return _normalize_diary_entry_row(row, notebook=notebook, comments=[], annotations=[])
     db = await get_db()
     await db.execute(
         """
@@ -4823,11 +4868,11 @@ async def update_agent_diary_entry(
     if tags is not None:
         payload["tags"] = tags
     if _use_supabase_data():
-        rows = await _supabase_update(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"}, payload)
+        row = await _supabase_update_verified(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"}, payload)
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": payload["updated_at"]})
         comments = await list_diary_comments(entry_id)
         annotations = await list_diary_annotations(entry_id)
-        return _normalize_diary_entry_row(rows[0] if rows else None, notebook=notebook, comments=comments, annotations=annotations)
+        return _normalize_diary_entry_row(row, notebook=notebook, comments=comments, annotations=annotations)
     db = await get_db()
     sets = ", ".join(f"{key} = ?" for key in payload)
     values = list(payload.values()) + [entry_id]
@@ -4851,9 +4896,9 @@ async def delete_agent_diary_entry(entry_id: str, agent_id: str | None) -> bool:
     if _use_supabase_data():
         await _supabase_delete(settings.supabase_diary_annotations_table, {"entry_id": f"eq.{entry_id}"})
         await _supabase_delete(settings.supabase_diary_comments_table, {"entry_id": f"eq.{entry_id}"})
-        rows = await _supabase_delete(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"})
+        deleted = await _supabase_delete_verified(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"})
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": now})
-        return len(rows) > 0
+        return deleted
     db = await get_db()
     await db.execute("DELETE FROM diary_annotations WHERE entry_id = ?", (entry_id,))
     await db.execute("DELETE FROM diary_comments WHERE entry_id = ?", (entry_id,))
@@ -4878,10 +4923,10 @@ async def update_diary_entry(entry_id: str, *, title: str | None = None, content
     if tags is not None:
         payload["tags"] = tags
     if _use_supabase_data():
-        rows = await _supabase_update(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"}, payload)
+        row = await _supabase_update_verified(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"}, payload)
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": payload["updated_at"]})
         comments = await list_diary_comments(entry_id)
-        return _normalize_diary_entry_row(rows[0] if rows else None, notebook=notebook, comments=comments)
+        return _normalize_diary_entry_row(row, notebook=notebook, comments=comments)
     db = await get_db()
     sets = ", ".join(f"{key} = ?" for key in payload)
     values = list(payload.values()) + [entry_id]
@@ -4903,9 +4948,9 @@ async def delete_diary_entry(entry_id: str) -> bool:
     now = _now()
     if _use_supabase_data():
         await _supabase_delete(settings.supabase_diary_comments_table, {"entry_id": f"eq.{entry_id}"})
-        rows = await _supabase_delete(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"})
+        deleted = await _supabase_delete_verified(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"})
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": now})
-        return len(rows) > 0
+        return deleted
     db = await get_db()
     await db.execute("DELETE FROM diary_comments WHERE entry_id = ?", (entry_id,))
     result = await db.execute("DELETE FROM diary_entries WHERE id = ?", (entry_id,))
@@ -4942,9 +4987,9 @@ async def add_diary_comment(
         "created_at": now,
     }
     if _use_supabase_data():
-        rows = await _supabase_insert(settings.supabase_diary_comments_table, payload)
+        row = await _supabase_insert_verified(settings.supabase_diary_comments_table, payload)
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": now})
-        return _normalize_diary_comment_row(rows[0] if rows else payload)
+        return _normalize_diary_comment_row(row)
     db = await get_db()
     await db.execute(
         """
@@ -5004,9 +5049,9 @@ async def add_diary_underline(
         "created_at": now,
     }
     if _use_supabase_data():
-        rows = await _supabase_insert(settings.supabase_diary_annotations_table, payload)
+        row = await _supabase_insert_verified(settings.supabase_diary_annotations_table, payload)
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": now})
-        return _normalize_diary_annotation_row(rows[0] if rows else payload)
+        return _normalize_diary_annotation_row(row)
     db = await get_db()
     await db.execute(
         """
@@ -5154,8 +5199,8 @@ async def add_moment(
         "updated_at": now,
     }
     if _use_supabase_data():
-        rows = await _supabase_insert(settings.supabase_moments_table, payload)
-        return _normalize_moment_row(rows[0] if rows else payload) or payload
+        row = await _supabase_insert_verified(settings.supabase_moments_table, payload)
+        return _normalize_moment_row(row) or row
     db = await get_db()
     await db.execute(
         """
@@ -5202,12 +5247,12 @@ async def update_moment(
     if mood is not None:
         payload["mood"] = mood
     if _use_supabase_data():
-        rows = await _supabase_update(
+        row = await _supabase_update_verified(
             settings.supabase_moments_table,
             {"id": f"eq.{moment_id}", "author_type": f"eq.{subject_type}", "author_id": f"eq.{subject_id}"},
             payload,
         )
-        return len(rows) > 0
+        return row is not None
     db = await get_db()
     sets = ", ".join(f"{k} = ?" for k in payload)
     vals = list(payload.values()) + [moment_id, subject_type, subject_id]
@@ -5223,11 +5268,10 @@ async def delete_moment(moment_id: str, *, author_type: str, author_id: str) -> 
     subject_type = normalize_subject_type(author_type)
     subject_id = normalize_subject_id(subject_type, author_id)
     if _use_supabase_data():
-        rows = await _supabase_delete(
+        return await _supabase_delete_verified(
             settings.supabase_moments_table,
             {"id": f"eq.{moment_id}", "author_type": f"eq.{subject_type}", "author_id": f"eq.{subject_id}"},
         )
-        return len(rows) > 0
     db = await get_db()
     result = await db.execute(
         "DELETE FROM moments WHERE id = ? AND author_type = ? AND author_id = ?",
@@ -5256,8 +5300,8 @@ async def toggle_moment_like(moment_id: str, *, actor_type: str, actor_id: str, 
         likes.pop(existing)
     payload = {"likes_json": likes, "updated_at": _now()}
     if _use_supabase_data():
-        rows = await _supabase_update(settings.supabase_moments_table, {"id": f"eq.{moment_id}"}, payload)
-        return _normalize_moment_row(rows[0] if rows else None)
+        row = await _supabase_update_verified(settings.supabase_moments_table, {"id": f"eq.{moment_id}"}, payload)
+        return _normalize_moment_row(row)
     db = await get_db()
     await db.execute(
         "UPDATE moments SET likes_json = ?, updated_at = ? WHERE id = ?",
@@ -5292,8 +5336,8 @@ async def add_moment_comment(
     )
     payload = {"comments_json": comments, "updated_at": _now()}
     if _use_supabase_data():
-        rows = await _supabase_update(settings.supabase_moments_table, {"id": f"eq.{moment_id}"}, payload)
-        return _normalize_moment_row(rows[0] if rows else None)
+        row = await _supabase_update_verified(settings.supabase_moments_table, {"id": f"eq.{moment_id}"}, payload)
+        return _normalize_moment_row(row)
     db = await get_db()
     await db.execute(
         "UPDATE moments SET comments_json = ?, updated_at = ? WHERE id = ?",
@@ -5330,8 +5374,7 @@ async def add_proactive_message(
             "source_snapshot_at": source_snapshot_at,
             "is_read": 0,
         }
-        rows = await _supabase_insert(settings.supabase_proactive_messages_table, payload)
-        return rows[0] if rows else payload
+        return await _supabase_insert_verified(settings.supabase_proactive_messages_table, payload)
     db = await get_db()
     pid = _new_id()
     now = _now()
@@ -5437,7 +5480,7 @@ async def add_memory_log(memory_id: str, action: str, detail: str = ""):
     if _use_supabase_data():
         lid = _new_id()
         now = _now()
-        await _supabase_insert(
+        await _supabase_insert_verified(
             settings.supabase_memory_logs_table,
             {"id": lid, "memory_id": memory_id, "action": action, "detail": detail, "created_at": now},
         )

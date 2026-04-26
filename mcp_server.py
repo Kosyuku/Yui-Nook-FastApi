@@ -16,14 +16,38 @@ logger = logging.getLogger(__name__)
 # Initialize FastMCP server with the same public HTTP settings used by uvicorn.
 mcp = FastMCP("yui_nook_backend", host=settings.mcp_host, port=settings.mcp_port)
 
+
+def _backend_failure(kind: str = "database") -> str | None:
+    backend = settings.memory_backend if kind == "memory" else settings.database_backend
+    if str(backend or "").lower() == "supabase":
+        return None
+    return json.dumps(
+        {
+            "success": False,
+            "error": f"{kind} backend is {backend}; production MCP writes require Supabase.",
+            "backend": backend,
+        },
+        ensure_ascii=False,
+    )
+
+
 @mcp.tool()
 async def create_session(agent_id: str, title: str = "new session", source_app: str = "claude_mcp") -> str:
     """
     Create a new chat session for an agent.
     Returns the session ID which can be used to send messages.
     """
-    session = await db.create_session(title=title, source_app=source_app, agent_id=agent_id)
-    return session.get("id")
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
+    try:
+        session = await db.create_session(title=title, source_app=source_app, agent_id=agent_id)
+        session_id = str(session.get("id") or "").strip()
+        if not session_id:
+            return json.dumps({"success": False, "error": "create_session returned no session id"}, ensure_ascii=False)
+        return json.dumps({"success": True, "session_id": session_id, "session": session}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -70,6 +94,9 @@ async def send_message(session_id: str, agent_id: str, message: str) -> str:
     Sends a message to the specified session, invoking the standard AI response logic.
     This generates a full response from the assistant, incorporating the agent's persona.
     """
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
     # Re-use the existing HTTP fastAPI implementation without duplication
     req = ChatRequest(
         session_id=session_id,
@@ -101,7 +128,7 @@ async def send_message(session_id: str, agent_id: str, message: str) -> str:
                         
     except Exception as e:
         logger.exception("MCP send_message stream error")
-        return json.dumps({"error": str(e)})
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
     merged = "".join(full_text).replace("\\n", "\n")
     return merged
@@ -118,6 +145,9 @@ async def create_diary_notebook(
     """
     Create a diary notebook owned by one agent.
     """
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
     try:
         notebook = await db.create_agent_diary_notebook(
             agent_id,
@@ -126,9 +156,11 @@ async def create_diary_notebook(
             visibility=visibility or "private",
             is_default=is_default,
         )
+        if not notebook or not notebook.get("id"):
+            return json.dumps({"success": False, "error": "create_diary_notebook did not return a persisted notebook"}, ensure_ascii=False)
         return json.dumps({"success": True, "notebook": notebook}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -143,6 +175,9 @@ async def update_diary_notebook(
     """
     Update an agent-owned diary notebook.
     """
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
     try:
         notebook = await db.update_agent_diary_notebook(
             notebook_id,
@@ -156,7 +191,7 @@ async def update_diary_notebook(
             return json.dumps({"success": False, "error": "notebook not found for agent"}, ensure_ascii=False)
         return json.dumps({"success": True, "notebook": notebook}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -182,6 +217,9 @@ async def create_diary_entry(agent_id: str, content: str, title: str = None, tag
     """
     Create a new diary entry.
     """
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
     try:
         tag_text = ",".join([str(tag).strip() for tag in (tags or []) if str(tag).strip()])
         if notebook_id:
@@ -202,9 +240,12 @@ async def create_diary_entry(agent_id: str, content: str, title: str = None, tag
                 source_agent_id=agent_id,
                 tags=tag_text,
             )
-        return json.dumps({"success": True, "diary_id": diary.get("id")}, ensure_ascii=False)
+        diary_id = str((diary or {}).get("id") or "").strip()
+        if not diary_id:
+            return json.dumps({"success": False, "error": "create_diary_entry did not return a persisted entry"}, ensure_ascii=False)
+        return json.dumps({"success": True, "diary_id": diary_id}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -218,6 +259,9 @@ async def update_diary_entry(
     """
     Update an entry owned by one agent's diary notebook.
     """
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
     try:
         tag_text = None if tags is None else ",".join([str(tag).strip() for tag in tags if str(tag).strip()])
         entry = await db.update_agent_diary_entry(
@@ -231,7 +275,7 @@ async def update_diary_entry(
             return json.dumps({"success": False, "error": "entry not found for agent"}, ensure_ascii=False)
         return json.dumps({"success": True, "entry": entry}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -239,11 +283,16 @@ async def delete_diary_entry(entry_id: str, agent_id: str) -> str:
     """
     Delete an entry owned by one agent's diary notebook.
     """
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
     try:
         ok = await db.delete_agent_diary_entry(entry_id, agent_id)
-        return json.dumps({"success": bool(ok)}, ensure_ascii=False)
+        if not ok:
+            return json.dumps({"success": False, "error": "entry not found for agent or delete did not affect a row"}, ensure_ascii=False)
+        return json.dumps({"success": True}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -251,6 +300,9 @@ async def comment_diary_entry(entry_id: str, agent_id: str, content: str) -> str
     """
     Comment on an agent diary entry as another agent.
     """
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
     try:
         comment = await db.add_diary_comment(
             entry_id,
@@ -262,7 +314,7 @@ async def comment_diary_entry(entry_id: str, agent_id: str, content: str) -> str
             return json.dumps({"success": False, "error": "entry not commentable"}, ensure_ascii=False)
         return json.dumps({"success": True, "comment": comment}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -276,6 +328,9 @@ async def underline_diary_entry(
     """
     Add an underline annotation to a diary entry without changing its text.
     """
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
     try:
         annotation = await db.add_diary_underline(
             entry_id,
@@ -289,7 +344,7 @@ async def underline_diary_entry(
             return json.dumps({"success": False, "error": "invalid underline range or entry not found"}, ensure_ascii=False)
         return json.dumps({"success": True, "annotation": annotation}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -322,14 +377,9 @@ async def save_memory(
     Save an explicit observation or memory about the user.
     """
     try:
-        if settings.memory_backend.lower() != "supabase":
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": "Save memory requires MEMORY_BACKEND=supabase; current backend is not Supabase.",
-                },
-                ensure_ascii=False,
-            )
+        backend_error = _backend_failure("memory")
+        if backend_error:
+            return backend_error
         # Standard function
         mem = await db.add_memory(
             content=content,
