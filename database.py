@@ -969,6 +969,9 @@ def _supabase_rpc_endpoint(name: str) -> str:
     return f"{settings.supabase_url}/rest/v1/rpc/{name}"
 
 
+_SUPABASE_COLUMN_CACHE: dict[tuple[str, str], bool] = {}
+
+
 def _use_supabase_settings() -> bool:
     return bool(settings.supabase_url and settings.supabase_key)
 
@@ -1088,23 +1091,28 @@ async def _supabase_add_memory(
     now = _now()
     payload = {
         "id": mid,
-        "agent_id": normalize_agent_id(agent_id),
-        "visibility": normalize_visibility(visibility),
-        "source_agent_id": resolve_source_agent_id(agent_id, source_agent_id),
         "content": content,
-        "raw_content": raw_content,
-        "compressed_content": compressed_content,
         "category": category,
         "tags": tags,
         "source": source,
+        "created_at": now,
+        "updated_at": now,
+    }
+    optional_payload = {
+        "agent_id": normalize_agent_id(agent_id),
+        "visibility": normalize_visibility(visibility),
+        "source_agent_id": resolve_source_agent_id(agent_id, source_agent_id),
+        "raw_content": raw_content,
+        "compressed_content": compressed_content,
         "importance": importance,
         "temperature": 0,
         "last_touched_at": None,
         "touch_count": 0,
-        "expires_at": expires_at or "",
-        "created_at": now,
-        "updated_at": now,
+        "expires_at": expires_at,
     }
+    for column, value in optional_payload.items():
+        if await _supabase_table_has_column(settings.supabase_memories_table, column):
+            payload[column] = value
     async with httpx.AsyncClient(
         timeout=20.0,
         trust_env=settings.supabase_httpx_trust_env,
@@ -1113,7 +1121,16 @@ async def _supabase_add_memory(
         if resp.status_code >= 300:
             raise RuntimeError(f"Supabase add_memory failed: {resp.status_code} {resp.text[:200]}")
         rows = resp.json()
-        return rows[0] if rows else payload
+    if rows and str(rows[0].get("id") or "") == mid:
+        return rows[0]
+    verified_rows = await _supabase_select(
+        settings.supabase_memories_table,
+        filters={"id": f"eq.{mid}"},
+        limit=1,
+    )
+    if verified_rows:
+        return verified_rows[0]
+    raise RuntimeError(f"Supabase add_memory failed: inserted memory {mid} could not be verified")
 
 
 async def _supabase_list_memories(
@@ -1301,6 +1318,22 @@ async def _supabase_select(
         if resp.status_code >= 300:
             raise RuntimeError(f"Supabase select({table}) failed: {resp.status_code} {resp.text[:200]}")
         return resp.json()
+
+
+async def _supabase_table_has_column(table: str, column: str) -> bool:
+    cache_key = (table, column)
+    if cache_key in _SUPABASE_COLUMN_CACHE:
+        return _SUPABASE_COLUMN_CACHE[cache_key]
+    try:
+        await _supabase_select(table, select=column, limit=0)
+    except RuntimeError as exc:
+        message = str(exc)
+        if column in message and ("PGRST" in message or "column" in message.lower()):
+            _SUPABASE_COLUMN_CACHE[cache_key] = False
+            return False
+        raise
+    _SUPABASE_COLUMN_CACHE[cache_key] = True
+    return True
 
 
 async def _supabase_insert(

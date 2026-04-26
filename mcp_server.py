@@ -322,6 +322,14 @@ async def save_memory(
     Save an explicit observation or memory about the user.
     """
     try:
+        if settings.memory_backend.lower() != "supabase":
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "Save memory requires MEMORY_BACKEND=supabase; current backend is not Supabase.",
+                },
+                ensure_ascii=False,
+            )
         # Standard function
         mem = await db.add_memory(
             content=content,
@@ -332,9 +340,12 @@ async def save_memory(
             source_agent_id=source_agent_id or agent_id,
             raw_content=content,
         )
-        return json.dumps({"success": True, "memory_id": mem.get("id")}, ensure_ascii=False)
+        memory_id = str(mem.get("id") or "").strip()
+        if not memory_id:
+            return json.dumps({"success": False, "error": "Save memory returned no memory id."}, ensure_ascii=False)
+        return json.dumps({"success": True, "memory_id": memory_id}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()
