@@ -61,14 +61,24 @@ update sessions set agent_id = 'default' where coalesce(agent_id, '') = '';
 create table if not exists messages (
     id text primary key,
     session_id text not null references sessions(id) on delete cascade,
+    agent_id text not null default 'default',
     role text not null,
     content text not null,
     model text default '',
     created_at text not null
 );
 
+alter table messages add column if not exists agent_id text not null default 'default';
+update messages
+set agent_id = coalesce(nullif(sessions.agent_id, ''), 'default')
+from sessions
+where messages.session_id = sessions.id
+  and coalesce(messages.agent_id, '') = '';
+
 create index if not exists idx_messages_session
     on messages(session_id, created_at);
+create index if not exists idx_messages_agent_session
+    on messages(agent_id, session_id, created_at);
 
 create table if not exists cot_logs (
     id text primary key,
@@ -177,10 +187,53 @@ create index if not exists idx_memories_embedding_hnsw
     on memories
     using hnsw (embedding vector_cosine_ops);
 
+create table if not exists media_items (
+    id text primary key,
+    agent_id text not null references agents(agent_id),
+    type text not null default 'other' check (type in ('book', 'music', 'image', 'cover', 'other')),
+    title text not null default '',
+    artist text not null default '',
+    album text not null default '',
+    author text not null default '',
+    storage_provider text not null default 'r2',
+    storage_key text not null,
+    cover_key text not null default '',
+    mime_type text not null default '',
+    size_bytes integer,
+    duration_seconds double precision,
+    metadata jsonb not null default '{}'::jsonb,
+    created_at text not null,
+    updated_at text not null
+);
+
+alter table media_items add column if not exists agent_id text not null default 'azheng' references agents(agent_id);
+alter table media_items add column if not exists type text not null default 'other';
+alter table media_items add column if not exists title text not null default '';
+alter table media_items add column if not exists artist text not null default '';
+alter table media_items add column if not exists album text not null default '';
+alter table media_items add column if not exists author text not null default '';
+alter table media_items add column if not exists storage_provider text not null default 'r2';
+alter table media_items add column if not exists storage_key text not null default '';
+alter table media_items add column if not exists cover_key text not null default '';
+alter table media_items add column if not exists mime_type text not null default '';
+alter table media_items add column if not exists size_bytes integer;
+alter table media_items add column if not exists duration_seconds double precision;
+alter table media_items add column if not exists metadata jsonb not null default '{}'::jsonb;
+alter table media_items add column if not exists created_at text not null default now()::text;
+alter table media_items add column if not exists updated_at text not null default now()::text;
+
+create index if not exists idx_media_items_agent_type
+    on media_items(agent_id, type, created_at desc);
+create index if not exists idx_media_items_type_created
+    on media_items(type, created_at desc);
+create index if not exists idx_media_items_storage_key
+    on media_items(storage_key);
+
 create or replace function match_memories(
     query_embedding vector(1536),
     match_count int default 10,
-    filter_category text default null
+    filter_category text default null,
+    filter_agent_id text default null
 )
 returns table (
     id text,
@@ -227,6 +280,7 @@ as $$
     where memories.embedding is not null
       and (memories.expires_at is null or memories.expires_at > now())
       and (filter_category is null or memories.category = filter_category)
+      and (filter_agent_id is null or memories.agent_id = filter_agent_id)
     order by memories.embedding <=> query_embedding,
              memories.temperature desc,
              memories.importance desc
@@ -236,14 +290,24 @@ $$;
 create table if not exists context_summaries (
     id text primary key,
     session_id text not null references sessions(id) on delete cascade,
+    agent_id text not null default 'default',
     summary text not null,
     msg_range_start text,
     msg_range_end text,
     created_at text not null
 );
 
+alter table context_summaries add column if not exists agent_id text not null default 'default';
+update context_summaries
+set agent_id = coalesce(nullif(sessions.agent_id, ''), 'default')
+from sessions
+where context_summaries.session_id = sessions.id
+  and coalesce(context_summaries.agent_id, '') = '';
+
 create index if not exists idx_context_summaries_session
     on context_summaries(session_id, created_at);
+create index if not exists idx_context_summaries_agent_session
+    on context_summaries(agent_id, session_id, created_at);
 
 create table if not exists todos (
     id text primary key,
@@ -277,10 +341,22 @@ create table if not exists proactive_messages (
 create table if not exists memory_logs (
     id text primary key,
     memory_id text,
+    agent_id text not null default 'default',
     action text not null,
     detail text default '',
     created_at text not null
 );
+
+alter table memory_logs add column if not exists agent_id text not null default 'default';
+update memory_logs
+set agent_id = coalesce(nullif(memories.agent_id, ''), 'default')
+from memories
+where memory_logs.memory_id = memories.id
+  and coalesce(memory_logs.agent_id, '') = '';
+create index if not exists idx_memory_logs_agent_created
+    on memory_logs(agent_id, created_at desc);
+create index if not exists idx_memory_logs_memory_created
+    on memory_logs(memory_id, created_at desc);
 
 create table if not exists app_settings (
     key text primary key,
@@ -378,12 +454,21 @@ create table if not exists diary_entries (
     title text not null default '',
     content text not null,
     tags text default '',
+    visibility text not null default 'public' check (visibility in ('private', 'shared', 'global', 'public')),
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
 
+alter table diary_entries
+    add column if not exists visibility text not null default 'public';
+
+update diary_entries set visibility = 'public' where coalesce(visibility, '') = '';
+update diary_entries set visibility = 'shared' where visibility = 'restricted';
+
 create index if not exists idx_diary_entries_notebook_updated
     on diary_entries(notebook_id, updated_at desc);
+create index if not exists idx_diary_entries_notebook_visibility
+    on diary_entries(notebook_id, visibility, updated_at desc);
 
 create table if not exists diary_comments (
     id text primary key,
@@ -443,6 +528,39 @@ create index if not exists idx_moments_author_created
 
 create index if not exists idx_moments_created
     on moments(created_at desc);
+
+create table if not exists activity_events (
+    id text primary key,
+    event_type text not null,
+    event_value text default '',
+    content text default '',
+    url text default '',
+    source text not null default 'manual',
+    created_at timestamptz not null default now(),
+    occurred_at timestamptz not null default now(),
+    dedupe_key text default '',
+    consumed boolean not null default false,
+    consumed_at timestamptz,
+    gate_status text default 'pending',
+    gate_should_handle boolean not null default false,
+    gate_should_notify_llm boolean not null default false,
+    gate_message_hint text default '',
+    gate_reason text default '',
+    screened_at timestamptz
+);
+
+create index if not exists idx_activity_events_recent
+    on activity_events(occurred_at desc, created_at desc);
+
+create index if not exists idx_activity_events_dedupe
+    on activity_events(dedupe_key, created_at desc);
+
+alter table activity_events add column if not exists gate_status text default 'pending';
+alter table activity_events add column if not exists gate_should_handle boolean not null default false;
+alter table activity_events add column if not exists gate_should_notify_llm boolean not null default false;
+alter table activity_events add column if not exists gate_message_hint text default '';
+alter table activity_events add column if not exists gate_reason text default '';
+alter table activity_events add column if not exists screened_at timestamptz;
 
 -- OAuth client metadata mirror for Supabase deployments/checks.
 -- The runtime OAuth token store is SQLite, but Supabase gets the same column shape.

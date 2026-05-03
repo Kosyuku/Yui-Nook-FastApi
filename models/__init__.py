@@ -143,7 +143,7 @@ class OpenAICompatAdapter(ModelAdapter):
                             break
                         try:
                             event = json.loads(data)
-                            for chunk in self._extract_deltas(event):
+                            for chunk in self._extract_deltas(event, model_name=str(actual_model or "")):
                                 if chunk:
                                     yield chunk
                         except json.JSONDecodeError:
@@ -185,13 +185,32 @@ class OpenAICompatAdapter(ModelAdapter):
         return ""
 
     @staticmethod
-    def _extract_deltas(event: dict[str, Any]) -> list[str | dict[str, Any]]:
+    def _model_allows_reasoning(model_name: str) -> bool:
+        normalized = str(model_name or "").lower()
+        if not normalized:
+            return False
+        reasoning_markers = (
+            "deepseek-r1",
+            "deepseek-reasoner",
+            "qvq",
+            "qwq",
+            "thinking",
+            "reasoning",
+            "o1",
+            "o3",
+            "o4",
+        )
+        return any(marker in normalized for marker in reasoning_markers)
+
+    @classmethod
+    def _extract_deltas(cls, event: dict[str, Any], *, model_name: str = "") -> list[str | dict[str, Any]]:
         """Extract text deltas, reasoning deltas, and tool calls from one SSE event."""
         outputs: list[str | dict[str, Any]] = []
         choices = event.get("choices") or []
         if not choices:
             return outputs
 
+        allow_reasoning = cls._model_allows_reasoning(model_name)
         delta = choices[0].get("delta") or {}
         tool_calls = delta.get("tool_calls")
         if tool_calls:
@@ -213,7 +232,10 @@ class OpenAICompatAdapter(ModelAdapter):
                 if not text.strip():
                     continue
                 if item_type in {"reasoning", "reasoning_text", "thinking", "thought", "summary_text"}:
-                    reasoning_parts.append(text)
+                    if allow_reasoning:
+                        reasoning_parts.append(text)
+                    else:
+                        text_parts.append(text)
                 elif item_type == "text":
                     text_parts.append(text)
             if reasoning_parts:
@@ -240,8 +262,10 @@ class OpenAICompatAdapter(ModelAdapter):
                 text = value.get("text") or value.get("content") or value.get("summary")
                 if isinstance(text, str):
                     reasoning_text = text.strip()
-            if reasoning_text:
+            if reasoning_text and allow_reasoning:
                 reasoning_outputs.append(reasoning_text)
+            elif reasoning_text:
+                text_outputs.append(reasoning_text)
 
         seen_text: set[str] = set()
         for text in text_outputs:

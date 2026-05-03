@@ -9,13 +9,15 @@ from urllib.parse import urljoin
 import httpx
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
 from pydantic import BaseModel
 
 import ai_runtime
 from config import settings
 import database as db
+import media_storage
 import consciousness
+import conversation_summary
 import memory_async
 import voice as voice_service
 from tools import TOOLS_SCHEMA
@@ -70,7 +72,7 @@ class DiaryNotebookCreate(BaseModel):
     agent_id: str
     name: str = ""
     description: str = ""
-    visibility: str = "private"
+    visibility: str = "public"
     is_default: bool = False
 
 
@@ -78,12 +80,14 @@ class DiaryEntryCreate(BaseModel):
     title: str = ""
     content: str
     tags: str = ""
+    visibility: str = "public"
 
 
 class DiaryEntryUpdate(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
     tags: Optional[str] = None
+    visibility: Optional[str] = None
 
 
 class DiaryCommentCreate(BaseModel):
@@ -137,6 +141,16 @@ class AISettingsPayload(BaseModel):
 
 class PhoneStatePayload(BaseModel):
     data: dict[str, Any]
+
+
+class ActivityEventPayload(BaseModel):
+    eventType: str
+    eventValue: str = ""
+    content: str = ""
+    url: str = ""
+    occurredAt: Optional[str] = None
+    source: str = "manual"
+    dedupeKey: Optional[str] = None
 
 
 class TranslatePayload(BaseModel):
@@ -253,6 +267,29 @@ class AgentUpdatePayload(BaseModel):
     is_active: Optional[bool] = None
 
 
+class MediaUploadUrlPayload(BaseModel):
+    filename: str
+    type: str = "other"
+    agent_id: Optional[str] = None
+    mime_type: str = "application/octet-stream"
+
+
+class MediaItemCreatePayload(BaseModel):
+    agent_id: Optional[str] = None
+    type: str = "other"
+    title: str = ""
+    artist: str = ""
+    album: str = ""
+    author: str = ""
+    storage_provider: str = "r2"
+    storage_key: str
+    cover_key: str = ""
+    mime_type: str = ""
+    size_bytes: Optional[int] = None
+    duration_seconds: Optional[float] = None
+    metadata: dict[str, Any] | str | None = None
+
+
 class AgentResolvePayload(BaseModel):
     agent_id: Optional[str] = None
     session_id: Optional[str] = None
@@ -318,6 +355,110 @@ def _agent_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, db.AgentResolutionError):
         return HTTPException(status_code=400, detail=str(exc))
     return HTTPException(status_code=500, detail=str(exc))
+
+
+def _media_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, db.AgentResolutionError):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
+
+
+@extra_api.post("/media/upload-url")
+async def create_media_upload_url(body: MediaUploadUrlPayload):
+    try:
+        agent_id = await db.require_agent(body.agent_id) if body.agent_id else await db.resolve_agent_id(
+            purpose="media_upload_url"
+        )
+        media_type = media_storage.normalize_media_type(body.type)
+        storage_key = media_storage.build_storage_key(media_type, agent_id, body.filename)
+        mime_type = body.mime_type or "application/octet-stream"
+        upload_url = media_storage.r2_client.presigned_upload_url(storage_key, mime_type=mime_type)
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {
+        "ok": True,
+        "storage_provider": settings.media_storage_provider,
+        "storage_key": storage_key,
+        "upload_url": upload_url,
+        "method": "PUT",
+        "headers": {"Content-Type": mime_type},
+        "expires_in": settings.r2_presign_expires_seconds,
+    }
+
+
+@extra_api.post("/media/items")
+async def create_media_item(body: MediaItemCreatePayload):
+    try:
+        item = await db.create_media_item(**body.model_dump())
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {"ok": True, "item": item}
+
+
+@extra_api.get("/media/items")
+async def list_media_items(
+    type: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+):
+    try:
+        items = await db.list_media_items(type=type, agent_id=agent_id, limit=limit)
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {"items": items}
+
+
+@extra_api.get("/media/items/{item_id}")
+async def get_media_item(item_id: str):
+    item = await db.get_media_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="media item not found")
+    return {"item": item}
+
+
+@extra_api.get("/media/items/{item_id}/url")
+async def get_media_item_url(item_id: str, target: str = "file"):
+    item = await db.get_media_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="media item not found")
+    storage_key = item.get("cover_key") if target == "cover" and item.get("cover_key") else item.get("storage_key")
+    if not storage_key:
+        raise HTTPException(status_code=404, detail="media object key not found")
+    try:
+        url = media_storage.r2_client.presigned_download_url(str(storage_key))
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {
+        "ok": True,
+        "url": url,
+        "storage_provider": item.get("storage_provider") or settings.media_storage_provider,
+        "storage_key": storage_key,
+        "expires_in": settings.r2_presign_expires_seconds,
+    }
+
+
+@extra_api.delete("/media/items/{item_id}")
+async def delete_media_item(item_id: str, delete_object: bool = False):
+    item = await db.get_media_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="media item not found")
+    deleted_objects: list[str] = []
+    if delete_object:
+        keys = [item.get("storage_key")]
+        if item.get("cover_key") and item.get("cover_key") != item.get("storage_key"):
+            keys.append(item.get("cover_key"))
+        try:
+            for key in [str(key) for key in keys if key]:
+                media_storage.r2_client.delete_object(key)
+                deleted_objects.append(key)
+        except Exception as exc:
+            raise _media_http_error(exc)
+    item = await db.delete_media_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="media item not found")
+    return {"ok": True, "item": item, "deleted_objects": deleted_objects}
 
 
 @extra_api.get("/agents")
@@ -530,6 +671,195 @@ async def save_phone_state(key: str, body: PhoneStatePayload):
         raise HTTPException(status_code=400, detail="key is required")
     row = await db.set_setting(f"phone_state_{safe_key}", json.dumps(body.data, ensure_ascii=False))
     return {"ok": True, "key": safe_key, "data": body.data, "updated_at": row.get("updated_at")}
+
+
+ACTIVITY_EVENT_SHORTCUT_EXAMPLES: list[dict[str, Any]] = [
+    {
+        "name": "打开 App",
+        "payload": {
+            "eventType": "app",
+            "eventValue": "小红书",
+            "content": "在刷小红书",
+            "source": "ios_shortcuts",
+        },
+    },
+    {
+        "name": "浏览网页",
+        "payload": {
+            "eventType": "url",
+            "eventValue": "Safari",
+            "content": "浏览了一篇网页",
+            "url": "https://example.com/article",
+            "source": "ios_shortcuts",
+        },
+    },
+    {
+        "name": "手动状态",
+        "payload": {
+            "eventType": "manual",
+            "eventValue": "到家",
+            "content": "已经到家，准备休息",
+            "source": "ios_shortcuts",
+        },
+    },
+    {
+        "name": "快捷指令事件",
+        "payload": {
+            "eventType": "shortcut",
+            "eventValue": "睡前记录",
+            "content": "准备睡觉",
+            "source": "ios_shortcuts",
+        },
+    },
+]
+
+
+@extra_api.get("/activity-events/shortcut-template")
+async def get_activity_event_shortcut_template():
+    return {
+        "endpoint": "/api/activity-events",
+        "method": "POST",
+        "headers": {"Content-Type": "application/json"},
+        "required": ["eventType", "eventValue or content"],
+        "optional": ["url", "occurredAt", "source", "dedupeKey"],
+        "source": "ios_shortcuts",
+        "dedupe": "同类 eventType + eventValue + content 在 5 分钟内只保留一条。",
+        "gate": "新事件会进入 event_gate，回写 should_handle / should_notify_llm / message_hint。",
+        "examples": ACTIVITY_EVENT_SHORTCUT_EXAMPLES,
+    }
+
+
+@extra_api.post("/activity-events")
+async def create_activity_event(body: ActivityEventPayload):
+    event_type = str(body.eventType or "").strip()
+    event_value = str(body.eventValue or "").strip()
+    content = str(body.content or "").strip()
+    if not event_type:
+        raise HTTPException(status_code=400, detail="eventType is required")
+    if not event_value and not content:
+        raise HTTPException(status_code=400, detail="eventValue or content is required")
+    try:
+        event, deduped = await db.add_activity_event(
+            event_type=event_type,
+            event_value=event_value,
+            content=content,
+            url=body.url,
+            source=body.source or "manual",
+            occurred_at=body.occurredAt,
+            dedupe_key=body.dedupeKey,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    gate = None
+    if not deduped:
+        try:
+            from consciousness.event_gate import screen_and_store_activity_event, serialize_gate_result
+            event, gate_result = await screen_and_store_activity_event(event)
+            gate = serialize_gate_result(gate_result)
+        except Exception as exc:
+            logger.warning("activity event gate failed: id=%s error=%s", event.get("id"), exc)
+    logger.info(
+        "activity event accepted: id=%s deduped=%s gate=%s",
+        event.get("id"),
+        deduped,
+        (gate or {}).get("status") if isinstance(gate, dict) else "",
+    )
+    return {"ok": True, "event": event, "deduped": deduped, "gate": gate}
+
+
+@extra_api.get("/activity-events/recent")
+async def get_recent_activity_events(hours: float = 6, limit: int = 10, only_relevant: bool = False):
+    events = await db.list_recent_activity_events(hours=hours, limit=limit, only_relevant=only_relevant)
+    return {"events": events}
+
+
+def _event_time(item: dict[str, Any]) -> str:
+    return str(item.get("occurred_at") or item.get("created_at") or "")
+
+
+def _safe_json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+@extra_api.get("/activity-log/recent")
+async def get_activity_log_recent(
+    hours: float = 6,
+    limit: int = 30,
+    agent_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+):
+    safe_limit = max(1, min(int(limit or 30), 100))
+    activity_limit = min(safe_limit, 50)
+    proactive_limit = min(safe_limit, 50)
+    cot_limit = min(safe_limit, 50)
+
+    activity_events = await db.list_recent_activity_events(hours=hours, limit=activity_limit)
+    proactive_messages = await db.list_proactive_messages(limit=proactive_limit, agent_id=agent_id)
+    cot_logs = await db.list_recent_cot_logs(limit=cot_limit, agent_id=agent_id, session_id=session_id)
+
+    items: list[dict[str, Any]] = []
+    for event in activity_events:
+        items.append({
+            "id": event.get("id"),
+            "kind": "activity_event",
+            "title": event.get("content") or event.get("event_value") or event.get("event_type"),
+            "summary": event.get("content") or "",
+            "source": event.get("source") or "",
+            "eventType": event.get("event_type") or "",
+            "eventValue": event.get("event_value") or "",
+            "gateStatus": event.get("gate_status") or "",
+            "shouldHandle": bool(event.get("gate_should_handle")),
+            "shouldNotifyLlm": bool(event.get("gate_should_notify_llm")),
+            "messageHint": event.get("gate_message_hint") or "",
+            "createdAt": event.get("created_at") or "",
+            "occurredAt": event.get("occurred_at") or event.get("created_at") or "",
+            "raw": event,
+        })
+    for msg in proactive_messages:
+        reason_context = _safe_json_dict(msg.get("reason_context"))
+        items.append({
+            "id": msg.get("id"),
+            "kind": "proactive_message",
+            "title": msg.get("reason_type") or msg.get("trigger_reason") or "proactive",
+            "summary": msg.get("content") or "",
+            "status": msg.get("status") or "",
+            "source": reason_context.get("source") or "",
+            "createdAt": msg.get("created_at") or "",
+            "occurredAt": msg.get("created_at") or "",
+            "raw": msg,
+        })
+    for log in cot_logs:
+        items.append({
+            "id": log.get("id"),
+            "kind": "cot_log",
+            "title": log.get("title") or log.get("log_type") or "log",
+            "summary": log.get("summary") or log.get("content") or "",
+            "source": log.get("source") or "",
+            "logType": log.get("log_type") or "",
+            "toolName": log.get("tool_name") or "",
+            "status": log.get("status") or "",
+            "createdAt": log.get("created_at") or "",
+            "occurredAt": log.get("created_at") or "",
+            "raw": log,
+        })
+
+    items.sort(key=_event_time, reverse=True)
+    return {
+        "items": items[:safe_limit],
+        "sources": {
+            "activity_events": len(activity_events),
+            "proactive_messages": len(proactive_messages),
+            "cot_logs": len(cot_logs),
+        },
+    }
 
 
 async def _collect_slot_text(
@@ -1044,6 +1374,7 @@ async def create_diary_notebook_entry(notebook_id: str, body: DiaryEntryCreate):
         title=body.title,
         content=body.content,
         tags=body.tags,
+        visibility=body.visibility,
     )
     if not entry:
         raise HTTPException(status_code=404, detail="日记本不存在或无权限")
@@ -1057,6 +1388,7 @@ async def patch_diary_entry(entry_id: str, body: DiaryEntryUpdate):
         title=body.title,
         content=body.content,
         tags=body.tags,
+        visibility=body.visibility,
     )
     if not entry:
         raise HTTPException(status_code=404, detail="日记条目不存在或无权限")
@@ -1258,11 +1590,38 @@ async def get_history(date: Optional[str] = None, limit: int = 100):
 async def consciousness_status():
     return consciousness.get_status()
 
+
+@extra_api.get("/conversation-summary/status")
+async def conversation_summary_status():
+    return conversation_summary.get_status()
+
+
+@extra_api.post("/conversation-summary/trigger")
+async def conversation_summary_trigger(session_id: Optional[str] = None, agent_id: Optional[str] = None):
+    if session_id:
+        processed = 1 if await conversation_summary.summarize_idle_session(session_id, agent_id=agent_id) else 0
+    else:
+        processed = await conversation_summary.run_pending_checks()
+    return {"ok": True, "processed": processed, "status": conversation_summary.get_status()}
+
 @extra_api.post("/consciousness/trigger")
 async def consciousness_trigger():
     """手动触发一次意识循环"""
     await consciousness.run_once()
     return {"ok": True, "status": consciousness.get_status()}
+
+
+@extra_api.post("/consciousness/daily-loop/trigger")
+async def consciousness_daily_loop_trigger(agent_id: Optional[str] = None):
+    """手动触发一次日循环整理。第一版只生成报告，不直接写日记/记忆。"""
+    report = await consciousness.run_daily_loop_once(agent_id=agent_id)
+    return {"ok": True, "report": report}
+
+
+@extra_api.get("/consciousness/daily-loop/latest")
+async def consciousness_daily_loop_latest(agent_id: Optional[str] = None):
+    report = await consciousness.get_latest_daily_loop_report(agent_id=agent_id)
+    return {"ok": True, "report": report}
 
 
 @extra_api.post("/proactive/check/trigger")
@@ -1279,6 +1638,20 @@ async def proactive_check_trigger():
         return {"ok": True, "result": asdict(result)}
     except Exception as e:
         logger.exception("Proactive check failed manually")
+        return {"ok": False, "error": str(e)}
+
+
+@extra_api.get("/proactive/check/inspect")
+async def proactive_check_inspect(agent_id: Optional[str] = None, run_model: bool = False):
+    """Dry-run proactive gate with real data. It will not create proactive messages."""
+    from consciousness.proactive import inspect_proactive_check
+
+    resolved_agent_id = agent_id or getattr(settings, "current_agent_id", "default")
+    try:
+        report = await inspect_proactive_check(resolved_agent_id, run_model=run_model)
+        return {"ok": True, "report": report}
+    except Exception as e:
+        logger.exception("Proactive check inspect failed")
         return {"ok": False, "error": str(e)}
 
 
@@ -1389,6 +1762,19 @@ async def add_perle_photo(photo: PerlePhoto):
 async def get_perle_photos():
     rows = await db._supabase_select("perle_photos", order="created_at.desc", limit=500)
     return {"photos": rows}
+
+class PerlePhotoUpdate(BaseModel):
+    cat: Optional[str] = None
+    label: Optional[str] = None
+    tint: Optional[str] = None
+
+@extra_api.patch("/perle/photos/{photo_id}")
+async def update_perle_photo(photo_id: str, payload: PerlePhotoUpdate):
+    updates = {k: v for k, v in payload.dict().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    await db._supabase_update("perle_photos", {"id": f"eq.{photo_id}"}, updates)
+    return {"ok": True}
 
 class PerleTrack(BaseModel):
     title: str

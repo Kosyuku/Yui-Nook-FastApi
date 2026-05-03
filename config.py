@@ -54,6 +54,16 @@ class AppConfig:
     supabase_companion_state_table: str = "companion_state"
     supabase_rp_rooms_table: str = "rp_rooms"
     supabase_rp_messages_table: str = "rp_messages"
+    supabase_activity_events_table: str = "activity_events"
+    supabase_media_items_table: str = "media_items"
+    media_storage_provider: str = "r2"
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket: str = ""
+    r2_endpoint: str = ""
+    r2_region: str = "auto"
+    r2_presign_expires_seconds: int = 3600
     # 与 httpx trust_env 一致：默认 false（忽略 HTTP_PROXY，避免代理导致 TLS 失败）
     supabase_httpx_trust_env: bool = False
 
@@ -135,6 +145,11 @@ class AppConfig:
     memory_retrieval_keyword_count: int = 4
     memory_vector_enabled: bool = True
     memory_vector_candidate_limit: int = 200
+    memory_related_similarity_threshold: float = 0.7
+    memory_related_top_k: int = 3
+    memory_temperature_cap: float = 100.0
+    memory_temperature_half_life_days: float = 30.0
+    memory_recency_half_life_days: float = 14.0
     memory_async_enabled: bool = True
     memory_async_startup_backfill_limit: int = 50
     allow_client_provider_override: bool = True
@@ -189,6 +204,16 @@ class AppConfig:
             supabase_companion_state_table=os.getenv("SUPABASE_COMPANION_STATE_TABLE", "companion_state"),
             supabase_rp_rooms_table=os.getenv("SUPABASE_RP_ROOMS_TABLE", "rp_rooms"),
             supabase_rp_messages_table=os.getenv("SUPABASE_RP_MESSAGES_TABLE", "rp_messages"),
+            supabase_activity_events_table=os.getenv("SUPABASE_ACTIVITY_EVENTS_TABLE", "activity_events"),
+            supabase_media_items_table=os.getenv("SUPABASE_MEDIA_ITEMS_TABLE", "media_items"),
+            media_storage_provider=os.getenv("MEDIA_STORAGE_PROVIDER", "r2").strip().lower() or "r2",
+            r2_account_id=os.getenv("R2_ACCOUNT_ID", "").strip(),
+            r2_access_key_id=os.getenv("R2_ACCESS_KEY_ID", "").strip(),
+            r2_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY", "").strip(),
+            r2_bucket=os.getenv("R2_BUCKET", "").strip(),
+            r2_endpoint=os.getenv("R2_ENDPOINT", "").strip().rstrip("/"),
+            r2_region=os.getenv("R2_REGION", "auto").strip() or "auto",
+            r2_presign_expires_seconds=int(os.getenv("R2_PRESIGN_EXPIRES_SECONDS", "3600")),
             supabase_httpx_trust_env=os.getenv("SUPABASE_HTTP_TRUST_ENV", "0").lower()
             in ("1", "true", "yes"),
             chat=ProviderConfig(
@@ -269,6 +294,11 @@ class AppConfig:
             memory_retrieval_keyword_count=int(os.getenv("MEMORY_RETRIEVAL_KEYWORD_COUNT", "4")),
             memory_vector_enabled=os.getenv("MEMORY_VECTOR_ENABLED", "true").lower() == "true",
             memory_vector_candidate_limit=int(os.getenv("MEMORY_VECTOR_CANDIDATE_LIMIT", "200")),
+            memory_related_similarity_threshold=float(os.getenv("MEMORY_RELATED_SIMILARITY_THRESHOLD", "0.7")),
+            memory_related_top_k=int(os.getenv("MEMORY_RELATED_TOP_K", "3")),
+            memory_temperature_cap=float(os.getenv("MEMORY_TEMPERATURE_CAP", "100")),
+            memory_temperature_half_life_days=float(os.getenv("MEMORY_TEMPERATURE_HALF_LIFE_DAYS", "30")),
+            memory_recency_half_life_days=float(os.getenv("MEMORY_RECENCY_HALF_LIFE_DAYS", "14")),
             memory_async_enabled=os.getenv("MEMORY_ASYNC_ENABLED", "true").lower() == "true",
             memory_async_startup_backfill_limit=int(os.getenv("MEMORY_ASYNC_STARTUP_BACKFILL_LIMIT", "50")),
             allow_client_provider_override=os.getenv("ALLOW_CLIENT_PROVIDER_OVERRIDE", "true").lower() == "true",

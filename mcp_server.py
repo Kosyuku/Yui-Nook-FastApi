@@ -139,7 +139,7 @@ async def create_diary_notebook(
     agent_id: str,
     name: str = "",
     description: str = "",
-    visibility: str = "private",
+    visibility: str = "public",
     is_default: bool = False,
 ) -> str:
     """
@@ -153,7 +153,7 @@ async def create_diary_notebook(
             agent_id,
             name=name or "",
             description=description or "",
-            visibility=visibility or "private",
+            visibility=visibility or "public",
             is_default=is_default,
         )
         if not notebook or not notebook.get("id"):
@@ -213,7 +213,33 @@ async def list_diary_notebooks(agent_id: str = None) -> str:
 
 
 @mcp.tool()
-async def create_diary_entry(agent_id: str, content: str, title: str = None, tags: list[str] = None, notebook_id: str = None) -> str:
+async def list_diary_entries(notebook_id: str, viewer_agent_id: str = "", limit: int = 50) -> str:
+    """
+    List visible entries inside a diary notebook by notebook_id.
+    Use list_diary_notebooks first to find available notebooks.
+    Public entries are visible to everyone; private entries are visible only to the notebook owner.
+    """
+    try:
+        entries = await db.list_diary_entries(
+            notebook_id,
+            limit=limit,
+            viewer_agent_id=viewer_agent_id or None,
+            enforce_visibility=True,
+        )
+        return json.dumps({"entries": entries}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def create_diary_entry(
+    agent_id: str,
+    content: str,
+    title: str = None,
+    tags: list[str] = None,
+    notebook_id: str = None,
+    visibility: str = "public",
+) -> str:
     """
     Create a new diary entry.
     """
@@ -229,6 +255,7 @@ async def create_diary_entry(agent_id: str, content: str, title: str = None, tag
                 content=content,
                 title=title or "",
                 tags=tag_text,
+                visibility=visibility or "public",
             )
             if not diary:
                 return json.dumps({"success": False, "error": "notebook not found for agent"}, ensure_ascii=False)
@@ -239,6 +266,7 @@ async def create_diary_entry(agent_id: str, content: str, title: str = None, tag
                 agent_id=agent_id,
                 source_agent_id=agent_id,
                 tags=tag_text,
+                visibility=visibility or "public",
             )
         diary_id = str((diary or {}).get("id") or "").strip()
         if not diary_id:
@@ -254,7 +282,8 @@ async def update_diary_entry(
     agent_id: str,
     content: str | None = None,
     title: str | None = None,
-    tags: list[str] | None = None,
+    tags: list[str] = None,
+    visibility: str | None = None,
 ) -> str:
     """
     Update an entry owned by one agent's diary notebook.
@@ -270,6 +299,7 @@ async def update_diary_entry(
             content=content,
             title=title,
             tags=tag_text,
+            visibility=visibility,
         )
         if not entry:
             return json.dumps({"success": False, "error": "entry not found for agent"}, ensure_ascii=False)
@@ -370,30 +400,44 @@ async def save_memory(
     agent_id: str,
     source: str = "claude_mcp",
     category: str = "core_profile",
+    tags: list[str] = None,
+    importance: int = 3,
     visibility: str = "private",
     source_agent_id: str | None = None,
 ) -> str:
     """
     Save an explicit observation or memory about the user.
+
+    Optional fields:
+    - category: core_profile, recent_pending, deep, or ephemeral.
+    - tags: list of labels.
+    - importance: integer from 1 to 5.
     """
     try:
         backend_error = _backend_failure("memory")
         if backend_error:
             return backend_error
+        tag_text = ",".join([str(tag).strip() for tag in (tags or []) if str(tag).strip()])
+        try:
+            importance_value = max(1, min(5, int(importance or 3)))
+        except Exception:
+            importance_value = 3
         # Standard function
         mem = await db.add_memory(
             content=content,
             agent_id=agent_id,
             category=category or "core_profile",
+            tags=tag_text,
             visibility=visibility or "private",
             source=source or "claude_mcp",
             source_agent_id=source_agent_id or agent_id,
             raw_content=content,
+            importance=importance_value,
         )
         memory_id = str(mem.get("id") or "").strip()
         if not memory_id:
             return json.dumps({"success": False, "error": "Save memory returned no memory id."}, ensure_ascii=False)
-        return json.dumps({"success": True, "memory_id": memory_id}, ensure_ascii=False)
+        return json.dumps({"success": True, "memory_id": memory_id, "memory": mem}, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 

@@ -39,6 +39,7 @@ AGENT_ID_RE = re.compile(r"^[a-z0-9_-]+$")
 AGENTS_TABLE = "agents"
 AGENT_EXTERNAL_LINKS_TABLE = "agent_external_links"
 DEFAULT_AGENT_ID = "azheng"
+MEDIA_TYPES = {"book", "music", "image", "cover", "other"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS messages (
     id          TEXT PRIMARY KEY,
     session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL DEFAULT 'default',
     role        TEXT NOT NULL,
     content     TEXT NOT NULL,
     model       TEXT DEFAULT '',
@@ -94,6 +96,8 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_session
     ON messages(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_agent_session
+    ON messages(agent_id, session_id, created_at);
 
 CREATE TABLE IF NOT EXISTS cot_logs (
     id          TEXT PRIMARY KEY,
@@ -182,11 +186,38 @@ CREATE INDEX IF NOT EXISTS idx_memories_visibility_updated
 CREATE INDEX IF NOT EXISTS idx_memories_temperature
     ON memories(temperature DESC, last_touched_at DESC);
 
+CREATE TABLE IF NOT EXISTS media_items (
+    id               TEXT PRIMARY KEY,
+    agent_id         TEXT NOT NULL REFERENCES agents(agent_id),
+    type             TEXT NOT NULL DEFAULT 'other',
+    title            TEXT NOT NULL DEFAULT '',
+    artist           TEXT NOT NULL DEFAULT '',
+    album            TEXT NOT NULL DEFAULT '',
+    author           TEXT NOT NULL DEFAULT '',
+    storage_provider TEXT NOT NULL DEFAULT 'r2',
+    storage_key      TEXT NOT NULL,
+    cover_key        TEXT NOT NULL DEFAULT '',
+    mime_type        TEXT NOT NULL DEFAULT '',
+    size_bytes       INTEGER,
+    duration_seconds REAL,
+    metadata         TEXT NOT NULL DEFAULT '{}',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_items_agent_type
+    ON media_items(agent_id, type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_items_type_created
+    ON media_items(type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_items_storage_key
+    ON media_items(storage_key);
+
 -- ========== new tables ==========
 
 CREATE TABLE IF NOT EXISTS context_summaries (
     id              TEXT PRIMARY KEY,
     session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_id        TEXT NOT NULL DEFAULT 'default',
     summary         TEXT NOT NULL,
     msg_range_start TEXT,
     msg_range_end   TEXT,
@@ -232,6 +263,31 @@ CREATE INDEX IF NOT EXISTS idx_moments_author
 CREATE INDEX IF NOT EXISTS idx_moments_created_at
     ON moments(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS activity_events (
+    id           TEXT PRIMARY KEY,
+    event_type   TEXT NOT NULL,
+    event_value  TEXT DEFAULT '',
+    content      TEXT DEFAULT '',
+    url          TEXT DEFAULT '',
+    source       TEXT NOT NULL DEFAULT 'manual',
+    created_at   TEXT NOT NULL,
+    occurred_at  TEXT NOT NULL,
+    dedupe_key   TEXT DEFAULT '',
+    consumed     INTEGER NOT NULL DEFAULT 0,
+    consumed_at  TEXT DEFAULT '',
+    gate_status  TEXT DEFAULT 'pending',
+    gate_should_handle INTEGER NOT NULL DEFAULT 0,
+    gate_should_notify_llm INTEGER NOT NULL DEFAULT 0,
+    gate_message_hint TEXT DEFAULT '',
+    gate_reason TEXT DEFAULT '',
+    screened_at TEXT DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_events_recent
+    ON activity_events(occurred_at DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_events_dedupe
+    ON activity_events(dedupe_key, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS proactive_messages (
     id              TEXT PRIMARY KEY,
     content         TEXT NOT NULL,
@@ -243,6 +299,7 @@ CREATE TABLE IF NOT EXISTS proactive_messages (
 CREATE TABLE IF NOT EXISTS memory_logs (
     id          TEXT PRIMARY KEY,
     memory_id   TEXT,
+    agent_id    TEXT NOT NULL DEFAULT 'default',
     action      TEXT NOT NULL,  -- create | update | delete | access
     detail      TEXT DEFAULT '',
     created_at  TEXT NOT NULL
@@ -313,11 +370,14 @@ CREATE TABLE IF NOT EXISTS diary_entries (
     title       TEXT NOT NULL DEFAULT '',
     content     TEXT NOT NULL,
     tags        TEXT DEFAULT '',
+    visibility  TEXT NOT NULL DEFAULT 'public',
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_diary_entries_notebook_updated
     ON diary_entries(notebook_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_diary_entries_notebook_visibility
+    ON diary_entries(notebook_id, visibility, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS diary_comments (
     id          TEXT PRIMARY KEY,
@@ -572,6 +632,46 @@ def _memory_importance(memory: dict[str, Any]) -> int:
     return max(0, _safe_int(memory.get("importance"), 0))
 
 
+def _parse_dt(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _age_days(value: Any, *, now: datetime | None = None) -> float | None:
+    parsed = _parse_dt(value)
+    if not parsed:
+        return None
+    current = now or datetime.now(timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (current - parsed).total_seconds() / 86400.0)
+
+
+def _exp_decay_factor(age_days: float | None, half_life_days: float) -> float:
+    if age_days is None:
+        return 0.0
+    half_life = max(0.001, float(half_life_days or 1.0))
+    return max(0.0, min(1.0, math.exp(-math.log(2) * age_days / half_life)))
+
+
+def _memory_temp_factor(memory: dict[str, Any], *, now: datetime | None = None) -> float:
+    cap = max(1.0, float(getattr(settings, "memory_temperature_cap", 100.0)))
+    raw_temp = min(cap, _memory_temperature(memory))
+    age = _age_days(memory.get("last_touched_at") or memory.get("updated_at"), now=now)
+    cooling = _exp_decay_factor(age, getattr(settings, "memory_temperature_half_life_days", 30.0))
+    return max(0.0, min(1.0, (raw_temp / cap) * cooling))
+
+
+def _memory_recency_factor(memory: dict[str, Any], *, now: datetime | None = None) -> float:
+    age = _age_days(memory.get("created_at") or memory.get("updated_at"), now=now)
+    return _exp_decay_factor(age, getattr(settings, "memory_recency_half_life_days", 14.0))
+
+
 def _normalize_memory_sort(sort_by: str | None, order: str | None) -> tuple[str, str]:
     field = (sort_by or "updated_at").strip().lower()
     if field not in {"updated_at", "created_at", "importance", "temperature", "last_touched_at"}:
@@ -610,14 +710,28 @@ def _keyword_match_score(memory: dict[str, Any], needle: str) -> float:
     if text_score <= 0:
         return 0.0
     importance_bonus = min(5, _memory_importance(memory)) * 0.08
-    temp_bonus = min(20.0, _memory_temperature(memory)) * 0.03 * _temperature_weight_for_category(memory.get("category"))
-    return text_score + importance_bonus + temp_bonus
+    temp_factor = _memory_temp_factor(memory) * _temperature_weight_for_category(memory.get("category"))
+    recency_factor = _memory_recency_factor(memory)
+    blended = text_score * (0.6 + 0.25 * temp_factor + 0.15 * recency_factor)
+    return blended + importance_bonus
 
 
 def _semantic_rank_score(memory: dict[str, Any], similarity: float) -> float:
-    importance_bonus = min(5, _memory_importance(memory)) * 0.03
-    temp_bonus = min(20.0, _memory_temperature(memory)) * 0.01 * _temperature_weight_for_category(memory.get("category"))
-    return float(similarity) + importance_bonus + temp_bonus
+    temp_factor = _memory_temp_factor(memory)
+    recency_factor = _memory_recency_factor(memory)
+    return float(similarity) * (0.6 + 0.25 * temp_factor + 0.15 * recency_factor)
+
+
+def _attach_memory_rank_fields(memory: dict[str, Any], similarity: float) -> dict[str, Any]:
+    enriched = dict(memory)
+    temp_factor = _memory_temp_factor(enriched)
+    recency_factor = _memory_recency_factor(enriched)
+    final_score = float(similarity) * (0.6 + 0.25 * temp_factor + 0.15 * recency_factor)
+    enriched["similarity"] = round(float(similarity), 6)
+    enriched["final_score"] = round(final_score, 6)
+    enriched["temp_factor"] = round(temp_factor, 6)
+    enriched["recency_factor"] = round(recency_factor, 6)
+    return enriched
 
 
 def _default_companion_state() -> dict[str, Any]:
@@ -734,6 +848,36 @@ def _diary_notebook_can_comment(notebook: dict[str, Any] | None) -> bool:
     return normalize_subject_type(notebook.get("author_type")) == "agent"
 
 
+def _diary_notebook_owned_by_agent(notebook: dict[str, Any] | None, agent_id: str | None) -> bool:
+    if not notebook:
+        return False
+    return (
+        normalize_subject_type(notebook.get("author_type")) == "agent"
+        and normalize_subject_id("agent", notebook.get("author_id")) == normalize_agent_id(agent_id)
+    )
+
+
+def _diary_entry_visible_to_agent(
+    entry: dict[str, Any] | None,
+    notebook: dict[str, Any] | None,
+    viewer_agent_id: str | None,
+) -> bool:
+    if not entry:
+        return False
+    visibility = normalize_visibility(entry.get("visibility") or "public")
+    if visibility in {"public", "global", "shared"}:
+        return True
+    return _diary_notebook_owned_by_agent(notebook, viewer_agent_id)
+
+
+def _diary_entry_can_comment(
+    entry: dict[str, Any] | None,
+    notebook: dict[str, Any] | None,
+    commenter_agent_id: str | None,
+) -> bool:
+    return _diary_notebook_can_comment(notebook) and _diary_entry_visible_to_agent(entry, notebook, commenter_agent_id)
+
+
 def _normalize_diary_notebook_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return None
@@ -803,6 +947,7 @@ def _normalize_diary_entry_row(
     entry["title"] = str(row.get("title") or "").strip()
     entry["content"] = str(row.get("content") or "")
     entry["tags"] = str(row.get("tags") or "")
+    entry["visibility"] = normalize_visibility(row.get("visibility") or "public")
     entry["comments"] = comments or []
     entry["annotations"] = annotations or []
     entry["comment_count"] = len(entry["comments"])
@@ -1512,6 +1657,7 @@ async def _supabase_match_memories(
         "query_embedding": _vector_literal(query_embedding),
         "match_count": limit,
         "filter_category": normalize_memory_category(category) if category else None,
+        "filter_agent_id": None if all_agents else (normalize_agent_id(agent_id) if agent_id else None),
     }
     rows = await _supabase_rpc(settings.supabase_memory_match_rpc, payload)
     data = rows if isinstance(rows, list) else []
@@ -1523,6 +1669,52 @@ async def _supabase_match_memories(
         include_cross_agent=include_cross_agent,
         cross_agent_limit=cross_agent_limit,
     )
+
+
+async def _related_memories_from_embedding(
+    *,
+    new_memory_id: str,
+    query_embedding: list[float],
+    agent_id: str | None,
+    category: str | None = None,
+    threshold: float | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    min_similarity = float(
+        threshold if threshold is not None else getattr(settings, "memory_related_similarity_threshold", 0.7)
+    )
+    top_k = max(0, int(limit if limit is not None else getattr(settings, "memory_related_top_k", 3)))
+    if top_k <= 0 or not query_embedding:
+        return []
+    candidate_limit = max(top_k * 6, 12)
+    rows = await _supabase_match_memories(
+        query_embedding,
+        category=category,
+        limit=candidate_limit,
+        agent_id=agent_id,
+    )
+    related: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("id") or "") == str(new_memory_id):
+            continue
+        similarity = _safe_float(row.get("similarity"), 0.0)
+        if similarity < min_similarity:
+            continue
+        item = _attach_memory_rank_fields(row, similarity)
+        related.append(
+            {
+                "id": item.get("id"),
+                "content": memory_display_content(item) or memory_raw_content(item),
+                "similarity": item["similarity"],
+                "final_score": item["final_score"],
+                "category": item.get("category"),
+                "temperature": item.get("temperature"),
+                "last_touched_at": item.get("last_touched_at"),
+            }
+        )
+        if len(related) >= top_k:
+            break
+    return related
 
 
 async def _get_cached_embedding(memory_id: str, content: str) -> list[float] | None:
@@ -1591,6 +1783,109 @@ async def _ensure_memory_embedding(memory_id: str, content: str) -> list[float] 
     embedding = await _fetch_embedding(content)
     await _store_embedding(memory_id, content, embedding)
     return embedding
+
+
+async def _find_related_memories_for_new_memory(
+    memory: dict[str, Any],
+    *,
+    embedding: list[float] | None,
+    source_text: str,
+) -> list[dict[str, Any]]:
+    if not embedding:
+        return []
+    memory_id = str(memory.get("id") or "")
+    agent_id = str(memory.get("agent_id") or "")
+    threshold = float(getattr(settings, "memory_related_similarity_threshold", 0.7))
+    top_k = max(0, int(getattr(settings, "memory_related_top_k", 3)))
+    if top_k <= 0:
+        return []
+    if _use_supabase_memory():
+        return await _related_memories_from_embedding(
+            new_memory_id=memory_id,
+            query_embedding=embedding,
+            agent_id=agent_id,
+            category=None,
+            threshold=threshold,
+            limit=top_k,
+        )
+
+    candidates = await list_memories(
+        category=None,
+        limit=max(getattr(settings, "memory_vector_candidate_limit", 200), top_k * 20),
+        agent_id=agent_id,
+    )
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for candidate in candidates:
+        candidate_id = str(candidate.get("id") or "")
+        if not candidate_id or candidate_id == memory_id:
+            continue
+        content = memory_embedding_source(candidate)
+        if not content:
+            continue
+        try:
+            candidate_embedding = await _ensure_memory_embedding(candidate_id, content)
+        except Exception as exc:
+            logger.warning("Failed to embed related memory candidate %s: %s", candidate_id, exc)
+            continue
+        if not candidate_embedding:
+            continue
+        similarity = _cosine_similarity(embedding, candidate_embedding)
+        if similarity < threshold:
+            continue
+        enriched = _attach_memory_rank_fields(candidate, similarity)
+        scored.append((_safe_float(enriched.get("final_score"), 0.0), enriched))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    related: list[dict[str, Any]] = []
+    for _, item in scored[:top_k]:
+        related.append(
+            {
+                "id": item.get("id"),
+                "content": memory_display_content(item) or memory_raw_content(item),
+                "similarity": item["similarity"],
+                "final_score": item["final_score"],
+                "category": item.get("category"),
+                "temperature": item.get("temperature"),
+                "last_touched_at": item.get("last_touched_at"),
+            }
+        )
+    return related
+
+
+async def _touch_related_memories(related_memories: list[dict[str, Any]]) -> int:
+    touched = 0
+    deltas = [3.0, 2.0, 1.0]
+    cap = float(getattr(settings, "memory_temperature_cap", 100.0))
+    for index, memory in enumerate(related_memories[:3]):
+        memory_id = str(memory.get("id") or "").strip()
+        if not memory_id:
+            continue
+        delta = deltas[index] if index < len(deltas) else 1.0
+        touched += await touch_memories([memory_id], reason="related_memory_hit", delta=delta, cap=cap)
+    return touched
+
+
+async def _attach_related_memories_after_write(memory: dict[str, Any], raw_text: str) -> dict[str, Any]:
+    memory["related_memories"] = []
+    source_text = (raw_text or memory_embedding_source(memory) or "").strip()
+    if not source_text or not _can_use_embeddings():
+        return memory
+    try:
+        embedding = await _ensure_memory_embedding(str(memory.get("id") or ""), source_text)
+        related = await _find_related_memories_for_new_memory(memory, embedding=embedding, source_text=source_text)
+        if related:
+            touched = await _touch_related_memories(related)
+            logger.info(
+                "Memory related hit: memory=%s related=%s touched=%s",
+                memory.get("id"),
+                [(item.get("id"), item.get("similarity")) for item in related],
+                touched,
+            )
+        memory["related_memories"] = related
+    except Exception as exc:
+        logger.warning("Memory related lookup failed for %s: %s", memory.get("id"), exc)
+        memory["related_memories"] = []
+    return memory
 
 
 async def _generate_memory_compressed_content(raw_content: str) -> str | None:
@@ -1728,6 +2023,33 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
         await db.execute("ALTER TABLE sessions ADD COLUMN last_summarized_message_id TEXT DEFAULT ''")
     await db.execute("UPDATE sessions SET source_app = 'yui_nook' WHERE COALESCE(source_app, '') = ''")
     await db.execute("UPDATE sessions SET agent_id = 'default' WHERE COALESCE(agent_id, '') = ''")
+    if not await _sqlite_column_exists(db, "messages", "agent_id"):
+        await db.execute("ALTER TABLE messages ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'")
+    await db.execute(
+        """
+        UPDATE messages
+        SET agent_id = COALESCE((SELECT agent_id FROM sessions WHERE sessions.id = messages.session_id), 'default')
+        WHERE COALESCE(agent_id, '') = ''
+        """
+    )
+    if not await _sqlite_column_exists(db, "context_summaries", "agent_id"):
+        await db.execute("ALTER TABLE context_summaries ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'")
+    await db.execute(
+        """
+        UPDATE context_summaries
+        SET agent_id = COALESCE((SELECT agent_id FROM sessions WHERE sessions.id = context_summaries.session_id), 'default')
+        WHERE COALESCE(agent_id, '') = ''
+        """
+    )
+    if not await _sqlite_column_exists(db, "memory_logs", "agent_id"):
+        await db.execute("ALTER TABLE memory_logs ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'")
+    await db.execute(
+        """
+        UPDATE memory_logs
+        SET agent_id = COALESCE((SELECT agent_id FROM memories WHERE memories.id = memory_logs.memory_id), 'default')
+        WHERE COALESCE(agent_id, '') = ''
+        """
+    )
     if not await _sqlite_column_exists(db, "memories", "agent_id"):
         alter_statements.append("ALTER TABLE memories ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'")
     if not await _sqlite_column_exists(db, "memories", "visibility"):
@@ -1780,12 +2102,21 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     await db.execute("CREATE INDEX IF NOT EXISTS idx_memories_agent_created_at ON memories(agent_id, created_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_memories_agent_updated_at ON memories(agent_id, updated_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_memories_visibility_updated ON memories(visibility, updated_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_messages_agent_session ON messages(agent_id, session_id, created_at)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_context_summaries_agent_session ON context_summaries(agent_id, session_id, created_at)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_logs_agent_created ON memory_logs(agent_id, created_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_logs_memory_created ON memory_logs(memory_id, created_at DESC)")
     await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_companion_state_agent_id ON companion_state(agent_id)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_diary_agent_created_at ON diary(agent_id, created_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_diary_agent_updated_at ON diary(agent_id, updated_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_diary_agent_visibility ON diary(agent_id, visibility)")
     if not await _sqlite_column_exists(db, "diary_notebooks", "description"):
         await db.execute("ALTER TABLE diary_notebooks ADD COLUMN description TEXT DEFAULT ''")
+    if not await _sqlite_column_exists(db, "diary_entries", "visibility"):
+        await db.execute("ALTER TABLE diary_entries ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'")
+    await db.execute("UPDATE diary_entries SET visibility = 'public' WHERE COALESCE(visibility, '') = ''")
+    await db.execute("UPDATE diary_entries SET visibility = 'shared' WHERE visibility = 'restricted'")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_diary_entries_notebook_visibility ON diary_entries(notebook_id, visibility, updated_at DESC)")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS diary_annotations (
@@ -1862,6 +2193,86 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     await db.execute("UPDATE diary SET visibility = 'shared' WHERE visibility = 'restricted'")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_moments_author ON moments(author_type, author_id, created_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_moments_created_at ON moments(created_at DESC)")
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS media_items (
+            id               TEXT PRIMARY KEY,
+            agent_id         TEXT NOT NULL REFERENCES agents(agent_id),
+            type             TEXT NOT NULL DEFAULT 'other',
+            title            TEXT NOT NULL DEFAULT '',
+            artist           TEXT NOT NULL DEFAULT '',
+            album            TEXT NOT NULL DEFAULT '',
+            author           TEXT NOT NULL DEFAULT '',
+            storage_provider TEXT NOT NULL DEFAULT 'r2',
+            storage_key      TEXT NOT NULL,
+            cover_key        TEXT NOT NULL DEFAULT '',
+            mime_type        TEXT NOT NULL DEFAULT '',
+            size_bytes       INTEGER,
+            duration_seconds REAL,
+            metadata         TEXT NOT NULL DEFAULT '{}',
+            created_at       TEXT NOT NULL,
+            updated_at       TEXT NOT NULL
+        )
+        """
+    )
+    for _col, _ddl in [
+        ("agent_id", "TEXT NOT NULL DEFAULT 'default'"),
+        ("type", "TEXT NOT NULL DEFAULT 'other'"),
+        ("title", "TEXT NOT NULL DEFAULT ''"),
+        ("artist", "TEXT NOT NULL DEFAULT ''"),
+        ("album", "TEXT NOT NULL DEFAULT ''"),
+        ("author", "TEXT NOT NULL DEFAULT ''"),
+        ("storage_provider", "TEXT NOT NULL DEFAULT 'r2'"),
+        ("storage_key", "TEXT NOT NULL DEFAULT ''"),
+        ("cover_key", "TEXT NOT NULL DEFAULT ''"),
+        ("mime_type", "TEXT NOT NULL DEFAULT ''"),
+        ("size_bytes", "INTEGER"),
+        ("duration_seconds", "REAL"),
+        ("metadata", "TEXT NOT NULL DEFAULT '{}'"),
+        ("created_at", "TEXT NOT NULL DEFAULT ''"),
+        ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+    ]:
+        if not await _sqlite_column_exists(db, "media_items", _col):
+            await db.execute(f"ALTER TABLE media_items ADD COLUMN {_col} {_ddl}")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_agent_type ON media_items(agent_id, type, created_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_type_created ON media_items(type, created_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_storage_key ON media_items(storage_key)")
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id           TEXT PRIMARY KEY,
+            event_type   TEXT NOT NULL,
+            event_value  TEXT DEFAULT '',
+            content      TEXT DEFAULT '',
+            url          TEXT DEFAULT '',
+            source       TEXT NOT NULL DEFAULT 'manual',
+            created_at   TEXT NOT NULL,
+            occurred_at  TEXT NOT NULL,
+            dedupe_key   TEXT DEFAULT '',
+            consumed     INTEGER NOT NULL DEFAULT 0,
+            consumed_at  TEXT DEFAULT '',
+            gate_status  TEXT DEFAULT 'pending',
+            gate_should_handle INTEGER NOT NULL DEFAULT 0,
+            gate_should_notify_llm INTEGER NOT NULL DEFAULT 0,
+            gate_message_hint TEXT DEFAULT '',
+            gate_reason TEXT DEFAULT '',
+            screened_at TEXT DEFAULT ''
+        )
+        """
+    )
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_activity_events_recent ON activity_events(occurred_at DESC, created_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_activity_events_dedupe ON activity_events(dedupe_key, created_at DESC)")
+    _activity_gate_cols = [
+        ("gate_status", "TEXT DEFAULT 'pending'"),
+        ("gate_should_handle", "INTEGER NOT NULL DEFAULT 0"),
+        ("gate_should_notify_llm", "INTEGER NOT NULL DEFAULT 0"),
+        ("gate_message_hint", "TEXT DEFAULT ''"),
+        ("gate_reason", "TEXT DEFAULT ''"),
+        ("screened_at", "TEXT DEFAULT ''"),
+    ]
+    for _col, _ddl in _activity_gate_cols:
+        if not await _sqlite_column_exists(db, "activity_events", _col):
+            await db.execute(f"ALTER TABLE activity_events ADD COLUMN {_col} {_ddl}")
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS rp_rooms (
@@ -2418,6 +2829,198 @@ async def resolve_agent_context(
 async def resolve_agent_id(**kwargs: Any) -> str:
     context = await resolve_agent_context(**kwargs)
     return str(context["agent_id"])
+
+
+# ==================== Media library ====================
+
+def normalize_media_type(value: str | None) -> str:
+    media_type = str(value or "other").strip().lower()
+    return media_type if media_type in MEDIA_TYPES else "other"
+
+
+def _media_metadata_for_storage(metadata: Any, *, supabase: bool) -> Any:
+    if metadata in (None, ""):
+        return {} if supabase else "{}"
+    if isinstance(metadata, str):
+        if supabase:
+            try:
+                return json.loads(metadata)
+            except Exception:
+                return {"value": metadata}
+        return metadata
+    try:
+        return metadata if supabase else json.dumps(metadata, ensure_ascii=False)
+    except Exception:
+        return {} if supabase else "{}"
+
+
+def _normalize_media_item(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    item["id"] = str(item.get("id") or "")
+    item["agent_id"] = normalize_agent_id_value(item.get("agent_id"))
+    item["type"] = normalize_media_type(item.get("type"))
+    for key in ("title", "artist", "album", "author", "storage_provider", "storage_key", "cover_key", "mime_type"):
+        item[key] = str(item.get(key) or "")
+    item["metadata"] = item.get("metadata") if item.get("metadata") not in (None, "") else {}
+    if isinstance(item["metadata"], str):
+        try:
+            item["metadata"] = json.loads(item["metadata"])
+        except Exception:
+            item["metadata"] = {}
+    item["created_at"] = str(item.get("created_at") or "")
+    item["updated_at"] = str(item.get("updated_at") or "")
+    return item
+
+
+async def create_media_item(
+    *,
+    agent_id: str | None = None,
+    type: str = "other",
+    title: str = "",
+    artist: str = "",
+    album: str = "",
+    author: str = "",
+    storage_provider: str = "r2",
+    storage_key: str,
+    cover_key: str = "",
+    mime_type: str = "",
+    size_bytes: int | None = None,
+    duration_seconds: float | None = None,
+    metadata: Any = None,
+) -> dict[str, Any]:
+    normalized_agent = await require_agent(agent_id) if agent_id else await resolve_agent_id(purpose="create_media_item")
+    normalized_type = normalize_media_type(type)
+    provider = str(storage_provider or "r2").strip().lower() or "r2"
+    key = str(storage_key or "").strip().lstrip("/")
+    if not key or ".." in key.split("/"):
+        raise ValueError("storage_key is required and must not contain path traversal")
+    now = _now()
+    supabase = _use_supabase_data()
+    payload = {
+        "id": _new_id(),
+        "agent_id": normalized_agent,
+        "type": normalized_type,
+        "title": str(title or "").strip(),
+        "artist": str(artist or "").strip(),
+        "album": str(album or "").strip(),
+        "author": str(author or "").strip(),
+        "storage_provider": provider,
+        "storage_key": key,
+        "cover_key": str(cover_key or "").strip().lstrip("/"),
+        "mime_type": str(mime_type or "").strip(),
+        "size_bytes": int(size_bytes) if size_bytes is not None else None,
+        "duration_seconds": float(duration_seconds) if duration_seconds is not None else None,
+        "metadata": _media_metadata_for_storage(metadata, supabase=supabase),
+        "created_at": now,
+        "updated_at": now,
+    }
+    if supabase:
+        row = await _supabase_insert_verified(settings.supabase_media_items_table, payload)
+        return _normalize_media_item(row) or row
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO media_items (
+            id, agent_id, type, title, artist, album, author, storage_provider, storage_key,
+            cover_key, mime_type, size_bytes, duration_seconds, metadata, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["id"],
+            payload["agent_id"],
+            payload["type"],
+            payload["title"],
+            payload["artist"],
+            payload["album"],
+            payload["author"],
+            payload["storage_provider"],
+            payload["storage_key"],
+            payload["cover_key"],
+            payload["mime_type"],
+            payload["size_bytes"],
+            payload["duration_seconds"],
+            payload["metadata"],
+            payload["created_at"],
+            payload["updated_at"],
+        ),
+    )
+    await db.commit()
+    row = await get_media_item(payload["id"])
+    if not row:
+        raise RuntimeError("SQLite insert(media_items) did not verify a row")
+    return row
+
+
+async def list_media_items(
+    *,
+    type: str | None = None,
+    agent_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    filters: dict[str, str] = {}
+    if type:
+        filters["type"] = f"eq.{normalize_media_type(type)}"
+    if agent_id:
+        filters["agent_id"] = f"eq.{await require_agent(agent_id)}"
+    safe_limit = max(1, min(int(limit or 100), 500))
+    if _use_supabase_data():
+        rows = await _supabase_select(
+            settings.supabase_media_items_table,
+            filters=filters or None,
+            order="created_at.desc",
+            limit=safe_limit,
+        )
+        return [item for item in (_normalize_media_item(row) for row in rows) if item]
+    db = await get_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if type:
+        clauses.append("type = ?")
+        params.append(normalize_media_type(type))
+    if agent_id:
+        clauses.append("agent_id = ?")
+        params.append(await require_agent(agent_id))
+    sql = "SELECT * FROM media_items"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(safe_limit)
+    cursor = await db.execute(sql, params)
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_media_item(dict(row)) for row in rows) if item]
+
+
+async def get_media_item(item_id: str) -> dict[str, Any] | None:
+    media_id = str(item_id or "").strip()
+    if not media_id:
+        return None
+    if _use_supabase_data():
+        rows = await _supabase_select(
+            settings.supabase_media_items_table,
+            filters={"id": f"eq.{media_id}"},
+            limit=1,
+        )
+        return _normalize_media_item(rows[0] if rows else None)
+    db = await get_db()
+    cursor = await db.execute("SELECT * FROM media_items WHERE id = ? LIMIT 1", (media_id,))
+    row = await cursor.fetchone()
+    return _normalize_media_item(dict(row) if row else None)
+
+
+async def delete_media_item(item_id: str) -> dict[str, Any] | None:
+    item = await get_media_item(item_id)
+    if not item:
+        return None
+    if _use_supabase_data():
+        deleted = await _supabase_delete_verified(settings.supabase_media_items_table, {"id": f"eq.{item['id']}"})
+        return item if deleted else None
+    db = await get_db()
+    result = await db.execute("DELETE FROM media_items WHERE id = ?", (item["id"],))
+    await db.commit()
+    return item if result.rowcount > 0 else None
 
 
 # ==================== ???? ====================
@@ -2979,13 +3582,23 @@ async def delete_session(session_id: str) -> bool:
 
 # ==================== Messages ====================
 
-async def add_message(session_id: str, role: str, content: str, model: str = "") -> dict[str, Any]:
+async def add_message(
+    session_id: str,
+    role: str,
+    content: str,
+    model: str = "",
+    *,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    session = await get_session(session_id)
+    resolved_agent_id = normalize_agent_id(agent_id or (session or {}).get("agent_id"))
     if _use_supabase_data():
         mid = _new_id()
         now = _now()
         payload = {
             "id": mid,
             "session_id": session_id,
+            "agent_id": resolved_agent_id,
             "role": role,
             "content": content,
             "model": model,
@@ -2998,13 +3611,21 @@ async def add_message(session_id: str, role: str, content: str, model: str = "")
     mid = _new_id()
     now = _now()
     await db.execute(
-        "INSERT INTO messages (id, session_id, role, content, model, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (mid, session_id, role, content, model, now),
+        "INSERT INTO messages (id, session_id, agent_id, role, content, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (mid, session_id, resolved_agent_id, role, content, model, now),
     )
     # update session time
     await db.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
     await db.commit()
-    return {"id": mid, "session_id": session_id, "role": role, "content": content, "model": model, "created_at": now}
+    return {
+        "id": mid,
+        "session_id": session_id,
+        "agent_id": resolved_agent_id,
+        "role": role,
+        "content": content,
+        "model": model,
+        "created_at": now,
+    }
 
 
 async def get_messages(session_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -3193,6 +3814,51 @@ async def list_cot_logs(session_id: str, *, limit: int = 40, before: str | None 
             "SELECT * FROM cot_logs WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
             (session_id, safe_limit),
         )
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def list_recent_cot_logs(
+    *,
+    limit: int = 20,
+    agent_id: str | None = None,
+    session_id: str | None = None,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 20), 100))
+    normalized_agent_id = normalize_agent_id(agent_id) if agent_id else ""
+    safe_session_id = str(session_id or "").strip()
+    if _use_supabase_data():
+        filters: dict[str, str] = {}
+        if normalized_agent_id:
+            filters["agent_id"] = f"eq.{normalized_agent_id}"
+        if safe_session_id:
+            filters["session_id"] = f"eq.{safe_session_id}"
+        try:
+            return await _supabase_select(
+                "cot_logs",
+                filters=filters or None,
+                order="created_at.desc",
+                limit=safe_limit,
+            )
+        except Exception as exc:
+            logger.debug("Supabase recent cot_logs select skipped: %s", exc)
+            return []
+
+    db = await get_db()
+    where: list[str] = []
+    params: list[Any] = []
+    if normalized_agent_id:
+        where.append("agent_id = ?")
+        params.append(normalized_agent_id)
+    if safe_session_id:
+        where.append("session_id = ?")
+        params.append(safe_session_id)
+    query = "SELECT * FROM cot_logs"
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(safe_limit)
+    cursor = await db.execute(query, params)
     rows = await cursor.fetchall()
     return [dict(row) for row in rows]
 
@@ -3468,6 +4134,7 @@ async def add_memory(
             await _schedule_memory_processing(memory["id"], raw_text)
         except Exception as exc:
             logger.warning("Failed to schedule memory processing %s: %s", memory.get("id"), exc)
+        memory = await _attach_related_memories_after_write(memory, raw_text)
         return memory
     db = await get_db()
     mid = _new_id()
@@ -3519,6 +4186,7 @@ async def add_memory(
         await _schedule_memory_processing(memory["id"], raw_text)
     except Exception as exc:
         logger.warning("Failed to schedule memory processing %s: %s", memory.get("id"), exc)
+    memory = await _attach_related_memories_after_write(memory, raw_text)
     return memory
 
 
@@ -3711,11 +4379,20 @@ async def semantic_search_memories(
     if _use_supabase_memory():
         try:
             query_embedding = await _fetch_embedding(query)
-            rows = await _supabase_match_memories(query_embedding, category=category, limit=limit, agent_id=agent_id)
+            rows = await _supabase_match_memories(
+                query_embedding,
+                category=category,
+                limit=max(limit * 4, 20),
+                agent_id=agent_id,
+            )
             if rows:
+                rows = [
+                    _attach_memory_rank_fields(item, _safe_float(item.get("similarity"), 0.0))
+                    for item in rows
+                ]
                 rows.sort(
                     key=lambda item: (
-                        _semantic_rank_score(item, _safe_float(item.get("similarity"), 0.0)),
+                        _safe_float(item.get("final_score"), 0.0),
                         _safe_float(item.get("similarity"), 0.0),
                         _memory_importance(item),
                         _memory_temperature(item),
@@ -3760,9 +4437,9 @@ async def semantic_search_memories(
         score = _cosine_similarity(query_embedding, embedding)
         if score <= 0:
             continue
-        enriched = dict(memory)
-        enriched["score"] = round(score, 6)
-        blended = _semantic_rank_score(enriched, score)
+        enriched = _attach_memory_rank_fields(memory, score)
+        enriched["score"] = enriched["final_score"]
+        blended = _safe_float(enriched.get("final_score"), 0.0)
         scored.append((blended, score, enriched))
 
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
@@ -3808,7 +4485,9 @@ async def touch_memories(
             if not rows:
                 continue
             row = rows[0]
-            next_temp = min(cap_value, _memory_temperature(row) + delta_value)
+            current_temp = min(cap_value, _memory_temperature(row))
+            effective_delta = delta_value * max(0.0, 1.0 - (current_temp / cap_value)) if cap_value > 0 else 0.0
+            next_temp = min(cap_value, current_temp + effective_delta)
             next_count = _safe_int(row.get("touch_count"), 0) + 1
             updated = await _supabase_update(
                 settings.supabase_memories_table,
@@ -3822,7 +4501,7 @@ async def touch_memories(
             if updated:
                 touched += 1
                 try:
-                    await add_memory_log(mid, "touch", f"{reason}|delta={delta_value}")
+                    await add_memory_log(mid, "touch", f"{reason}|delta={round(effective_delta, 4)}")
                 except Exception:
                     pass
         return touched
@@ -3830,6 +4509,12 @@ async def touch_memories(
     db = await get_db()
     touched = 0
     for mid in unique_ids:
+        cursor = await db.execute("SELECT temperature FROM memories WHERE id = ? LIMIT 1", (mid,))
+        row = await cursor.fetchone()
+        if not row:
+            continue
+        current_temp = min(cap_value, _safe_float(row["temperature"], 0.0))
+        effective_delta = delta_value * max(0.0, 1.0 - (current_temp / cap_value)) if cap_value > 0 else 0.0
         result = await db.execute(
             """
             UPDATE memories
@@ -3838,12 +4523,12 @@ async def touch_memories(
                 touch_count = COALESCE(touch_count, 0) + 1
             WHERE id = ?
             """,
-            (cap_value, delta_value, now, mid),
+            (cap_value, effective_delta, now, mid),
         )
         if result.rowcount > 0:
             touched += 1
             try:
-                await add_memory_log(mid, "touch", f"{reason}|delta={delta_value}")
+                await add_memory_log(mid, "touch", f"{reason}|delta={round(effective_delta, 4)}")
             except Exception:
                 pass
     if touched:
@@ -4106,13 +4791,23 @@ async def get_amber_stats() -> dict[str, Any]:
 
 # ==================== Context Summaries ====================
 
-async def add_context_summary(session_id: str, summary: str, msg_start: str = "", msg_end: str = "") -> dict[str, Any]:
+async def add_context_summary(
+    session_id: str,
+    summary: str,
+    msg_start: str = "",
+    msg_end: str = "",
+    *,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    session = await get_session(session_id)
+    resolved_agent_id = normalize_agent_id(agent_id or (session or {}).get("agent_id"))
     if _use_supabase_data():
         sid = _new_id()
         now = _now()
         payload = {
             "id": sid,
             "session_id": session_id,
+            "agent_id": resolved_agent_id,
             "summary": summary,
             "msg_range_start": msg_start,
             "msg_range_end": msg_end,
@@ -4123,26 +4818,41 @@ async def add_context_summary(session_id: str, summary: str, msg_start: str = ""
     sid = _new_id()
     now = _now()
     await db.execute(
-        "INSERT INTO context_summaries (id, session_id, summary, msg_range_start, msg_range_end, created_at) VALUES (?,?,?,?,?,?)",
-        (sid, session_id, summary, msg_start, msg_end, now),
+        "INSERT INTO context_summaries (id, session_id, agent_id, summary, msg_range_start, msg_range_end, created_at) VALUES (?,?,?,?,?,?,?)",
+        (sid, session_id, resolved_agent_id, summary, msg_start, msg_end, now),
     )
     await db.commit()
-    return {"id": sid, "session_id": session_id, "summary": summary, "created_at": now}
+    return {"id": sid, "session_id": session_id, "agent_id": resolved_agent_id, "summary": summary, "created_at": now}
 
 
-async def get_context_summaries(session_id: str, limit: int = 5) -> list[dict[str, Any]]:
+async def get_context_summaries(
+    session_id: str,
+    limit: int = 5,
+    *,
+    agent_id: str | None = None,
+) -> list[dict[str, Any]]:
+    resolved_agent_id = normalize_agent_id(agent_id) if agent_id else None
     if _use_supabase_data():
+        filters = {"session_id": f"eq.{session_id}"}
+        if resolved_agent_id:
+            filters["agent_id"] = f"eq.{resolved_agent_id}"
         return await _supabase_select(
             settings.supabase_context_summaries_table,
-            filters={"session_id": f"eq.{session_id}"},
+            filters=filters,
             order="created_at.desc",
             limit=limit,
         )
     db = await get_db()
-    cursor = await db.execute(
-        "SELECT * FROM context_summaries WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
-        (session_id, limit),
-    )
+    if resolved_agent_id:
+        cursor = await db.execute(
+            "SELECT * FROM context_summaries WHERE session_id = ? AND agent_id = ? ORDER BY created_at DESC LIMIT ?",
+            (session_id, resolved_agent_id, limit),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT * FROM context_summaries WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+            (session_id, limit),
+        )
     rows = await cursor.fetchall()
     return [dict(row) for row in rows]
 
@@ -4164,6 +4874,8 @@ async def ensure_context_summary(
     trigger_messages: int = 24,
     keep_recent_messages: int = 12,
     min_batch_messages: int = 8,
+    *,
+    agent_id: str | None = None,
 ) -> bool:
     """Generate incremental summary for long session"""
     messages = await get_messages(session_id=session_id, limit=1000)
@@ -4171,7 +4883,7 @@ async def ensure_context_summary(
         return False
 
     last_end_id = ""
-    summaries = await get_context_summaries(session_id=session_id, limit=1)
+    summaries = await get_context_summaries(session_id=session_id, limit=1, agent_id=agent_id)
     if summaries and summaries[0].get("msg_range_end"):
         last_end_id = summaries[0]["msg_range_end"]
 
@@ -4196,6 +4908,7 @@ async def ensure_context_summary(
         summary=summary_text,
         msg_start=to_summarize[0]["id"],
         msg_end=to_summarize[-1]["id"],
+        agent_id=agent_id,
     )
     logger.info(
         "Context summary created: session=%s batch=%s keep_recent=%s",
@@ -4386,7 +5099,7 @@ async def _create_diary_notebook_record(
     author_id: str,
     name: str,
     description: str = "",
-    visibility: str = "private",
+    visibility: str = "public",
     is_default: bool = False,
 ) -> dict[str, Any]:
     now = _now()
@@ -4438,6 +5151,7 @@ async def _create_diary_entry_record(
     title: str,
     content: str,
     tags: str = "",
+    visibility: str = "public",
     created_at: str | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
@@ -4449,6 +5163,7 @@ async def _create_diary_entry_record(
         "title": (title or "").strip(),
         "content": content,
         "tags": tags,
+        "visibility": normalize_visibility(visibility or "public"),
         "created_at": created,
         "updated_at": updated,
     }
@@ -4458,8 +5173,8 @@ async def _create_diary_entry_record(
     await db.execute(
         """
         INSERT OR IGNORE INTO diary_entries
-        (id, notebook_id, title, content, tags, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, notebook_id, title, content, tags, visibility, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["id"],
@@ -4467,6 +5182,7 @@ async def _create_diary_entry_record(
             payload["title"],
             payload["content"],
             payload["tags"],
+            payload["visibility"],
             payload["created_at"],
             payload["updated_at"],
         ),
@@ -4517,6 +5233,7 @@ async def _ensure_diary_bootstrap() -> None:
                 title=str(row.get("title") or ""),
                 content=str(row.get("content") or ""),
                 tags=str(row.get("tags") or ""),
+                visibility=str(row.get("visibility") or "public"),
                 created_at=str(row.get("created_at") or _now()),
                 updated_at=str(row.get("updated_at") or row.get("created_at") or _now()),
             )
@@ -4620,7 +5337,7 @@ async def create_agent_diary_notebook(
     *,
     name: str = "",
     description: str = "",
-    visibility: str = "private",
+    visibility: str = "public",
     is_default: bool = False,
 ) -> dict[str, Any]:
     normalized_agent = await resolve_agent_id(agent_id=agent_id, purpose="create_agent_diary_notebook")
@@ -4746,7 +5463,13 @@ async def list_diary_annotations(entry_id: str) -> list[dict[str, Any]]:
     return [row for row in (_normalize_diary_annotation_row(dict(item)) for item in rows) if row]
 
 
-async def list_diary_entries(notebook_id: str, limit: int = 100) -> list[dict[str, Any]]:
+async def list_diary_entries(
+    notebook_id: str,
+    limit: int = 100,
+    *,
+    viewer_agent_id: str | None = None,
+    enforce_visibility: bool = False,
+) -> list[dict[str, Any]]:
     await _ensure_diary_bootstrap()
     notebook = await _get_diary_notebook_row(notebook_id)
     if not notebook:
@@ -4767,6 +5490,8 @@ async def list_diary_entries(notebook_id: str, limit: int = 100) -> list[dict[st
         rows = [dict(row) for row in await cursor.fetchall()]
     entries: list[dict[str, Any]] = []
     for row in rows:
+        if enforce_visibility and not _diary_entry_visible_to_agent(row, notebook, viewer_agent_id):
+            continue
         entry_id = str(row.get("id") or "")
         comments = await list_diary_comments(entry_id)
         annotations = await list_diary_annotations(entry_id)
@@ -4776,7 +5501,14 @@ async def list_diary_entries(notebook_id: str, limit: int = 100) -> list[dict[st
     return entries
 
 
-async def create_diary_entry(notebook_id: str, *, title: str = "", content: str, tags: str = "") -> dict[str, Any] | None:
+async def create_diary_entry(
+    notebook_id: str,
+    *,
+    title: str = "",
+    content: str,
+    tags: str = "",
+    visibility: str = "public",
+) -> dict[str, Any] | None:
     notebook = await _get_diary_notebook_row(notebook_id)
     if not notebook or not _diary_notebook_is_editable(notebook):
         return None
@@ -4787,6 +5519,7 @@ async def create_diary_entry(notebook_id: str, *, title: str = "", content: str,
         "title": (title or "").strip(),
         "content": content,
         "tags": tags,
+        "visibility": normalize_visibility(visibility or "public"),
         "created_at": now,
         "updated_at": now,
     }
@@ -4797,8 +5530,8 @@ async def create_diary_entry(notebook_id: str, *, title: str = "", content: str,
     db = await get_db()
     await db.execute(
         """
-        INSERT INTO diary_entries (id, notebook_id, title, content, tags, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO diary_entries (id, notebook_id, title, content, tags, visibility, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["id"],
@@ -4806,6 +5539,7 @@ async def create_diary_entry(notebook_id: str, *, title: str = "", content: str,
             payload["title"],
             payload["content"],
             payload["tags"],
+            payload["visibility"],
             payload["created_at"],
             payload["updated_at"],
         ),
@@ -4822,6 +5556,7 @@ async def create_agent_diary_entry(
     title: str = "",
     content: str,
     tags: str = "",
+    visibility: str = "public",
 ) -> dict[str, Any] | None:
     await require_agent(agent_id)
     notebook = await _get_diary_notebook_row(notebook_id)
@@ -4834,6 +5569,7 @@ async def create_agent_diary_entry(
         title=title,
         content=content,
         tags=tags,
+        visibility=visibility,
         created_at=now,
         updated_at=now,
     )
@@ -4853,6 +5589,7 @@ async def update_agent_diary_entry(
     title: str | None = None,
     content: str | None = None,
     tags: str | None = None,
+    visibility: str | None = None,
 ) -> dict[str, Any] | None:
     row = await _get_diary_entry_row(entry_id)
     if not row:
@@ -4867,6 +5604,8 @@ async def update_agent_diary_entry(
         payload["content"] = content
     if tags is not None:
         payload["tags"] = tags
+    if visibility is not None:
+        payload["visibility"] = normalize_visibility(visibility)
     if _use_supabase_data():
         row = await _supabase_update_verified(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"}, payload)
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": payload["updated_at"]})
@@ -4908,7 +5647,14 @@ async def delete_agent_diary_entry(entry_id: str, agent_id: str | None) -> bool:
     return result.rowcount > 0
 
 
-async def update_diary_entry(entry_id: str, *, title: str | None = None, content: str | None = None, tags: str | None = None) -> dict[str, Any] | None:
+async def update_diary_entry(
+    entry_id: str,
+    *,
+    title: str | None = None,
+    content: str | None = None,
+    tags: str | None = None,
+    visibility: str | None = None,
+) -> dict[str, Any] | None:
     row = await _get_diary_entry_row(entry_id)
     if not row:
         return None
@@ -4922,6 +5668,8 @@ async def update_diary_entry(entry_id: str, *, title: str | None = None, content
         payload["content"] = content
     if tags is not None:
         payload["tags"] = tags
+    if visibility is not None:
+        payload["visibility"] = normalize_visibility(visibility)
     if _use_supabase_data():
         row = await _supabase_update_verified(settings.supabase_diary_entries_table, {"id": f"eq.{entry_id}"}, payload)
         await _supabase_update(settings.supabase_diary_notebooks_table, {"id": f"eq.{notebook['id']}"}, {"updated_at": payload["updated_at"]})
@@ -4970,13 +5718,13 @@ async def add_diary_comment(
     if not row:
         return None
     notebook = await _get_diary_notebook_row(str(row.get("notebook_id") or ""))
-    if not notebook or not _diary_notebook_can_comment(notebook):
-        return None
     fallback_author_type, fallback_author_id = _current_user_subject()
     author_type = normalize_subject_type(author_type or fallback_author_type)
     author_id = normalize_subject_id(author_type, author_id or fallback_author_id)
     if author_type == "agent":
         author_id = await require_agent(author_id)
+    if not notebook or not _diary_entry_can_comment(row, notebook, author_id if author_type == "agent" else None):
+        return None
     now = _now()
     payload = {
         "id": _new_id(),
@@ -5035,6 +5783,8 @@ async def add_diary_underline(
     normalized_author_id = normalize_subject_id(normalized_author_type, author_id or fallback_author_id)
     if normalized_author_type == "agent":
         normalized_author_id = await require_agent(normalized_author_id)
+    if not _diary_entry_can_comment(row, notebook, normalized_author_id if normalized_author_type == "agent" else None):
+        return None
     now = _now()
     payload = {
         "id": _new_id(),
@@ -5084,7 +5834,7 @@ async def add_diary(
     agent_id: str | None = None,
     title: str = "",
     tags: str = "",
-    visibility: str = "private",
+    visibility: str = "public",
     source_agent_id: str | None = None,
 ) -> dict[str, Any]:
     await _ensure_diary_bootstrap()
@@ -5106,6 +5856,7 @@ async def add_diary(
         title=title,
         content=content,
         tags=tags,
+        visibility=visibility,
     )
     return _normalize_diary_entry_row(entry, notebook=notebook, comments=[]) or entry
 
@@ -5122,6 +5873,7 @@ async def update_diary(diary_id: str, *, agent_id: str | None = None, **kwargs) 
         title=kwargs.get("title"),
         content=kwargs.get("content"),
         tags=kwargs.get("tags"),
+        visibility=kwargs.get("visibility"),
     )
     return entry is not None
 
@@ -5436,6 +6188,33 @@ async def get_pending_proactive(limit: int = 10) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+async def list_proactive_messages(limit: int = 20, agent_id: str | None = None) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 20), 100))
+    normalized_agent_id = normalize_agent_id(agent_id) if agent_id else ""
+    if _use_supabase_data():
+        filters = {"agent_id": f"eq.{normalized_agent_id}"} if normalized_agent_id else None
+        rows = await _supabase_select(
+            settings.supabase_proactive_messages_table,
+            filters=filters,
+            order="created_at.desc",
+            limit=safe_limit,
+        )
+        return [dict(row) for row in rows]
+    db = await get_db()
+    if normalized_agent_id:
+        cursor = await db.execute(
+            "SELECT * FROM proactive_messages WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?",
+            (normalized_agent_id, safe_limit),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT * FROM proactive_messages ORDER BY created_at DESC LIMIT ?",
+            (safe_limit,),
+        )
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
 async def mark_proactive_read(msg_id: str) -> bool:
     if _use_supabase_data():
         rows = await _supabase_update(
@@ -5476,21 +6255,45 @@ async def count_today_proactive() -> int:
 
 # ==================== Memory Logs ====================
 
-async def add_memory_log(memory_id: str, action: str, detail: str = ""):
+async def add_memory_log(memory_id: str, action: str, detail: str = "", *, agent_id: str | None = None):
+    resolved_agent_id = normalize_agent_id(agent_id) if agent_id else ""
     if _use_supabase_data():
+        if not resolved_agent_id and memory_id:
+            rows = await _supabase_select(
+                settings.supabase_memories_table,
+                filters={"id": f"eq.{memory_id}"},
+                select="agent_id",
+                limit=1,
+            )
+            resolved_agent_id = normalize_agent_id((rows[0] if rows else {}).get("agent_id"))
+        if not resolved_agent_id:
+            resolved_agent_id = normalize_agent_id(None)
         lid = _new_id()
         now = _now()
         await _supabase_insert_verified(
             settings.supabase_memory_logs_table,
-            {"id": lid, "memory_id": memory_id, "action": action, "detail": detail, "created_at": now},
+            {
+                "id": lid,
+                "memory_id": memory_id,
+                "agent_id": resolved_agent_id,
+                "action": action,
+                "detail": detail,
+                "created_at": now,
+            },
         )
         return
     db = await get_db()
+    if not resolved_agent_id and memory_id:
+        cursor = await db.execute("SELECT agent_id FROM memories WHERE id = ? LIMIT 1", (memory_id,))
+        row = await cursor.fetchone()
+        resolved_agent_id = normalize_agent_id(row["agent_id"] if row else None)
+    if not resolved_agent_id:
+        resolved_agent_id = normalize_agent_id(None)
     lid = _new_id()
     now = _now()
     await db.execute(
-        "INSERT INTO memory_logs (id, memory_id, action, detail, created_at) VALUES (?,?,?,?,?)",
-        (lid, memory_id, action, detail, now),
+        "INSERT INTO memory_logs (id, memory_id, agent_id, action, detail, created_at) VALUES (?,?,?,?,?,?)",
+        (lid, memory_id, resolved_agent_id, action, detail, now),
     )
     await db.commit()
 
@@ -5545,3 +6348,270 @@ async def get_recent_activity_time() -> str:
     )
     row = await cursor.fetchone()
     return row["created_at"] if row else ""
+
+
+# ==================== Activity Events ====================
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _activity_dedupe_key(event_type: str, event_value: str, content: str, explicit: str | None = None) -> str:
+    raw = str(explicit or "").strip()
+    if raw:
+        return raw
+    parts = [
+        re.sub(r"\s+", " ", str(event_type or "").strip().lower()),
+        re.sub(r"\s+", " ", str(event_value or "").strip().lower()),
+        re.sub(r"\s+", " ", str(content or "").strip().lower()),
+    ]
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _normalize_activity_event(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    item["event_type"] = str(item.get("event_type") or "").strip()
+    item["event_value"] = str(item.get("event_value") or "").strip()
+    item["content"] = str(item.get("content") or "").strip()
+    item["url"] = str(item.get("url") or "").strip()
+    item["source"] = str(item.get("source") or "").strip() or "manual"
+    item["dedupe_key"] = str(item.get("dedupe_key") or "").strip()
+    item["consumed"] = bool(item.get("consumed"))
+    item["consumed_at"] = str(item.get("consumed_at") or "").strip()
+    item["gate_status"] = str(item.get("gate_status") or "pending").strip() or "pending"
+    item["gate_should_handle"] = bool(item.get("gate_should_handle"))
+    item["gate_should_notify_llm"] = bool(item.get("gate_should_notify_llm"))
+    item["gate_message_hint"] = str(item.get("gate_message_hint") or "").strip()
+    item["gate_reason"] = str(item.get("gate_reason") or "").strip()
+    item["screened_at"] = str(item.get("screened_at") or "").strip()
+    item["created_at"] = str(item.get("created_at") or "").strip()
+    item["occurred_at"] = str(item.get("occurred_at") or item.get("created_at") or "").strip()
+    return item
+
+
+async def update_activity_event_gate(
+    event_id: str,
+    *,
+    gate_status: str = "screened",
+    gate_should_handle: bool = False,
+    gate_should_notify_llm: bool = False,
+    gate_message_hint: str = "",
+    gate_reason: str = "",
+) -> dict[str, Any] | None:
+    event_id = str(event_id or "").strip()
+    if not event_id:
+        return None
+    payload = {
+        "gate_status": str(gate_status or "screened").strip() or "screened",
+        "gate_should_handle": bool(gate_should_handle),
+        "gate_should_notify_llm": bool(gate_should_notify_llm),
+        "gate_message_hint": str(gate_message_hint or "").strip(),
+        "gate_reason": str(gate_reason or "").strip(),
+        "screened_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if _use_supabase_data():
+        row = await _supabase_update_verified(
+            settings.supabase_activity_events_table,
+            {"id": f"eq.{event_id}"},
+            payload,
+        )
+        return _normalize_activity_event(row)
+    db = await get_db()
+    await db.execute(
+        """
+        UPDATE activity_events
+        SET gate_status = ?,
+            gate_should_handle = ?,
+            gate_should_notify_llm = ?,
+            gate_message_hint = ?,
+            gate_reason = ?,
+            screened_at = ?
+        WHERE id = ?
+        """,
+        (
+            payload["gate_status"],
+            1 if payload["gate_should_handle"] else 0,
+            1 if payload["gate_should_notify_llm"] else 0,
+            payload["gate_message_hint"],
+            payload["gate_reason"],
+            payload["screened_at"],
+            event_id,
+        ),
+    )
+    await db.commit()
+    cursor = await db.execute("SELECT * FROM activity_events WHERE id = ?", (event_id,))
+    row = await cursor.fetchone()
+    return _normalize_activity_event(dict(row)) if row else None
+
+
+async def add_activity_event(
+    *,
+    event_type: str,
+    event_value: str = "",
+    content: str = "",
+    url: str = "",
+    source: str = "manual",
+    occurred_at: str | None = None,
+    dedupe_key: str | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Insert a short-lived activity event with a five-minute dedupe window."""
+    normalized_type = str(event_type or "").strip()
+    normalized_value = str(event_value or "").strip()
+    normalized_content = str(content or "").strip()
+    if not normalized_type:
+        raise ValueError("event_type is required")
+    if not normalized_value and not normalized_content:
+        raise ValueError("event_value or content is required")
+
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    occurred = str(occurred_at or "").strip() or now
+    key = _activity_dedupe_key(normalized_type, normalized_value, normalized_content, dedupe_key)
+    window_start = now_dt - timedelta(minutes=5)
+
+    if _use_supabase_data():
+        rows = await _supabase_select(
+            settings.supabase_activity_events_table,
+            filters={"dedupe_key": f"eq.{key}"},
+            order="created_at.desc",
+            limit=1,
+        )
+        if rows:
+            recent = _normalize_activity_event(rows[0])
+            recent_created = _parse_iso_datetime(recent.get("created_at") if recent else "")
+            if recent and recent_created and recent_created >= window_start:
+                logger.info("activity_event deduped: key=%s id=%s", key, recent.get("id"))
+                return recent, True
+        payload = {
+            "id": _new_id(),
+            "event_type": normalized_type,
+            "event_value": normalized_value,
+            "content": normalized_content,
+            "url": str(url or "").strip(),
+            "source": str(source or "").strip() or "manual",
+            "created_at": now,
+            "occurred_at": occurred,
+            "dedupe_key": key,
+            "consumed": False,
+            "consumed_at": None,
+        }
+        row = await _supabase_insert_verified(settings.supabase_activity_events_table, payload)
+        logger.info("activity_event inserted: id=%s type=%s value=%s", row.get("id"), normalized_type, normalized_value)
+        return _normalize_activity_event(row), False
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM activity_events WHERE dedupe_key = ? ORDER BY created_at DESC LIMIT 1",
+        (key,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        recent = _normalize_activity_event(dict(row))
+        recent_created = _parse_iso_datetime(recent.get("created_at") if recent else "")
+        if recent and recent_created and recent_created >= window_start:
+            logger.info("activity_event deduped: key=%s id=%s", key, recent.get("id"))
+            return recent, True
+
+    payload = {
+        "id": _new_id(),
+        "event_type": normalized_type,
+        "event_value": normalized_value,
+        "content": normalized_content,
+        "url": str(url or "").strip(),
+        "source": str(source or "").strip() or "manual",
+        "created_at": now,
+        "occurred_at": occurred,
+        "dedupe_key": key,
+        "consumed": 0,
+        "consumed_at": "",
+    }
+    await db.execute(
+        """
+        INSERT INTO activity_events (
+            id, event_type, event_value, content, url, source,
+            created_at, occurred_at, dedupe_key, consumed, consumed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["id"], payload["event_type"], payload["event_value"], payload["content"],
+            payload["url"], payload["source"], payload["created_at"], payload["occurred_at"],
+            payload["dedupe_key"], payload["consumed"], payload["consumed_at"],
+        ),
+    )
+    await db.commit()
+    logger.info("activity_event inserted: id=%s type=%s value=%s", payload["id"], normalized_type, normalized_value)
+    return _normalize_activity_event(payload), False
+
+
+async def list_recent_activity_events(
+    hours: float = 6,
+    limit: int = 10,
+    *,
+    only_relevant: bool = False,
+) -> list[dict[str, Any]]:
+    hours = max(0.1, float(hours or 6))
+    limit = max(1, min(int(limit or 10), 100))
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    if _use_supabase_data():
+        fetch_limit = min(limit * 4, 100) if only_relevant else limit
+        rows = await _supabase_select(
+            settings.supabase_activity_events_table,
+            filters={"occurred_at": f"gte.{since}"},
+            order="occurred_at.desc",
+            limit=fetch_limit,
+        )
+        items = [item for item in (_normalize_activity_event(row) for row in rows) if item]
+        if only_relevant:
+            items = [item for item in items if item.get("gate_should_handle") or item.get("gate_should_notify_llm")]
+        return items[:limit]
+    db = await get_db()
+    where = "occurred_at >= ?"
+    params: list[Any] = [since]
+    if only_relevant:
+        where += " AND (gate_should_handle = 1 OR gate_should_notify_llm = 1)"
+    cursor = await db.execute(
+        f"""
+        SELECT * FROM activity_events
+        WHERE {where}
+        ORDER BY occurred_at DESC, created_at DESC
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_activity_event(dict(row)) for row in rows) if item]
+
+
+async def get_recent_activity(
+    hours: float = 6,
+    limit: int = 8,
+    *,
+    only_relevant: bool = False,
+) -> list[dict[str, Any]]:
+    return await list_recent_activity_events(hours=hours, limit=limit, only_relevant=only_relevant)
+
+
+def format_recent_activity_block(events: list[dict[str, Any]]) -> str:
+    if not events:
+        return "Dream's recent activity: none"
+    lines = ["Dream's recent activity:"]
+    for event in sorted(events, key=lambda item: str(item.get("occurred_at") or item.get("created_at") or "")):
+        ts = _parse_iso_datetime(event.get("occurred_at") or event.get("created_at"))
+        hhmm = ts.astimezone().strftime("%H:%M") if ts else "--:--"
+        kind = str(event.get("event_type") or "event").strip()
+        value = str(event.get("event_value") or "").strip()
+        label = f"{kind}/{value}" if value else kind
+        content = str(event.get("content") or event.get("url") or "").strip()
+        lines.append(f"- {hhmm} {label}: {content}")
+    return "\n".join(lines)

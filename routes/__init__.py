@@ -27,6 +27,14 @@ def _normalize_memory_text(text: str) -> str:
     return re.sub(r"\s+", "", text.strip().lower())
 
 
+def _reasoning_as_visible_fallback(reasoning_parts: list[str]) -> str:
+    """Some providers put final content into reasoning; keep replies visible if content is empty."""
+    text = "".join(str(part or "") for part in reasoning_parts).strip()
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _looks_like_memory_candidate(text: str) -> bool:
     stripped = (text or "").strip()
     if not stripped:
@@ -378,7 +386,8 @@ async def create_memory(body: MemoryCreate):
         raise HTTPException(status_code=409, detail=exc.payload())
     except db.AgentResolutionError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"memory": memory}
+    related_memories = memory.pop("related_memories", []) if isinstance(memory, dict) else []
+    return {"memory": memory, "related_memories": related_memories}
 
 
 @api.patch("/memories/{memory_id}")
@@ -493,7 +502,7 @@ async def chat(body: ChatRequest):
     resolved_agent_id = str(session.get("agent_id") or "")
 
     # 1. 保存用户消息
-    await db.add_message(body.session_id, "user", body.content)
+    await db.add_message(body.session_id, "user", body.content, agent_id=resolved_agent_id)
     try:
         await _auto_capture_memory_from_user_text(body.content, resolved_agent_id)
     except Exception as e:
@@ -506,6 +515,7 @@ async def chat(body: ChatRequest):
             trigger_messages=max(8, settings.summary_trigger_messages),
             keep_recent_messages=max(4, settings.summary_keep_recent_messages),
             min_batch_messages=max(2, settings.summary_min_batch_messages),
+            agent_id=resolved_agent_id,
         )
     except Exception as e:
         logger.warning(f"上下文摘要触发失败: {e}")
@@ -588,6 +598,14 @@ async def chat(body: ChatRequest):
                 return
 
             complete_text = "".join(full_response)
+            reasoning_used_as_text = False
+            if not complete_text.strip() and reasoning_buffer:
+                complete_text = _reasoning_as_visible_fallback(reasoning_buffer)
+                if complete_text:
+                    reasoning_used_as_text = True
+                    logger.info("Chat stream used reasoning as visible fallback for provider=%s", model_info)
+                    yield {"event": "message", "data": complete_text}
+
             if not tool_calls_buffer and b"<execute>" in complete_text.encode('utf-8'):
                 import re as regex
                 # Find all <execute>func(args)</execute> patterns
@@ -670,6 +688,7 @@ async def chat(body: ChatRequest):
                     "assistant",
                     complete_text,
                     model=f"{model_info.get('provider', '?')}/{model_info.get('model', '?')}",
+                    agent_id=resolved_agent_id,
                 )
                 # 回复落库后再尝试一次摘要，避免对话越聊越长
                 try:
@@ -678,12 +697,13 @@ async def chat(body: ChatRequest):
                         trigger_messages=max(8, settings.summary_trigger_messages),
                         keep_recent_messages=max(4, settings.summary_keep_recent_messages),
                         min_batch_messages=max(2, settings.summary_min_batch_messages),
+                        agent_id=resolved_agent_id,
                     )
                 except Exception as e:
                     logger.warning(f"上下文摘要触发失败(assistant): {e}")
 
             if complete_text:
-                if reasoning_buffer:
+                if reasoning_buffer and not reasoning_used_as_text:
                     await db.add_cot_log(
                         body.session_id,
                         agent_id=resolved_agent_id,

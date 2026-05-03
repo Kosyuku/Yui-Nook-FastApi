@@ -26,6 +26,7 @@ REQUIRED_MCP_TOOLS = {
     "create_diary_notebook",
     "update_diary_notebook",
     "list_diary_notebooks",
+    "list_diary_entries",
     "create_diary_entry",
     "update_diary_entry",
     "delete_diary_entry",
