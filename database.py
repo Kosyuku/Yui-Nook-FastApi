@@ -224,6 +224,27 @@ CREATE TABLE IF NOT EXISTS context_summaries (
     created_at      TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS conversation_partitions (
+    id                 TEXT PRIMARY KEY,
+    agent_id           TEXT NOT NULL,
+    session_id         TEXT NOT NULL DEFAULT '',
+    rp_room_id         TEXT NOT NULL DEFAULT '',
+    mode               TEXT NOT NULL DEFAULT 'chat',
+    summary_text       TEXT NOT NULL DEFAULT '',
+    summary_revision   TEXT NOT NULL DEFAULT '',
+    history_a          TEXT NOT NULL DEFAULT '[]',
+    history_b          TEXT NOT NULL DEFAULT '[]',
+    history_a_cycle_id TEXT NOT NULL DEFAULT 'a0',
+    history_b_cycle_id TEXT NOT NULL DEFAULT 'b0',
+    turn_count         INTEGER NOT NULL DEFAULT 0,
+    rotate_every       INTEGER NOT NULL DEFAULT 15,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    UNIQUE(agent_id, session_id, rp_room_id, mode)
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_partitions_lookup
+    ON conversation_partitions(agent_id, session_id, rp_room_id, mode);
+
 CREATE TABLE IF NOT EXISTS todos (
     id          TEXT PRIMARY KEY,
     content     TEXT NOT NULL,
@@ -2352,6 +2373,34 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     )
     await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_label_items_lid ON memory_label_items(label_id)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_label_items_mid ON memory_label_items(memory_id)")
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS conversation_partitions (
+            id                 TEXT PRIMARY KEY,
+            agent_id           TEXT NOT NULL,
+            session_id         TEXT NOT NULL DEFAULT '',
+            rp_room_id         TEXT NOT NULL DEFAULT '',
+            mode               TEXT NOT NULL DEFAULT 'chat',
+            summary_text       TEXT NOT NULL DEFAULT '',
+            summary_revision   TEXT NOT NULL DEFAULT '',
+            history_a          TEXT NOT NULL DEFAULT '[]',
+            history_b          TEXT NOT NULL DEFAULT '[]',
+            history_a_cycle_id TEXT NOT NULL DEFAULT 'a0',
+            history_b_cycle_id TEXT NOT NULL DEFAULT 'b0',
+            turn_count         INTEGER NOT NULL DEFAULT 0,
+            rotate_every       INTEGER NOT NULL DEFAULT 15,
+            created_at         TEXT NOT NULL,
+            updated_at         TEXT NOT NULL,
+            UNIQUE(agent_id, session_id, rp_room_id, mode)
+        )
+        """
+    )
+    await db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_conversation_partitions_lookup
+        ON conversation_partitions(agent_id, session_id, rp_room_id, mode)
+        """
+    )
 
         # -- consciousness snapshot cols (v1) --
     _companion_new_cols = [
