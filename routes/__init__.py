@@ -18,6 +18,7 @@ from models import OpenAICompatAdapter, EchoAdapter, ADAPTER_MAP
 from config import ProviderConfig, settings
 from tools import execute_tool_with_guard, TOOL_EXECUTORS
 from prompt_builder import build_chat_prompt, build_rp_prompt, build_system_prompt
+from partition_manager import append_committed_turn
 
 logger = logging.getLogger(__name__)
 api = APIRouter(prefix="/api")
@@ -519,7 +520,7 @@ async def chat(body: ChatRequest):
     resolved_agent_id = str(session.get("agent_id") or "")
 
     # 1. 保存用户消息
-    await db.add_message(body.session_id, "user", body.content, agent_id=resolved_agent_id)
+    user_message_row = await db.add_message(body.session_id, "user", body.content, agent_id=resolved_agent_id)
     try:
         await _auto_capture_memory_from_user_text(body.content, resolved_agent_id)
     except Exception as e:
@@ -734,13 +735,25 @@ async def chat(body: ChatRequest):
                 continue
 
             if complete_text:
-                await db.add_message(
+                assistant_message_row = await db.add_message(
                     body.session_id,
                     "assistant",
                     complete_text,
                     model=f"{model_info.get('provider', '?')}/{model_info.get('model', '?')}",
                     agent_id=resolved_agent_id,
                 )
+                if settings.conversation_partitions_enabled:
+                    try:
+                        await append_committed_turn(
+                            agent_id=resolved_agent_id,
+                            session_id=body.session_id,
+                            rp_room_id="",
+                            mode="chat",
+                            user_message=user_message_row,
+                            assistant_message=assistant_message_row,
+                        )
+                    except Exception as e:
+                        logger.warning("Conversation partition write failed(chat): %s", e)
                 # 回复落库后再尝试一次摘要，避免对话越聊越长
                 try:
                     await db.ensure_context_summary(
@@ -796,7 +809,7 @@ async def rp_chat(body: RPChatRequest):
         agent_id = await db.resolve_agent_id(agent_id=body.agent_id, room_id=body.room_id, purpose="rp_chat")
     except db.AgentResolutionError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    await db.add_rp_message(body.room_id, "user", body.content)
+    user_message_row = await db.add_rp_message(body.room_id, "user", body.content)
 
     chat_like_body = ChatRequest(
         session_id="rp",
@@ -895,12 +908,24 @@ async def rp_chat(body: RPChatRequest):
 
         complete_text = "".join(full_response).strip()
         if complete_text:
-            await db.add_rp_message(
+            assistant_message_row = await db.add_rp_message(
                 body.room_id,
                 "assistant",
                 complete_text,
                 model=f"{model_info.get('provider', '?')}/{model_info.get('model', '?')}",
             )
+            if settings.conversation_partitions_enabled:
+                try:
+                    await append_committed_turn(
+                        agent_id=agent_id,
+                        session_id="",
+                        rp_room_id=body.room_id,
+                        mode="rp",
+                        user_message=user_message_row,
+                        assistant_message=assistant_message_row,
+                    )
+                except Exception as e:
+                    logger.warning("Conversation partition write failed(rp): %s", e)
 
         yield {"event": "done", "data": "[DONE]"}
         return

@@ -11,6 +11,7 @@ import json
 from typing import Any, Literal
 
 import database as db
+from config import settings
 
 PartitionMode = Literal["chat", "rp"]
 TABLE_NAME = "conversation_partitions"
@@ -314,11 +315,24 @@ async def save_partition(partition: ConversationPartition) -> ConversationPartit
 
 
 async def append_committed_turn(
-    partition: ConversationPartition,
+    partition: ConversationPartition | None = None,
     *,
+    agent_id: str | None = None,
+    session_id: str | None = "",
+    rp_room_id: str | None = "",
+    mode: str = "chat",
+    rotate_every: int | None = None,
     user_message: dict[str, Any],
     assistant_message: dict[str, Any],
 ) -> ConversationPartition:
+    if partition is None:
+        partition = await get_or_create_partition(
+            agent_id=agent_id,
+            session_id=session_id,
+            rp_room_id=rp_room_id,
+            mode=mode,
+            rotate_every=rotate_every or settings.conversation_partition_rotate_every,
+        )
     partition.history_b.extend([
         _message_snapshot(user_message),
         _message_snapshot(assistant_message),
