@@ -1,10 +1,13 @@
-"""System prompt builder."""
+"""Cache-aware prompt builder."""
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 import ai_runtime
 import database as db
@@ -13,7 +16,25 @@ from tools import TOOLS_SCHEMA
 
 logger = logging.getLogger(__name__)
 
-_env_cache: dict = {}
+PROMPT_BUILDER_VERSION = "prompt-cache-v1"
+
+_env_cache: dict[str, str] = {}
+
+
+@dataclass
+class PromptBlock:
+    name: str
+    role: str
+    content: str
+    cache_scope: str
+    cache_key_parts: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class BuiltPrompt:
+    blocks: list[PromptBlock]
+    messages: list[dict[str, Any]]
+    debug: dict[str, Any]
 
 
 def update_env_cache(key: str, value: str):
@@ -30,6 +51,16 @@ def _clip_text(text: str, max_chars: int) -> str:
     return text[:max_chars].rstrip() + "..."
 
 
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
 def _memory_text(memory: dict) -> str:
     return db.memory_display_content(memory) or db.memory_raw_content(memory)
 
@@ -38,21 +69,41 @@ def _build_companion_state_text(state: dict) -> Optional[str]:
     topics = [str(item).strip() for item in (state.get("recent_topics") or []) if str(item).strip()][:3]
     mood = str(state.get("current_mood") or "").strip()
     loops = [str(item).strip() for item in (state.get("open_loops") or []) if str(item).strip()][:2]
+    impression = str(state.get("impression") or "").strip()
+    relationship = str(state.get("relationship_progress") or "").strip()
+    likes = str(state.get("likes_summary") or "").strip()
+
     lines: list[str] = []
     if topics:
-        lines.append(f"- 最近主题：{'、'.join(topics)}")
+        lines.append(f"- recent_topics: {', '.join(topics)}")
     if mood:
-        lines.append(f"- 当前气氛：{mood}")
+        lines.append(f"- current_mood: {mood}")
     if loops:
-        lines.append(f"- 未完成小事：{'、'.join(loops)}")
+        lines.append(f"- open_loops: {', '.join(loops)}")
+    if impression:
+        lines.append(f"- impression: {_clip_text(impression, 80)}")
+    if relationship:
+        lines.append(f"- relationship_progress: {_clip_text(relationship, 80)}")
+    if likes:
+        lines.append(f"- likes_summary: {_clip_text(likes, 80)}")
     if not lines:
         return None
-    return _clip_text("当前陪伴状态：\n" + "\n".join(lines), max(80, settings.prompt_companion_state_max_chars))
+    return _clip_text("Companion state:\n" + "\n".join(lines), max(80, settings.prompt_companion_state_max_chars))
 
 
 _STOPWORDS = {
-    "这个", "那个", "就是", "然后", "还是", "已经", "我们", "你们", "他们",
-    "今天", "昨天", "现在", "请问", "可以", "时候", "什么", "怎么", "为什么", "如果", "但是",
+    "this",
+    "that",
+    "then",
+    "already",
+    "today",
+    "yesterday",
+    "now",
+    "what",
+    "why",
+    "how",
+    "if",
+    "but",
 }
 
 
@@ -185,69 +236,468 @@ def _flatten_memory_sections(layer_sections: list[tuple[str, list[dict]]], total
     return ("\n\n".join(parts) if parts else None, used_memory_ids)
 
 
+async def build_chat_prompt(
+    *,
+    session_id: str,
+    agent_id: str,
+    latest_user_text: str,
+    override_persona: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    tool_profile: str = "chat",
+) -> BuiltPrompt:
+    fixed = await _load_fixed_block(
+        agent_id=agent_id,
+        override_persona=override_persona,
+        provider=provider,
+        model=model,
+        tool_profile=tool_profile,
+    )
+    summary = await _load_summary_block(session_id=session_id, agent_id=agent_id)
+    history = await _load_history_block(
+        session_id=session_id,
+        agent_id=agent_id,
+        latest_user_text=latest_user_text,
+    )
+    dynamic = await _load_dynamic_block(
+        session_id=session_id,
+        agent_id=agent_id,
+        latest_user_text=latest_user_text,
+        provider=provider,
+        model=model,
+        room_id=None,
+    )
+    blocks = [block for block in [fixed, summary, history, dynamic] if block and block.content.strip()]
+    return _build_prompt_result(blocks, provider=provider, model=model)
+
+
+async def build_rp_prompt(
+    *,
+    room_id: str,
+    agent_id: str,
+    latest_user_text: str,
+    override_persona: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    tool_profile: str = "rp",
+) -> BuiltPrompt:
+    fixed = await _load_fixed_block(
+        agent_id=agent_id,
+        override_persona=override_persona,
+        provider=provider,
+        model=model,
+        tool_profile=tool_profile,
+    )
+    rp = await _load_rp_setting_block(room_id=room_id, agent_id=agent_id)
+    rp_history = await _load_rp_history_block(
+        room_id=room_id,
+        agent_id=agent_id,
+        latest_user_text=latest_user_text,
+    )
+    dynamic = await _load_dynamic_block(
+        session_id=None,
+        agent_id=agent_id,
+        latest_user_text=latest_user_text,
+        provider=provider,
+        model=model,
+        room_id=room_id,
+    )
+    blocks = [block for block in [fixed, rp, rp_history, dynamic] if block and block.content.strip()]
+    return _build_prompt_result(blocks, provider=provider, model=model)
+
+
 async def build_system_prompt(
     session_id: Optional[str] = None,
     override_persona: Optional[str] = None,
     agent_id: Optional[str] = None,
 ) -> str:
-    parts = []
-    default_chat_prompt = await ai_runtime.resolve_prompt("chat")
+    """Compatibility wrapper for existing routes.
 
+    Existing callers still receive one string. Internally this now uses the
+    separated fixed and dynamic loaders so the cache-safe structure can evolve
+    without route migration.
+    """
+    resolved_agent = db.normalize_agent_id(agent_id)
+    latest_user_text = await _latest_user_text(session_id) if session_id else ""
+    if session_id:
+        built = await build_chat_prompt(
+            session_id=session_id,
+            agent_id=resolved_agent,
+            latest_user_text=latest_user_text,
+            override_persona=override_persona,
+            tool_profile="chat",
+        )
+        return "\n\n".join(block.content for block in built.blocks if block.content.strip())
+
+    fixed = await _load_fixed_block(
+        agent_id=resolved_agent,
+        override_persona=override_persona,
+        provider=None,
+        model=None,
+        tool_profile="chat",
+    )
+    dynamic = await _load_dynamic_block(
+        session_id=None,
+        agent_id=resolved_agent,
+        latest_user_text=latest_user_text,
+        provider=None,
+        model=None,
+        room_id=None,
+    )
+    return "\n\n".join(block.content for block in [fixed, dynamic] if block and block.content.strip())
+
+
+async def _load_fixed_block(
+    *,
+    agent_id: str,
+    override_persona: Optional[str],
+    provider: Optional[str],
+    model: Optional[str],
+    tool_profile: str,
+) -> PromptBlock:
+    resolved_agent = db.normalize_agent_id(agent_id)
+    parts: list[str] = []
+
+    default_chat_prompt = await ai_runtime.resolve_prompt("chat")
+    if default_chat_prompt:
+        parts.append("## Base system instruction\n" + default_chat_prompt)
+
+    persona = await _resolve_persona(agent_id=resolved_agent, override_persona=override_persona)
+    parts.append("## Agent persona\n" + persona)
+
+    static_format_rules = (
+        "## Static format rules\n"
+        "- Reply in the user's primary language unless the task needs another language.\n"
+        "- Keep continuity with the committed conversation context.\n"
+        "- Use tools only when the active tool profile allows them."
+    )
+    parts.append(static_format_rules)
+
+    tool_descriptions = _format_tool_descriptions(tool_profile=tool_profile)
+    if tool_descriptions:
+        parts.append("## Available tools\n" + tool_descriptions)
+
+    fixed_rules = (
+        "## Fixed behavior rules\n"
+        "- Be natural, direct, and context-aware.\n"
+        "- Respect stable user preferences, identity, plans, and long-running context.\n"
+        "- If facts are uncertain and tools are available, use tools instead of guessing.\n"
+        "- Do not treat dynamic state as fixed identity."
+    )
+    parts.append(fixed_rules)
+
+    content = "\n\n".join(part for part in parts if part.strip())
+    return PromptBlock(
+        name="fixed",
+        role="system",
+        content=content,
+        cache_scope="fixed",
+        cache_key_parts={
+            "prompt_builder_version": PROMPT_BUILDER_VERSION,
+            "agent_id": resolved_agent,
+            "provider": str(provider or ""),
+            "model": str(model or ""),
+            "tool_profile": _normalize_tool_profile(tool_profile),
+            "tool_schema_revision": _tool_schema_revision(tool_profile),
+        },
+    )
+
+
+async def _load_dynamic_block(
+    *,
+    session_id: Optional[str],
+    agent_id: str,
+    latest_user_text: str,
+    provider: Optional[str],
+    model: Optional[str],
+    room_id: Optional[str] = None,
+    tool_results: Optional[list[Any]] = None,
+    runtime_hints: Optional[list[str]] = None,
+) -> PromptBlock:
+    resolved_agent = db.normalize_agent_id(agent_id)
+    parts: list[str] = []
+    sources: list[str] = []
+
+    env_text = _build_environment_text()
+    if env_text:
+        parts.append(env_text)
+        sources.append("current_time")
+        if "weather" in _env_cache:
+            sources.append("weather")
+        if "location" in _env_cache:
+            sources.append("location")
+
+    memory_context = await _load_memory_context(
+        session_id=session_id,
+        agent_id=resolved_agent,
+        query_text=latest_user_text,
+    )
+    if memory_context:
+        parts.append("## Retrieved memory\n" + memory_context)
+        sources.append("memory")
+
+    diary_context = await _load_diary_context(agent_id=resolved_agent)
+    if diary_context:
+        parts.append("## Diary snippets\n" + diary_context)
+        sources.append("diary")
+
+    companion_state = await _load_companion_state_context(agent_id=resolved_agent)
+    if companion_state:
+        parts.append("## Dynamic companion state\n" + companion_state)
+        sources.append("companion_state")
+
+    if runtime_hints:
+        hints = [str(item).strip() for item in runtime_hints if str(item).strip()]
+        if hints:
+            parts.append("## Runtime hints\n" + "\n".join(f"- {item}" for item in hints))
+            sources.append("runtime_hints")
+
+    if tool_results:
+        rendered = _render_tool_results(tool_results)
+        if rendered:
+            parts.append("## Tool results\n" + rendered)
+            sources.append("tool_results")
+
+    latest = str(latest_user_text or "").strip()
+    if latest:
+        parts.append("## Latest user message\n" + latest)
+        sources.append("latest_user_text")
+
+    return PromptBlock(
+        name="dynamic",
+        role="user",
+        content="\n\n".join(part for part in parts if part.strip()),
+        cache_scope="dynamic",
+        cache_key_parts={
+            "agent_id": resolved_agent,
+            "session_id": str(session_id or ""),
+            "rp_room_id": str(room_id or ""),
+            "provider": str(provider or ""),
+            "model": str(model or ""),
+            "dynamic_sources": ",".join(sources),
+        },
+    )
+
+
+async def _load_summary_block(session_id: str, agent_id: str) -> Optional[PromptBlock]:
+    try:
+        summaries = await db.get_context_summaries(
+            session_id=session_id,
+            limit=max(1, settings.prompt_summary_items),
+            agent_id=agent_id,
+        )
+    except Exception as exc:
+        logger.warning("Read context summaries failed: %s", exc)
+        summaries = []
+
+    lines: list[str] = []
+    latest_revision = ""
+    for item in reversed(summaries):
+        summary = _clip_text(str(item.get("summary") or "").strip(), max(80, settings.prompt_summary_item_max_chars))
+        if not summary:
+            continue
+        lines.append(f"- {summary}")
+        latest_revision = str(item.get("created_at") or item.get("updated_at") or item.get("id") or latest_revision)
+
+    if not lines:
+        return None
+
+    return PromptBlock(
+        name="summary",
+        role="system",
+        content="## Conversation summary\n" + "\n".join(lines),
+        cache_scope="summary",
+        cache_key_parts={
+            "session_id": str(session_id or ""),
+            "agent_id": db.normalize_agent_id(agent_id),
+            "summary_revision": latest_revision,
+        },
+    )
+
+
+async def _load_history_block(
+    *,
+    session_id: str,
+    agent_id: str,
+    latest_user_text: str,
+) -> Optional[PromptBlock]:
+    try:
+        rows = await db.get_recent_messages(
+            session_id=session_id,
+            limit=max(1, settings.chat_recent_messages_limit),
+        )
+    except Exception as exc:
+        logger.warning("Read legacy recent history failed: %s", exc)
+        rows = []
+
+    latest = str(latest_user_text or "").strip()
+    messages: list[dict[str, str]] = []
+    for row in rows:
+        role = str(row.get("role") or "").strip()
+        content = str(row.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        if latest and role == "user" and content == latest:
+            continue
+        messages.append({"role": role, "content": content})
+
+    if not messages:
+        return None
+
+    rendered = "\n".join(
+        f"[{item['role']}] {_clip_text(item['content'], max(80, settings.prompt_summary_item_max_chars))}"
+        for item in messages
+    )
+    return PromptBlock(
+        name="history_b",
+        role="system",
+        content="## Recent committed history\n" + rendered,
+        cache_scope="history",
+        cache_key_parts={
+            "session_id": str(session_id or ""),
+            "agent_id": db.normalize_agent_id(agent_id),
+            "history_b_cycle_id": "legacy",
+            "history_source": "legacy_recent_messages",
+            "history_message_count": str(len(messages)),
+        },
+    )
+
+
+async def _load_rp_setting_block(room_id: str, agent_id: str) -> Optional[PromptBlock]:
+    try:
+        room = await db.get_rp_room(room_id)
+    except Exception as exc:
+        logger.warning("Read RP room failed: %s", exc)
+        room = None
+    if not room:
+        return None
+
+    content = (
+        "## RP room setting\n"
+        f"- world_setting: {room.get('world_setting', '')}\n"
+        f"- user_role: {room.get('user_role', '')}\n"
+        f"- assistant_role: {room.get('ai_role', '')}\n\n"
+        "## RP rules\n"
+        "- Stay in the room setting.\n"
+        "- Do not call tools unless the RP tool profile is explicitly changed.\n"
+        "- Keep normal chat history separate from RP room history."
+    )
+    return PromptBlock(
+        name="rp_setting",
+        role="system",
+        content=content,
+        cache_scope="rp_room",
+        cache_key_parts={
+            "rp_room_id": str(room_id or ""),
+            "agent_id": db.normalize_agent_id(agent_id),
+            "updated_at": str(room.get("updated_at") or room.get("created_at") or ""),
+        },
+    )
+
+
+async def _load_rp_history_block(
+    *,
+    room_id: str,
+    agent_id: str,
+    latest_user_text: str,
+) -> Optional[PromptBlock]:
+    try:
+        rows = await db.get_recent_rp_messages(
+            room_id=room_id,
+            limit=max(1, settings.chat_recent_messages_limit),
+        )
+    except Exception as exc:
+        logger.warning("Read RP history failed: %s", exc)
+        rows = []
+
+    latest = str(latest_user_text or "").strip()
+    messages: list[dict[str, str]] = []
+    for row in rows:
+        role = str(row.get("role") or "").strip()
+        content = str(row.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        if latest and role == "user" and content == latest:
+            continue
+        messages.append({"role": role, "content": content})
+
+    if not messages:
+        return None
+
+    rendered = "\n".join(
+        f"[{item['role']}] {_clip_text(item['content'], max(80, settings.prompt_summary_item_max_chars))}"
+        for item in messages
+    )
+    return PromptBlock(
+        name="rp_history",
+        role="system",
+        content="## Recent committed RP history\n" + rendered,
+        cache_scope="rp_history",
+        cache_key_parts={
+            "rp_room_id": str(room_id or ""),
+            "agent_id": db.normalize_agent_id(agent_id),
+            "rp_history_source": "rp_messages",
+            "rp_history_message_count": str(len(messages)),
+        },
+    )
+
+
+def _build_prompt_result(blocks: list[PromptBlock], *, provider: Optional[str], model: Optional[str]) -> BuiltPrompt:
+    fixed_content = "\n\n".join(block.content for block in blocks if block.name == "fixed")
+    fixed_block_hash = _hash_text(fixed_content)
+    messages = [{"role": block.role, "content": block.content} for block in blocks if block.content.strip()]
+    summary_block = next((block for block in blocks if block.name == "summary"), None)
+    history_block = next((block for block in blocks if block.name == "history_b"), None)
+    rp_setting_block = next((block for block in blocks if block.name == "rp_setting"), None)
+    rp_history_block = next((block for block in blocks if block.name == "rp_history"), None)
+    dynamic_block = next((block for block in blocks if block.name == "dynamic"), None)
+    debug = {
+        "block_order": [block.name for block in blocks],
+        "block_token_estimates": {block.name: _estimate_tokens(block.content) for block in blocks},
+        "fixed_block_hash": fixed_block_hash,
+        "summary_revision": (summary_block.cache_key_parts.get("summary_revision", "") if summary_block else ""),
+        "history_a_cycle_id": "",
+        "history_b_cycle_id": (history_block.cache_key_parts.get("history_b_cycle_id", "") if history_block else ""),
+        "history_message_count": int(history_block.cache_key_parts.get("history_message_count", "0")) if history_block else 0,
+        "history_source": (history_block.cache_key_parts.get("history_source", "") if history_block else ""),
+        "history_token_estimate": _estimate_tokens(history_block.content) if history_block else 0,
+        "rp_history_message_count": int(rp_history_block.cache_key_parts.get("rp_history_message_count", "0")) if rp_history_block else 0,
+        "rp_history_source": (rp_history_block.cache_key_parts.get("rp_history_source", "") if rp_history_block else ""),
+        "rp_history_token_estimate": _estimate_tokens(rp_history_block.content) if rp_history_block else 0,
+        "rp_room_id": (
+            (rp_history_block.cache_key_parts.get("rp_room_id", "") if rp_history_block else "")
+            or (rp_setting_block.cache_key_parts.get("rp_room_id", "") if rp_setting_block else "")
+            or (dynamic_block.cache_key_parts.get("rp_room_id", "") if dynamic_block else "")
+        ),
+        "dynamic_sources": (
+            dynamic_block.cache_key_parts.get("dynamic_sources", "").split(",")
+            if dynamic_block and dynamic_block.cache_key_parts.get("dynamic_sources")
+            else []
+        ),
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+    }
+    return BuiltPrompt(blocks=blocks, messages=messages, debug=debug)
+
+
+async def _resolve_persona(agent_id: str, override_persona: Optional[str] = None) -> str:
     persona = (override_persona or "").strip()
     if not persona and agent_id:
         try:
             persona_row = await db.get_agent_persona(agent_id)
             persona = str(persona_row.get("persona") or "").strip()
         except Exception as exc:
-            logger.warning("读取 agent persona 失败: %s", exc)
+            logger.warning("Read agent persona failed: %s", exc)
     if not persona:
-        persona = getattr(settings, "persona_description", None)
+        persona = str(getattr(settings, "persona_description", "") or "").strip()
     if not persona:
-        persona = await _load_deep_persona(agent_id=agent_id)
+        persona = await _load_deep_persona(agent_id=agent_id) or ""
     if not persona:
-        persona = f"你是 {getattr(settings, 'persona_name', 'Pyro')}，一个温暖、真实、会记住用户信息的 AI 伙伴。"
-    parts.append(f"## 你的身份\n{persona}")
-
-    now = datetime.now()
-    weekday_map = {
-        0: "星期一",
-        1: "星期二",
-        2: "星期三",
-        3: "星期四",
-        4: "星期五",
-        5: "星期六",
-        6: "星期日",
-    }
-    env_lines = [f"- 时间：{now.strftime('%Y-%m-%d %H:%M')} {weekday_map.get(now.weekday(), '')}"]
-    if "weather" in _env_cache:
-        env_lines.append(f"- 天气：{_env_cache['weather']}")
-    if "location" in _env_cache:
-        env_lines.append(f"- 位置：{_env_cache['location']}")
-    parts.append("## 当前环境\n" + "\n".join(env_lines))
-
-    memory_context = await _load_memory_context(session_id=session_id, agent_id=agent_id)
-    if memory_context:
-        parts.append(f"## 你记住的事情\n{memory_context}")
-
-    companion_state = await _load_companion_state_context(agent_id=agent_id)
-    if companion_state:
-        parts.append(companion_state)
-
-    tool_descriptions = _format_tool_descriptions()
-    if tool_descriptions:
-        parts.append(f"## 可用工具\n{tool_descriptions}")
-
-    if default_chat_prompt:
-        parts.append(f"## 默认聊天指引\n{default_chat_prompt}")
-
-    parts.append(
-        "## 行为指引\n"
-        "- 用自然、亲切的中文交流。\n"
-        "- 关注用户提到的重要偏好、身份、计划与长期经历。\n"
-        "- 不确定的事实优先调用工具或搜索，而不是硬猜。\n"
-        "- 关注用户情绪，但不要过度表演。"
-    )
-    return "\n\n".join(parts)
+        persona = (
+            f"You are {getattr(settings, 'persona_name', 'Pyro')}, "
+            "a warm, direct companion who remembers useful user context."
+        )
+    return persona
 
 
 async def _load_deep_persona(agent_id: Optional[str] = None) -> Optional[str]:
@@ -263,15 +713,12 @@ async def _load_deep_persona(agent_id: Optional[str] = None) -> Optional[str]:
             layer_char_limit=max(60, settings.prompt_memory_core_max_chars),
             item_char_limit=max(40, settings.prompt_memory_item_max_chars),
         )
-        if not lines:
-            return None
         rendered_lines = [f"- {line.get('text', '')}" for line in lines if line.get("text")]
         if not rendered_lines:
             return None
         return "User profile facts:\n" + "\n".join(rendered_lines)
-        return "以下是关于用户的稳定信息：\n" + "\n".join(f"- {line}" for line in lines)
     except Exception as exc:
-        logger.warning("读取人格记忆失败: %s", exc)
+        logger.warning("Read persona memory failed: %s", exc)
         return None
 
 
@@ -279,13 +726,35 @@ async def _load_companion_state_context(agent_id: Optional[str] = None) -> Optio
     try:
         return _build_companion_state_text(await db.get_companion_state(agent_id=agent_id))
     except Exception as exc:
-        logger.warning("读取 companion state 失败: %s", exc)
+        logger.warning("Read companion state failed: %s", exc)
         return None
 
 
-async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optional[str] = None) -> Optional[str]:
+async def _load_diary_context(agent_id: str) -> Optional[str]:
     try:
-        query_text = await _latest_user_text(session_id) if session_id else ""
+        entries = await db.list_diary(agent_id=agent_id, limit=3)
+    except Exception as exc:
+        logger.warning("Read diary snippets failed: %s", exc)
+        return None
+    lines: list[str] = []
+    for entry in entries[:3]:
+        title = str(entry.get("title") or "").strip()
+        content = _clip_text(str(entry.get("content") or "").strip(), 120)
+        if not title and not content:
+            continue
+        prefix = f"{title}: " if title else ""
+        lines.append(f"- {prefix}{content}")
+    return "\n".join(lines) if lines else None
+
+
+async def _load_memory_context(
+    session_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    query_text: Optional[str] = None,
+) -> Optional[str]:
+    try:
+        if query_text is None:
+            query_text = await _latest_user_text(session_id) if session_id else ""
 
         core = await db.list_memories(
             category="core_profile",
@@ -303,27 +772,26 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
         )
 
         deep_related = await _retrieve_related_memories(
-            query_text=query_text,
+            query_text=query_text or "",
             category="deep",
             limit=max(1, settings.prompt_memory_deep_items * 3),
             agent_id=agent_id,
         )
         ephemeral_related = await _retrieve_related_memories(
-            query_text=query_text,
+            query_text=query_text or "",
             category="ephemeral",
             limit=max(1, settings.prompt_memory_ephemeral_items * 3),
             agent_id=agent_id,
         )
 
-        core = sorted(_dedupe_memories(core), key=lambda item: _memory_rank(item, query_text), reverse=True)
-        recent = sorted(_dedupe_memories(recent), key=lambda item: _memory_rank(item, query_text), reverse=True)
-        deep_related = sorted(_dedupe_memories(deep_related), key=lambda item: _memory_rank(item, query_text), reverse=True)
-        ephemeral_related = sorted(_dedupe_memories(ephemeral_related), key=lambda item: _memory_rank(item, query_text), reverse=True)
+        core = sorted(_dedupe_memories(core), key=lambda item: _memory_rank(item, query_text or ""), reverse=True)
+        recent = sorted(_dedupe_memories(recent), key=lambda item: _memory_rank(item, query_text or ""), reverse=True)
+        deep_related = sorted(_dedupe_memories(deep_related), key=lambda item: _memory_rank(item, query_text or ""), reverse=True)
+        ephemeral_related = sorted(_dedupe_memories(ephemeral_related), key=lambda item: _memory_rank(item, query_text or ""), reverse=True)
 
-        layer_sections: list[tuple[str, list[dict]]] = []
-        layer_sections.append(
+        layer_sections: list[tuple[str, list[dict]]] = [
             (
-                "稳定画像",
+                "Stable profile",
                 _take_layer_budget(
                     core,
                     item_limit=max(1, settings.prompt_memory_core_items),
@@ -331,11 +799,9 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
                     item_char_limit=max(30, settings.prompt_memory_item_max_chars),
                     current_agent_id=agent_id,
                 ),
-            )
-        )
-        layer_sections.append(
+            ),
             (
-                "近期延续事项",
+                "Recent pending",
                 _take_layer_budget(
                     recent,
                     item_limit=max(1, settings.prompt_memory_recent_items),
@@ -343,11 +809,9 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
                     item_char_limit=max(30, settings.prompt_memory_item_max_chars),
                     current_agent_id=agent_id,
                 ),
-            )
-        )
-        layer_sections.append(
+            ),
             (
-                "长期相关记忆",
+                "Related long-term memory",
                 _take_layer_budget(
                     deep_related,
                     item_limit=max(0, settings.prompt_memory_deep_items),
@@ -355,13 +819,13 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
                     item_char_limit=max(24, settings.prompt_memory_item_max_chars),
                     current_agent_id=agent_id,
                 ),
-            )
-        )
+            ),
+        ]
 
-        if _should_inject_ephemeral(ephemeral_related, query_text):
+        if _should_inject_ephemeral(ephemeral_related, query_text or ""):
             layer_sections.append(
                 (
-                    "临时上下文",
+                    "Ephemeral context",
                     _take_layer_budget(
                         ephemeral_related,
                         item_limit=max(0, settings.prompt_memory_ephemeral_items),
@@ -383,7 +847,7 @@ async def _load_memory_context(session_id: Optional[str] = None, agent_id: Optio
                 logger.warning("Prompt memory touch failed: %s", exc)
         return merged_text
     except Exception as exc:
-        logger.warning("读取记忆上下文失败: %s", exc)
+        logger.warning("Read memory context failed: %s", exc)
         return None
 
 
@@ -442,13 +906,67 @@ def _should_inject_ephemeral(memories: list[dict], query_text: str) -> bool:
     return numeric_score >= 0.78 or overlap >= 2
 
 
-def _format_tool_descriptions() -> str:
-    if not TOOLS_SCHEMA:
+def _build_environment_text() -> str:
+    now = datetime.now()
+    env_lines = [f"- time: {now.strftime('%Y-%m-%d %H:%M')}, weekday={now.strftime('%A')}"]
+    if "weather" in _env_cache:
+        env_lines.append(f"- weather: {_env_cache['weather']}")
+    if "location" in _env_cache:
+        env_lines.append(f"- location: {_env_cache['location']}")
+    return "## Current environment\n" + "\n".join(env_lines)
+
+
+def _render_tool_results(tool_results: list[Any]) -> str:
+    lines: list[str] = []
+    max_chars = max(80, settings.tool_result_max_chars)
+    for index, result in enumerate(tool_results, start=1):
+        if isinstance(result, str):
+            text = result
+        else:
+            try:
+                text = json.dumps(result, ensure_ascii=False)
+            except Exception:
+                text = str(result)
+        text = _clip_text(text.strip(), max_chars)
+        if text:
+            lines.append(f"- tool_result_{index}: {text}")
+    return "\n".join(lines)
+
+
+def _normalize_tool_profile(tool_profile: str) -> str:
+    value = str(tool_profile or "chat").strip().lower()
+    if value not in {"chat", "rp", "summary", "proactive"}:
+        return "chat"
+    return value
+
+
+def _tools_for_profile(tool_profile: str) -> list[dict]:
+    profile = _normalize_tool_profile(tool_profile)
+    if profile == "rp":
+        return []
+    if profile == "summary":
+        return []
+    if profile == "proactive":
+        allowed = {"get_current_time", "list_memories", "search_memories", "get_memory_stats"}
+        return [tool for tool in TOOLS_SCHEMA if (tool.get("function") or {}).get("name") in allowed]
+    if len(TOOLS_SCHEMA) <= 1:
+        return TOOLS_SCHEMA[:]
+    max_chat_tools = min(max(1, settings.prompt_tool_count_max), len(TOOLS_SCHEMA) - 1)
+    return TOOLS_SCHEMA[:max_chat_tools]
+
+
+def _tool_schema_revision(tool_profile: str) -> str:
+    names = [(tool.get("function") or {}).get("name", "") for tool in _tools_for_profile(tool_profile)]
+    return _hash_text("|".join(sorted(str(name) for name in names if name)))[:16]
+
+
+def _format_tool_descriptions(tool_profile: str = "chat") -> str:
+    tools = _tools_for_profile(tool_profile)
+    if not tools:
         return ""
     lines = []
-    max_tools = max(1, settings.prompt_tool_count_max)
     max_desc_chars = max(20, settings.prompt_tool_desc_max_chars)
-    for tool in TOOLS_SCHEMA[:max_tools]:
+    for tool in tools:
         func = tool.get("function", {})
         name = func.get("name", "?")
         desc = str(func.get("description", ""))

@@ -132,6 +132,9 @@ class AppConfig:
     prompt_companion_state_max_chars: int = 140
     prompt_tool_count_max: int = 8
     prompt_tool_desc_max_chars: int = 80
+    prompt_builder_v2_enabled: bool = True
+    rp_prompt_builder_v2_enabled: bool = True
+    prompt_debug: bool = False
     summary_trigger_messages: int = 24
     summary_keep_recent_messages: int = 12
     summary_min_batch_messages: int = 8
@@ -281,6 +284,11 @@ class AppConfig:
             prompt_companion_state_max_chars=int(os.getenv("PROMPT_COMPANION_STATE_MAX_CHARS", "140")),
             prompt_tool_count_max=int(os.getenv("PROMPT_TOOL_COUNT_MAX", "8")),
             prompt_tool_desc_max_chars=int(os.getenv("PROMPT_TOOL_DESC_MAX_CHARS", "80")),
+            prompt_builder_v2_enabled=os.getenv("PROMPT_BUILDER_V2_ENABLED", "true").lower()
+            in ("1", "true", "yes", "on"),
+            rp_prompt_builder_v2_enabled=os.getenv("RP_PROMPT_BUILDER_V2_ENABLED", "true").lower()
+            in ("1", "true", "yes", "on"),
+            prompt_debug=os.getenv("PROMPT_DEBUG", "false").lower() in ("1", "true", "yes", "on"),
             summary_trigger_messages=int(os.getenv("SUMMARY_TRIGGER_MESSAGES", "24")),
             summary_keep_recent_messages=int(os.getenv("SUMMARY_KEEP_RECENT_MESSAGES", "12")),
             summary_min_batch_messages=int(os.getenv("SUMMARY_MIN_BATCH_MESSAGES", "8")),

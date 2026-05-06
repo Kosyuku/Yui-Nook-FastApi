@@ -17,7 +17,7 @@ from models import router as model_router
 from models import OpenAICompatAdapter, EchoAdapter, ADAPTER_MAP
 from config import ProviderConfig, settings
 from tools import execute_tool_with_guard, TOOL_EXECUTORS
-from prompt_builder import build_system_prompt
+from prompt_builder import build_chat_prompt, build_rp_prompt, build_system_prompt
 
 logger = logging.getLogger(__name__)
 api = APIRouter(prefix="/api")
@@ -131,6 +131,23 @@ async def _load_saved_chat_provider() -> dict[str, str] | None:
         "api_path": str(resolved.get("api_path") or ""),
         "api_key": str(resolved.get("api_key") or ""),
     }
+
+
+def _prompt_debug_payload(debug: dict) -> dict:
+    keys = (
+        "block_order",
+        "fixed_block_hash",
+        "history_message_count",
+        "history_source",
+        "rp_history_message_count",
+        "rp_history_source",
+        "rp_history_token_estimate",
+        "rp_room_id",
+        "dynamic_sources",
+        "provider",
+        "model",
+    )
+    return {key: debug.get(key) for key in keys}
 
 
 async def _auto_capture_memory_from_user_text(user_text: str, agent_id: str | None = None):
@@ -521,11 +538,6 @@ async def chat(body: ChatRequest):
         logger.warning(f"上下文摘要触发失败: {e}")
 
     # 2. 获取最近上下文
-    recent = await db.get_recent_messages(
-        body.session_id,
-        limit=max(1, settings.chat_recent_messages_limit),
-    )
-
     # 3. 解析适配器
     resolved = await _resolve_adapter(body)
     if len(resolved) == 3:
@@ -539,15 +551,47 @@ async def chat(body: ChatRequest):
     # 4. SSE 流式返回
     async def event_generator():
         # 构建系统提示词
-        system_prompt = await build_system_prompt(
-            session_id=body.session_id,
-            override_persona=(body.persona or "").strip() or None,
-            agent_id=resolved_agent_id,
-        )
+        if settings.prompt_builder_v2_enabled:
+            built_prompt = await build_chat_prompt(
+                session_id=body.session_id,
+                agent_id=resolved_agent_id,
+                latest_user_text=body.content,
+                override_persona=(body.persona or "").strip() or None,
+                provider=str(model_info.get("provider") or ""),
+                model=str(model_info.get("model") or ""),
+                tool_profile="chat",
+            )
+            if settings.prompt_debug:
+                logger.info("Chat prompt debug: %s", _prompt_debug_payload(built_prompt.debug))
         
         # 将系统消息插在最前面
-        current_messages = [{"role": "system", "content": system_prompt}] + recent.copy()
+            current_messages = [dict(message) for message in built_prompt.messages]
+        else:
+            system_prompt = await build_system_prompt(
+                session_id=body.session_id,
+                override_persona=(body.persona or "").strip() or None,
+                agent_id=resolved_agent_id,
+            )
+            recent = await db.get_recent_messages(
+                body.session_id,
+                limit=max(1, settings.chat_recent_messages_limit),
+            )
+            if settings.prompt_debug:
+                logger.info(
+                    "Chat prompt debug: %s",
+                    {
+                        "block_order": ["legacy_system", "legacy_recent"],
+                        "fixed_block_hash": "",
+                        "history_message_count": len(recent),
+                        "history_source": "legacy_recent_messages",
+                        "dynamic_sources": [],
+                        "provider": str(model_info.get("provider") or ""),
+                        "model": str(model_info.get("model") or ""),
+                    },
+                )
+            current_messages = [{"role": "system", "content": system_prompt}] + recent.copy()
         reasoning_buffer: list[str] = []
+        usage_info = {"status": "not available"}
 
         while True:
             full_response = []
@@ -579,6 +623,13 @@ async def chat(body: ChatRequest):
                                 "event": "thinking",
                                 "data": _json.dumps({"thinking": thinking_text}, ensure_ascii=False),
                             }
+                    elif isinstance(chunk, dict) and chunk.get("type") == "usage":
+                        usage_info = {
+                            "cached_tokens": chunk.get("cached_tokens"),
+                            "prompt_tokens": chunk.get("prompt_tokens"),
+                            "completion_tokens": chunk.get("completion_tokens"),
+                            "total_tokens": chunk.get("total_tokens"),
+                        }
                     elif isinstance(chunk, str):
                         full_response.append(chunk)
                         yield {"event": "message", "data": chunk}
@@ -722,6 +773,12 @@ async def chat(body: ChatRequest):
                     content=complete_text,
                     status="done",
                 )
+                logger.info(
+                    "Chat usage/cache tokens: provider=%s model=%s usage=%s",
+                    model_info.get("provider", "?"),
+                    model_info.get("model", "?"),
+                    usage_info,
+                )
 
             yield {"event": "done", "data": "[DONE]"}
             break
@@ -741,11 +798,6 @@ async def rp_chat(body: RPChatRequest):
         raise HTTPException(status_code=400, detail=str(exc))
     await db.add_rp_message(body.room_id, "user", body.content)
 
-    recent = await db.get_recent_rp_messages(
-        body.room_id,
-        limit=max(1, settings.chat_recent_messages_limit),
-    )
-
     chat_like_body = ChatRequest(
         session_id="rp",
         content=body.content,
@@ -763,26 +815,62 @@ async def rp_chat(body: RPChatRequest):
     else:
         adapter, model_info = resolved
         override_kwargs = {}
-    override_kwargs["tools"] = []
-    override_kwargs["tool_choice"] = "none"
+    if not isinstance(adapter, EchoAdapter):
+        override_kwargs["tools"] = []
+        override_kwargs["tool_choice"] = "none"
 
     async def event_generator():
-        base_prompt = await build_system_prompt(
-            session_id=None,
-            override_persona=(body.persona or "").strip() or None,
-            agent_id=agent_id,
-        )
-        rp_prompt = (
-            "## RP房间设定\n"
-            f"- 世界设定：{room.get('world_setting', '')}\n"
-            f"- 用户角色：{room.get('user_role', '')}\n"
-            f"- 你的角色：{room.get('ai_role', '')}\n\n"
-            "## RP规则\n"
-            "- 你正在这个房间设定中与用户进行角色扮演。\n"
-            "- 回复时保持设定一致，不要跳出角色和世界观。\n"
-            "- 不要调用工具，不要转成普通助手口吻。\n"
-        )
-        current_messages = [{"role": "system", "content": f"{base_prompt}\n\n{rp_prompt}"}] + recent.copy()
+        if settings.rp_prompt_builder_v2_enabled:
+            built_prompt = await build_rp_prompt(
+                room_id=body.room_id,
+                agent_id=agent_id,
+                latest_user_text=body.content,
+                override_persona=(body.persona or "").strip() or None,
+                provider=str(model_info.get("provider") or ""),
+                model=str(model_info.get("model") or ""),
+                tool_profile="rp",
+            )
+            if settings.prompt_debug:
+                logger.info("RP prompt debug: %s", _prompt_debug_payload(built_prompt.debug))
+            current_messages = [dict(message) for message in built_prompt.messages]
+        else:
+            base_prompt = await build_system_prompt(
+                session_id=None,
+                override_persona=(body.persona or "").strip() or None,
+                agent_id=agent_id,
+            )
+            recent = await db.get_recent_rp_messages(
+                body.room_id,
+                limit=max(1, settings.chat_recent_messages_limit),
+            )
+            rp_prompt = (
+                "## RP room setting\n"
+                f"- World setting: {room.get('world_setting', '')}\n"
+                f"- User role: {room.get('user_role', '')}\n"
+                f"- Assistant role: {room.get('ai_role', '')}\n\n"
+                "## RP rules\n"
+                "- Stay inside this room setting and roleplay with the user.\n"
+                "- Keep the reply consistent with the role and world setting.\n"
+                "- Do not call tools or switch into normal assistant mode.\n"
+            )
+            if settings.prompt_debug:
+                logger.info(
+                    "RP prompt debug: %s",
+                    {
+                        "block_order": ["legacy_system", "legacy_rp_setting", "legacy_recent"],
+                        "fixed_block_hash": "",
+                        "history_message_count": 0,
+                        "history_source": "",
+                        "rp_history_message_count": len(recent),
+                        "rp_history_source": "legacy_recent_rp_messages",
+                        "rp_history_token_estimate": 0,
+                        "rp_room_id": body.room_id,
+                        "dynamic_sources": [],
+                        "provider": str(model_info.get("provider") or ""),
+                        "model": str(model_info.get("model") or ""),
+                    },
+                )
+            current_messages = [{"role": "system", "content": f"{base_prompt}\n\n{rp_prompt}"}] + recent.copy()
         full_response: list[str] = []
         try:
             async for chunk in adapter.chat_stream(
@@ -805,4 +893,17 @@ async def rp_chat(body: RPChatRequest):
             yield {"event": "error", "data": str(e)}
             return
 
+        complete_text = "".join(full_response).strip()
+        if complete_text:
+            await db.add_rp_message(
+                body.room_id,
+                "assistant",
+                complete_text,
+                model=f"{model_info.get('provider', '?')}/{model_info.get('model', '?')}",
+            )
+
+        yield {"event": "done", "data": "[DONE]"}
+        return
         
+
+    return EventSourceResponse(event_generator())
