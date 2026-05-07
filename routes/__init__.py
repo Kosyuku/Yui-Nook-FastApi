@@ -173,6 +173,7 @@ def _usage_payload_from_chunk(chunk: dict) -> dict:
         "cached_tokens": chunk.get("cached_tokens"),
     }
     return {
+        "usage_chunk_received": True,
         "raw_usage": raw_usage,
         "cached_tokens": chunk.get("cached_tokens"),
         "prompt_tokens": chunk.get("prompt_tokens"),
@@ -195,7 +196,7 @@ async def _record_usage_if_available(
     if str(usage_info.get("status") or "").lower() == "not available":
         if settings.prompt_debug:
             logger.info(
-                "Model usage debug(%s): provider=%s model=%s status=not_available fixed_block_hash=%s block_order=%s",
+                "Model usage debug(%s): provider=%s model=%s usage_chunk_received=false status=not_available fixed_block_hash=%s block_order=%s",
                 mode,
                 provider,
                 model,
@@ -215,7 +216,14 @@ async def _record_usage_if_available(
         raw_usage=usage_info.get("raw_usage") if isinstance(usage_info, dict) else usage_info,
     )
     if settings.prompt_debug:
-        logger.info("Model usage debug(%s): %s", mode, usage_record or {"status": "record_failed"})
+        logger.info(
+            "Model usage debug(%s): %s",
+            mode,
+            {
+                "usage_chunk_received": True,
+                **(usage_record or {"status": "record_failed"}),
+            },
+        )
 
 
 async def _auto_capture_memory_from_user_text(user_text: str, agent_id: str | None = None):

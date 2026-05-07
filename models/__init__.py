@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from config import ProviderConfig
+from config import ProviderConfig, settings
 from tools import TOOLS_SCHEMA, TOOL_EXECUTORS
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,40 @@ def _join_base_url_and_path(base_url: str, api_path: str | None, prefer_response
     return f"{str(base_url or '').strip().rstrip('/')}{_normalize_api_path(api_path, prefer_responses=prefer_responses)}"
 
 
+def _looks_like_stream_options_rejection(error_detail: str) -> bool:
+    lowered = str(error_detail or "").lower()
+    return (
+        "stream_options" in lowered
+        or "include_usage" in lowered
+        or "unknown parameter" in lowered
+        or "unrecognized" in lowered
+        or "extra inputs are not permitted" in lowered
+    )
+
+
+def _usage_debug_payload(usage: dict[str, Any]) -> dict[str, Any]:
+    prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+    total_tokens = int(usage.get("total_tokens") or prompt_tokens + completion_tokens)
+    prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
+    cached_tokens = int(
+        prompt_details.get("cached_tokens")
+        or input_details.get("cached_tokens")
+        or usage.get("cached_tokens")
+        or 0
+    )
+    return {
+        "prompt_tokens": prompt_tokens,
+        "input_tokens": int(usage.get("input_tokens") or 0),
+        "completion_tokens": completion_tokens,
+        "output_tokens": int(usage.get("output_tokens") or 0),
+        "total_tokens": total_tokens,
+        "cached_tokens": cached_tokens,
+        "cache_hit_ratio": (cached_tokens / prompt_tokens) if prompt_tokens > 0 else 0.0,
+    }
+
+
 class ModelAdapter(ABC):
     """模型适配器基类"""
 
@@ -43,7 +77,7 @@ class ModelAdapter(ABC):
         self,
         messages: list[dict[str, str]],
         temperature: float = 0.7,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | dict[str, Any]]:
         """流式对话，逐 token 返回"""
         ...
 
@@ -60,7 +94,7 @@ class EchoAdapter(ModelAdapter):
         self,
         messages: list[dict[str, str]],
         temperature: float = 0.7,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | dict[str, Any]]:
         # 拿到最后一条用户消息
         user_msg = ""
         for msg in reversed(messages):
@@ -90,7 +124,7 @@ class OpenAICompatAdapter(ModelAdapter):
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         **kwargs,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | dict[str, Any]]:
         # 支持动态覆盖：前端设置页的 api_key / base_url / model 优先
         actual_api_key = kwargs.get("api_key") or self.config.api_key
         actual_base_url = (kwargs.get("base_url") or self.config.base_url).rstrip("/")
@@ -119,18 +153,32 @@ class OpenAICompatAdapter(ModelAdapter):
             "tools": kwargs.get("tools", TOOLS_SCHEMA),
             "tool_choice": kwargs.get("tool_choice", "auto"),
         }
+        include_usage = bool(kwargs.get("include_usage", True))
+        if include_usage and not prefer_responses_api:
+            payload["stream_options"] = {"include_usage": True}
 
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {actual_api_key}",
         }
 
-        try:
+        async def _stream_payload(request_payload: dict[str, Any]) -> AsyncIterator[str | dict[str, Any]]:
+            usage_chunk_received = False
             async with httpx.AsyncClient(timeout=90.0) as client:
-                async with client.stream("POST", url, json=payload, headers=headers) as response:
+                async with client.stream("POST", url, json=request_payload, headers=headers) as response:
                     if response.status_code != 200:
                         body = await response.aread()
                         error_detail = body.decode("utf-8", errors="replace")
+                        if "stream_options" in request_payload and _looks_like_stream_options_rejection(error_detail):
+                            logger.warning(
+                                "Provider %s rejected stream_options.include_usage; retrying without it",
+                                self.config.name,
+                            )
+                            retry_payload = dict(request_payload)
+                            retry_payload.pop("stream_options", None)
+                            async for retry_chunk in _stream_payload(retry_payload):
+                                yield retry_chunk
+                            return
                         logger.error(f"Provider {self.config.name} error: {response.status_code} {error_detail}")
                         yield f"\n\n❌ 模型调用失败 ({response.status_code}): {error_detail[:200]}"
                         return
@@ -144,11 +192,36 @@ class OpenAICompatAdapter(ModelAdapter):
                         try:
                             event = json.loads(data)
                             for chunk in self._extract_deltas(event, model_name=str(actual_model or "")):
-                                if chunk:
-                                    yield chunk
+                                if not chunk:
+                                    continue
+                                if isinstance(chunk, dict) and chunk.get("type") == "usage":
+                                    usage_chunk_received = True
+                                    if settings.prompt_debug:
+                                        logger.info(
+                                            "Provider usage chunk: %s",
+                                            {
+                                                "usage_chunk_received": True,
+                                                "provider": self.config.name,
+                                                "model": str(actual_model or ""),
+                                                **_usage_debug_payload(chunk.get("usage") or {}),
+                                            },
+                                        )
+                                yield chunk
                         except json.JSONDecodeError:
                             continue
+            if settings.prompt_debug and not usage_chunk_received:
+                logger.info(
+                    "Provider usage chunk: %s",
+                    {
+                        "usage_chunk_received": False,
+                        "provider": self.config.name,
+                        "model": str(actual_model or ""),
+                    },
+                )
 
+        try:
+            async for chunk in _stream_payload(payload):
+                yield chunk
         except httpx.TimeoutException:
             yield "\n\n❌ 请求超时，请检查网络或 API 配置"
         except httpx.ConnectError as e:
@@ -206,6 +279,10 @@ class OpenAICompatAdapter(ModelAdapter):
     def _extract_deltas(cls, event: dict[str, Any], *, model_name: str = "") -> list[str | dict[str, Any]]:
         """Extract text deltas, reasoning deltas, and tool calls from one SSE event."""
         outputs: list[str | dict[str, Any]] = []
+        usage = event.get("usage")
+        if isinstance(usage, dict) and usage:
+            outputs.append({"type": "usage", "usage": usage})
+
         choices = event.get("choices") or []
         if not choices:
             return outputs
