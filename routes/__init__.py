@@ -622,7 +622,15 @@ async def chat(body: ChatRequest):
         adapter, model_info = resolved
         override_kwargs = {}
 
-    logger.info(f"Chat request → adapter={model_info}, overrides={list(override_kwargs.keys())}")
+    logger.info(
+        "Chat request provider debug: %s",
+        {
+            "provider": str(model_info.get("provider") or ""),
+            "model": str(model_info.get("model") or ""),
+            "adapter_class": adapter.__class__.__name__,
+            "override_keys": [key for key in override_kwargs.keys() if key != "api_key"],
+        },
+    )
 
     # 4. SSE 流式返回
     async def event_generator():
@@ -912,6 +920,15 @@ async def rp_chat(body: RPChatRequest):
     if not isinstance(adapter, EchoAdapter):
         override_kwargs["tools"] = []
         override_kwargs["tool_choice"] = "none"
+    logger.info(
+        "RP request provider debug: %s",
+        {
+            "provider": str(model_info.get("provider") or ""),
+            "model": str(model_info.get("model") or ""),
+            "adapter_class": adapter.__class__.__name__,
+            "override_keys": [key for key in override_kwargs.keys() if key != "api_key"],
+        },
+    )
 
     async def event_generator():
         built_prompt = None

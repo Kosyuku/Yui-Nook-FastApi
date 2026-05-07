@@ -29,7 +29,56 @@ def _normalize_api_path(api_path: str | None, prefer_responses: bool = False) ->
 
 
 def _join_base_url_and_path(base_url: str, api_path: str | None, prefer_responses: bool = False) -> str:
-    return f"{str(base_url or '').strip().rstrip('/')}{_normalize_api_path(api_path, prefer_responses=prefer_responses)}"
+    base = str(base_url or "").strip().rstrip("/")
+    explicit_path = str(api_path or "").strip()
+    lowered = base.lower()
+    if not explicit_path and (
+        lowered.endswith("/chat/completions")
+        or lowered.endswith("/responses")
+        or lowered.endswith("/v1/chat/completions")
+        or lowered.endswith("/v1/responses")
+    ):
+        return base
+    return f"{base}{_normalize_api_path(explicit_path, prefer_responses=prefer_responses)}"
+
+
+def _provider_kind(provider: str, base_url: str, model: str) -> str:
+    haystack = " ".join([provider, base_url, model]).lower()
+    if "generativelanguage.googleapis.com" in haystack or "gemini" in provider.lower():
+        return "gemini"
+    if "anthropic" in haystack or "claude" in provider.lower():
+        return "anthropic"
+    if "openrouter" in haystack:
+        return "openrouter"
+    if "openai" in haystack:
+        return "openai"
+    return "openai-compatible"
+
+
+def _validate_provider_config(*, provider: str, base_url: str, model: str, final_url: str) -> str:
+    provider_value = str(provider or "").strip()
+    base_value = str(base_url or "").strip()
+    model_value = str(model or "").strip()
+    final_value = str(final_url or "").strip()
+    lowered_base = base_value.lower()
+    lowered_model = model_value.lower()
+    kind = _provider_kind(provider_value, base_value, model_value)
+
+    if not base_value:
+        return "base_url is empty"
+    if not model_value:
+        return "model is empty"
+    if "/models/" in lowered_base or ":generatecontent" in lowered_base:
+        return "base_url looks like a provider-native model endpoint; OpenAICompatAdapter expects an OpenAI-compatible base URL"
+    if lowered_model in lowered_base or lowered_model in final_value.lower():
+        return "model appears to be embedded in base_url/final URL"
+    if kind == "gemini" and any(marker in lowered_model for marker in ("claude", "anthropic/")):
+        return "Gemini provider/base_url is configured with a Claude/Anthropic model"
+    if kind == "anthropic" and ("generativelanguage.googleapis.com" in lowered_base or "gemini" in lowered_base):
+        return "Claude/Anthropic provider is configured with a Gemini base_url"
+    if kind == "gemini" and lowered_model.startswith(("openai/", "gpt-", "o1", "o3", "o4")):
+        return "Gemini provider/base_url is configured with an OpenAI model"
+    return ""
 
 
 def _looks_like_stream_options_rejection(error_detail: str) -> bool:
@@ -143,7 +192,24 @@ class OpenAICompatAdapter(ModelAdapter):
             prefer_responses=prefer_responses_api,
         )
 
-        logger.info(f"调用模型: {actual_model} @ {url}")
+        safe_debug = {
+            "provider": self.config.name,
+            "base_url": actual_base_url,
+            "model": actual_model,
+            "final_request_url": url,
+            "adapter_class": self.__class__.__name__,
+        }
+        logger.info("Provider request config: %s", safe_debug)
+        config_error = _validate_provider_config(
+            provider=self.config.name,
+            base_url=actual_base_url,
+            model=str(actual_model or ""),
+            final_url=url,
+        )
+        if config_error:
+            logger.error("Provider config sanity check failed: %s config=%s", config_error, safe_debug)
+            yield f"\n\n? Provider ????: {config_error}"
+            return
 
         payload = {
             "model": actual_model,
