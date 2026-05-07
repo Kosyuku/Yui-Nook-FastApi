@@ -840,6 +840,7 @@ def _build_prompt_result(
     rp_history_block = next((block for block in blocks if block.name == "rp_history"), None)
     dynamic_block = next((block for block in blocks if block.name == "dynamic"), None)
     debug = {
+        "prompt_builder_version": PROMPT_BUILDER_VERSION,
         "block_order": [block.name for block in blocks],
         "block_token_estimates": {block.name: _estimate_tokens(block.content) for block in blocks},
         "fixed_block_hash": fixed_block_hash,

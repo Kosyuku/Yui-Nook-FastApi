@@ -188,7 +188,8 @@ CREATE INDEX IF NOT EXISTS idx_memories_temperature
 
 CREATE TABLE IF NOT EXISTS media_items (
     id               TEXT PRIMARY KEY,
-    agent_id         TEXT NOT NULL REFERENCES agents(agent_id),
+    owner_type       TEXT NOT NULL DEFAULT 'user',
+    agent_id         TEXT REFERENCES agents(agent_id),
     type             TEXT NOT NULL DEFAULT 'other',
     title            TEXT NOT NULL DEFAULT '',
     artist           TEXT NOT NULL DEFAULT '',
@@ -207,6 +208,8 @@ CREATE TABLE IF NOT EXISTS media_items (
 
 CREATE INDEX IF NOT EXISTS idx_media_items_agent_type
     ON media_items(agent_id, type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_items_owner_type
+    ON media_items(owner_type, type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_media_items_type_created
     ON media_items(type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_media_items_storage_key
@@ -244,6 +247,28 @@ CREATE TABLE IF NOT EXISTS conversation_partitions (
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_partitions_lookup
     ON conversation_partitions(agent_id, session_id, rp_room_id, mode);
+
+CREATE TABLE IF NOT EXISTS model_usage_events (
+    id                     TEXT PRIMARY KEY,
+    agent_id               TEXT DEFAULT '',
+    session_id             TEXT DEFAULT '',
+    rp_room_id             TEXT DEFAULT '',
+    mode                   TEXT NOT NULL DEFAULT 'chat',
+    provider               TEXT DEFAULT '',
+    model                  TEXT DEFAULT '',
+    prompt_builder_version TEXT DEFAULT '',
+    fixed_block_hash       TEXT DEFAULT '',
+    block_order            TEXT NOT NULL DEFAULT '[]',
+    prompt_tokens          INTEGER NOT NULL DEFAULT 0,
+    completion_tokens      INTEGER NOT NULL DEFAULT 0,
+    total_tokens           INTEGER NOT NULL DEFAULT 0,
+    cached_tokens          INTEGER NOT NULL DEFAULT 0,
+    cache_hit_ratio        REAL NOT NULL DEFAULT 0,
+    raw_usage              TEXT NOT NULL DEFAULT '{}',
+    created_at             TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_model_usage_events_lookup
+    ON model_usage_events(agent_id, session_id, rp_room_id, mode, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS todos (
     id          TEXT PRIMARY KEY,
@@ -1987,6 +2012,123 @@ async def _sqlite_column_exists(db: aiosqlite.Connection, table: str, column: st
     return column in names
 
 
+async def _sqlite_column_notnull(db: aiosqlite.Connection, table: str, column: str) -> bool:
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    rows = await cursor.fetchall()
+    for row in rows:
+        if str(row["name"]) == column:
+            return bool(row["notnull"])
+    return False
+
+
+async def _ensure_sqlite_media_items_schema(db: aiosqlite.Connection) -> None:
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS media_items (
+            id               TEXT PRIMARY KEY,
+            owner_type       TEXT NOT NULL DEFAULT 'user',
+            agent_id         TEXT REFERENCES agents(agent_id),
+            type             TEXT NOT NULL DEFAULT 'other',
+            title            TEXT NOT NULL DEFAULT '',
+            artist           TEXT NOT NULL DEFAULT '',
+            album            TEXT NOT NULL DEFAULT '',
+            author           TEXT NOT NULL DEFAULT '',
+            storage_provider TEXT NOT NULL DEFAULT 'r2',
+            storage_key      TEXT NOT NULL,
+            cover_key        TEXT NOT NULL DEFAULT '',
+            mime_type        TEXT NOT NULL DEFAULT '',
+            size_bytes       INTEGER,
+            duration_seconds REAL,
+            metadata         TEXT NOT NULL DEFAULT '{}',
+            created_at       TEXT NOT NULL,
+            updated_at       TEXT NOT NULL
+        )
+        """
+    )
+    if not await _sqlite_column_exists(db, "media_items", "owner_type"):
+        await db.execute("ALTER TABLE media_items ADD COLUMN owner_type TEXT NOT NULL DEFAULT 'user'")
+    if await _sqlite_column_notnull(db, "media_items", "agent_id"):
+        await db.execute("ALTER TABLE media_items RENAME TO media_items_legacy_agent_notnull")
+        await db.execute(
+            """
+            CREATE TABLE media_items (
+                id               TEXT PRIMARY KEY,
+                owner_type       TEXT NOT NULL DEFAULT 'user',
+                agent_id         TEXT REFERENCES agents(agent_id),
+                type             TEXT NOT NULL DEFAULT 'other',
+                title            TEXT NOT NULL DEFAULT '',
+                artist           TEXT NOT NULL DEFAULT '',
+                album            TEXT NOT NULL DEFAULT '',
+                author           TEXT NOT NULL DEFAULT '',
+                storage_provider TEXT NOT NULL DEFAULT 'r2',
+                storage_key      TEXT NOT NULL,
+                cover_key        TEXT NOT NULL DEFAULT '',
+                mime_type        TEXT NOT NULL DEFAULT '',
+                size_bytes       INTEGER,
+                duration_seconds REAL,
+                metadata         TEXT NOT NULL DEFAULT '{}',
+                created_at       TEXT NOT NULL,
+                updated_at       TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            INSERT INTO media_items (
+                id, owner_type, agent_id, type, title, artist, album, author, storage_provider,
+                storage_key, cover_key, mime_type, size_bytes, duration_seconds, metadata, created_at, updated_at
+            )
+            SELECT
+                id,
+                COALESCE(NULLIF(owner_type, ''), 'user'),
+                NULLIF(agent_id, ''),
+                COALESCE(NULLIF(type, ''), 'other'),
+                COALESCE(title, ''),
+                COALESCE(artist, ''),
+                COALESCE(album, ''),
+                COALESCE(author, ''),
+                COALESCE(NULLIF(storage_provider, ''), 'r2'),
+                COALESCE(storage_key, ''),
+                COALESCE(cover_key, ''),
+                COALESCE(mime_type, ''),
+                size_bytes,
+                duration_seconds,
+                COALESCE(metadata, '{}'),
+                COALESCE(created_at, ''),
+                COALESCE(updated_at, '')
+            FROM media_items_legacy_agent_notnull
+            """
+        )
+        await db.execute("DROP TABLE media_items_legacy_agent_notnull")
+    for _col, _ddl in [
+        ("owner_type", "TEXT NOT NULL DEFAULT 'user'"),
+        ("agent_id", "TEXT"),
+        ("type", "TEXT NOT NULL DEFAULT 'other'"),
+        ("title", "TEXT NOT NULL DEFAULT ''"),
+        ("artist", "TEXT NOT NULL DEFAULT ''"),
+        ("album", "TEXT NOT NULL DEFAULT ''"),
+        ("author", "TEXT NOT NULL DEFAULT ''"),
+        ("storage_provider", "TEXT NOT NULL DEFAULT 'r2'"),
+        ("storage_key", "TEXT NOT NULL DEFAULT ''"),
+        ("cover_key", "TEXT NOT NULL DEFAULT ''"),
+        ("mime_type", "TEXT NOT NULL DEFAULT ''"),
+        ("size_bytes", "INTEGER"),
+        ("duration_seconds", "REAL"),
+        ("metadata", "TEXT NOT NULL DEFAULT '{}'"),
+        ("created_at", "TEXT NOT NULL DEFAULT ''"),
+        ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+    ]:
+        if not await _sqlite_column_exists(db, "media_items", _col):
+            await db.execute(f"ALTER TABLE media_items ADD COLUMN {_col} {_ddl}")
+    await db.execute("UPDATE media_items SET owner_type = 'user' WHERE COALESCE(owner_type, '') = ''")
+    await db.execute("UPDATE media_items SET owner_type = 'user' WHERE owner_type NOT IN ('user', 'global', 'agent')")
+    await db.execute("UPDATE media_items SET agent_id = NULL WHERE owner_type IN ('user', 'global') AND COALESCE(agent_id, '') = ''")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_agent_type ON media_items(agent_id, type, created_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_owner_type ON media_items(owner_type, type, created_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_type_created ON media_items(type, created_at DESC)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_storage_key ON media_items(storage_key)")
+
+
 async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     now = _now()
     await db.execute(
@@ -2214,50 +2356,7 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     await db.execute("UPDATE diary SET visibility = 'shared' WHERE visibility = 'restricted'")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_moments_author ON moments(author_type, author_id, created_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_moments_created_at ON moments(created_at DESC)")
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS media_items (
-            id               TEXT PRIMARY KEY,
-            agent_id         TEXT NOT NULL REFERENCES agents(agent_id),
-            type             TEXT NOT NULL DEFAULT 'other',
-            title            TEXT NOT NULL DEFAULT '',
-            artist           TEXT NOT NULL DEFAULT '',
-            album            TEXT NOT NULL DEFAULT '',
-            author           TEXT NOT NULL DEFAULT '',
-            storage_provider TEXT NOT NULL DEFAULT 'r2',
-            storage_key      TEXT NOT NULL,
-            cover_key        TEXT NOT NULL DEFAULT '',
-            mime_type        TEXT NOT NULL DEFAULT '',
-            size_bytes       INTEGER,
-            duration_seconds REAL,
-            metadata         TEXT NOT NULL DEFAULT '{}',
-            created_at       TEXT NOT NULL,
-            updated_at       TEXT NOT NULL
-        )
-        """
-    )
-    for _col, _ddl in [
-        ("agent_id", "TEXT NOT NULL DEFAULT 'default'"),
-        ("type", "TEXT NOT NULL DEFAULT 'other'"),
-        ("title", "TEXT NOT NULL DEFAULT ''"),
-        ("artist", "TEXT NOT NULL DEFAULT ''"),
-        ("album", "TEXT NOT NULL DEFAULT ''"),
-        ("author", "TEXT NOT NULL DEFAULT ''"),
-        ("storage_provider", "TEXT NOT NULL DEFAULT 'r2'"),
-        ("storage_key", "TEXT NOT NULL DEFAULT ''"),
-        ("cover_key", "TEXT NOT NULL DEFAULT ''"),
-        ("mime_type", "TEXT NOT NULL DEFAULT ''"),
-        ("size_bytes", "INTEGER"),
-        ("duration_seconds", "REAL"),
-        ("metadata", "TEXT NOT NULL DEFAULT '{}'"),
-        ("created_at", "TEXT NOT NULL DEFAULT ''"),
-        ("updated_at", "TEXT NOT NULL DEFAULT ''"),
-    ]:
-        if not await _sqlite_column_exists(db, "media_items", _col):
-            await db.execute(f"ALTER TABLE media_items ADD COLUMN {_col} {_ddl}")
-    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_agent_type ON media_items(agent_id, type, created_at DESC)")
-    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_type_created ON media_items(type, created_at DESC)")
-    await db.execute("CREATE INDEX IF NOT EXISTS idx_media_items_storage_key ON media_items(storage_key)")
+    await _ensure_sqlite_media_items_schema(db)
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS activity_events (
@@ -2399,6 +2498,35 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_conversation_partitions_lookup
         ON conversation_partitions(agent_id, session_id, rp_room_id, mode)
+        """
+    )
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS model_usage_events (
+            id                     TEXT PRIMARY KEY,
+            agent_id               TEXT DEFAULT '',
+            session_id             TEXT DEFAULT '',
+            rp_room_id             TEXT DEFAULT '',
+            mode                   TEXT NOT NULL DEFAULT 'chat',
+            provider               TEXT DEFAULT '',
+            model                  TEXT DEFAULT '',
+            prompt_builder_version TEXT DEFAULT '',
+            fixed_block_hash       TEXT DEFAULT '',
+            block_order            TEXT NOT NULL DEFAULT '[]',
+            prompt_tokens          INTEGER NOT NULL DEFAULT 0,
+            completion_tokens      INTEGER NOT NULL DEFAULT 0,
+            total_tokens           INTEGER NOT NULL DEFAULT 0,
+            cached_tokens          INTEGER NOT NULL DEFAULT 0,
+            cache_hit_ratio        REAL NOT NULL DEFAULT 0,
+            raw_usage              TEXT NOT NULL DEFAULT '{}',
+            created_at             TEXT NOT NULL
+        )
+        """
+    )
+    await db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_model_usage_events_lookup
+        ON model_usage_events(agent_id, session_id, rp_room_id, mode, created_at DESC)
         """
     )
 
@@ -2908,7 +3036,10 @@ def _normalize_media_item(row: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     item = dict(row)
     item["id"] = str(item.get("id") or "")
-    item["agent_id"] = normalize_agent_id_value(item.get("agent_id"))
+    item["owner_type"] = str(item.get("owner_type") or "user").strip().lower()
+    if item["owner_type"] not in {"user", "global", "agent"}:
+        item["owner_type"] = "user"
+    item["agent_id"] = normalize_agent_id_value(item.get("agent_id")) if item.get("agent_id") else ""
     item["type"] = normalize_media_type(item.get("type"))
     for key in ("title", "artist", "album", "author", "storage_provider", "storage_key", "cover_key", "mime_type"):
         item[key] = str(item.get(key) or "")
@@ -2925,6 +3056,7 @@ def _normalize_media_item(row: dict[str, Any] | None) -> dict[str, Any] | None:
 
 async def create_media_item(
     *,
+    owner_type: str = "user",
     agent_id: str | None = None,
     type: str = "other",
     title: str = "",
@@ -2939,7 +3071,10 @@ async def create_media_item(
     duration_seconds: float | None = None,
     metadata: Any = None,
 ) -> dict[str, Any]:
-    normalized_agent = await require_agent(agent_id) if agent_id else await resolve_agent_id(purpose="create_media_item")
+    normalized_owner = str(owner_type or "user").strip().lower()
+    if normalized_owner not in {"user", "global", "agent"}:
+        normalized_owner = "user"
+    normalized_agent = await require_agent(agent_id) if normalized_owner == "agent" else None
     normalized_type = normalize_media_type(type)
     provider = str(storage_provider or "r2").strip().lower() or "r2"
     key = str(storage_key or "").strip().lstrip("/")
@@ -2949,6 +3084,7 @@ async def create_media_item(
     supabase = _use_supabase_data()
     payload = {
         "id": _new_id(),
+        "owner_type": normalized_owner,
         "agent_id": normalized_agent,
         "type": normalized_type,
         "title": str(title or "").strip(),
@@ -2972,13 +3108,14 @@ async def create_media_item(
     await db.execute(
         """
         INSERT INTO media_items (
-            id, agent_id, type, title, artist, album, author, storage_provider, storage_key,
+            id, owner_type, agent_id, type, title, artist, album, author, storage_provider, storage_key,
             cover_key, mime_type, size_bytes, duration_seconds, metadata, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload["id"],
+            payload["owner_type"],
             payload["agent_id"],
             payload["type"],
             payload["title"],
@@ -3006,12 +3143,17 @@ async def create_media_item(
 async def list_media_items(
     *,
     type: str | None = None,
+    owner_type: str | None = None,
     agent_id: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     filters: dict[str, str] = {}
     if type:
         filters["type"] = f"eq.{normalize_media_type(type)}"
+    if owner_type:
+        owner = str(owner_type or "").strip().lower()
+        if owner in {"user", "global", "agent"}:
+            filters["owner_type"] = f"eq.{owner}"
     if agent_id:
         filters["agent_id"] = f"eq.{await require_agent(agent_id)}"
     safe_limit = max(1, min(int(limit or 100), 500))
@@ -3029,6 +3171,11 @@ async def list_media_items(
     if type:
         clauses.append("type = ?")
         params.append(normalize_media_type(type))
+    if owner_type:
+        owner = str(owner_type or "").strip().lower()
+        if owner in {"user", "global", "agent"}:
+            clauses.append("owner_type = ?")
+            params.append(owner)
     if agent_id:
         clauses.append("agent_id = ?")
         params.append(await require_agent(agent_id))

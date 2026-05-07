@@ -19,6 +19,7 @@ from config import ProviderConfig, settings
 from tools import execute_tool_with_guard, TOOL_EXECUTORS
 from prompt_builder import build_chat_prompt, build_rp_prompt, build_system_prompt
 from partition_manager import append_committed_turn
+from usage_recorder import record_model_usage
 
 logger = logging.getLogger(__name__)
 api = APIRouter(prefix="/api")
@@ -162,6 +163,59 @@ def _prompt_debug_payload(debug: dict) -> dict:
         "model",
     )
     return {key: debug.get(key) for key in keys}
+
+
+def _usage_payload_from_chunk(chunk: dict) -> dict:
+    raw_usage = chunk.get("raw_usage") or chunk.get("usage") or {
+        "prompt_tokens": chunk.get("prompt_tokens"),
+        "completion_tokens": chunk.get("completion_tokens"),
+        "total_tokens": chunk.get("total_tokens"),
+        "cached_tokens": chunk.get("cached_tokens"),
+    }
+    return {
+        "raw_usage": raw_usage,
+        "cached_tokens": chunk.get("cached_tokens"),
+        "prompt_tokens": chunk.get("prompt_tokens"),
+        "completion_tokens": chunk.get("completion_tokens"),
+        "total_tokens": chunk.get("total_tokens"),
+    }
+
+
+async def _record_usage_if_available(
+    *,
+    mode: str,
+    agent_id: str,
+    session_id: str = "",
+    rp_room_id: str = "",
+    provider: str,
+    model: str,
+    built_prompt_debug: dict | None,
+    usage_info: dict,
+) -> None:
+    if str(usage_info.get("status") or "").lower() == "not available":
+        if settings.prompt_debug:
+            logger.info(
+                "Model usage debug(%s): provider=%s model=%s status=not_available fixed_block_hash=%s block_order=%s",
+                mode,
+                provider,
+                model,
+                (built_prompt_debug or {}).get("fixed_block_hash", ""),
+                (built_prompt_debug or {}).get("block_order", []),
+            )
+        return
+
+    usage_record = await record_model_usage(
+        agent_id=agent_id,
+        session_id=session_id,
+        rp_room_id=rp_room_id,
+        mode=mode,
+        provider=provider,
+        model=model,
+        built_prompt_debug=built_prompt_debug,
+        raw_usage=usage_info.get("raw_usage") if isinstance(usage_info, dict) else usage_info,
+    )
+    if settings.prompt_debug:
+        logger.info("Model usage debug(%s): %s", mode, usage_record or {"status": "record_failed"})
 
 
 async def _auto_capture_memory_from_user_text(user_text: str, agent_id: str | None = None):
@@ -565,6 +619,7 @@ async def chat(body: ChatRequest):
     # 4. SSE 流式返回
     async def event_generator():
         # 构建系统提示词
+        built_prompt = None
         if settings.prompt_builder_v2_enabled:
             built_prompt = await build_chat_prompt(
                 session_id=body.session_id,
@@ -638,12 +693,7 @@ async def chat(body: ChatRequest):
                                 "data": _json.dumps({"thinking": thinking_text}, ensure_ascii=False),
                             }
                     elif isinstance(chunk, dict) and chunk.get("type") == "usage":
-                        usage_info = {
-                            "cached_tokens": chunk.get("cached_tokens"),
-                            "prompt_tokens": chunk.get("prompt_tokens"),
-                            "completion_tokens": chunk.get("completion_tokens"),
-                            "total_tokens": chunk.get("total_tokens"),
-                        }
+                        usage_info = _usage_payload_from_chunk(chunk)
                     elif isinstance(chunk, str):
                         full_response.append(chunk)
                         yield {"event": "message", "data": chunk}
@@ -806,6 +856,16 @@ async def chat(body: ChatRequest):
                     usage_info,
                 )
 
+            await _record_usage_if_available(
+                mode="chat",
+                agent_id=resolved_agent_id,
+                session_id=body.session_id,
+                provider=str(model_info.get("provider") or ""),
+                model=str(model_info.get("model") or ""),
+                built_prompt_debug=built_prompt.debug if built_prompt else None,
+                usage_info=usage_info,
+            )
+
             yield {"event": "done", "data": "[DONE]"}
             break
 
@@ -846,6 +906,7 @@ async def rp_chat(body: RPChatRequest):
         override_kwargs["tool_choice"] = "none"
 
     async def event_generator():
+        built_prompt = None
         if settings.rp_prompt_builder_v2_enabled:
             built_prompt = await build_rp_prompt(
                 room_id=body.room_id,
@@ -898,6 +959,7 @@ async def rp_chat(body: RPChatRequest):
                 )
             current_messages = [{"role": "system", "content": f"{base_prompt}\n\n{rp_prompt}"}] + recent.copy()
         full_response: list[str] = []
+        usage_info = {"status": "not available"}
         try:
             async for chunk in adapter.chat_stream(
                 current_messages,
@@ -911,6 +973,8 @@ async def rp_chat(body: RPChatRequest):
                             "event": "thinking",
                             "data": jsonlib.dumps({"thinking": thinking_text}, ensure_ascii=False),
                         }
+                elif isinstance(chunk, dict) and chunk.get("type") == "usage":
+                    usage_info = _usage_payload_from_chunk(chunk)
                 elif isinstance(chunk, str):
                     full_response.append(chunk)
                     yield {"event": "message", "data": chunk}
@@ -939,6 +1003,17 @@ async def rp_chat(body: RPChatRequest):
                     )
                 except Exception as e:
                     logger.warning("Conversation partition write failed(rp): %s", e)
+
+        await _record_usage_if_available(
+            mode="rp",
+            agent_id=agent_id,
+            session_id="",
+            rp_room_id=body.room_id,
+            provider=str(model_info.get("provider") or ""),
+            model=str(model_info.get("model") or ""),
+            built_prompt_debug=built_prompt.debug if built_prompt else None,
+            usage_info=usage_info,
+        )
 
         yield {"event": "done", "data": "[DONE]"}
         return
