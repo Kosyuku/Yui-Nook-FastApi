@@ -38,6 +38,14 @@ DEBUG_KEYS = [
     "rp_history_source",
     "rp_history_token_estimate",
     "rp_room_id",
+    "partition_read_enabled",
+    "partition_read_attempted",
+    "partition_read_hit",
+    "partition_read_source",
+    "partition_id",
+    "partition_history_a_count",
+    "partition_history_b_count",
+    "partition_fallback_reason",
     "dynamic_sources",
     "provider",
     "model",
@@ -163,6 +171,55 @@ def _install_mock_context():
             {"role": "assistant", "content": f"Mock RP room {room_id} older assistant line."},
         ][:limit]
 
+    async def fake_get_partition(
+        *,
+        agent_id: str | None,
+        session_id: str | None = "",
+        rp_room_id: str | None = "",
+        mode: str = "chat",
+    ):
+        from partition_manager import ConversationPartition
+
+        if getattr(pb, "_debug_partition_missing", False):
+            return None
+        if mode == "chat":
+            return ConversationPartition(
+                id="partition-chat-debug",
+                agent_id=agent_id or "azheng",
+                session_id=session_id or "debug_prompt_cache_session",
+                mode="chat",
+                summary_text="Mock partition summary.",
+                summary_revision="partition-summary-r1",
+                history_a=[
+                    {"role": "user", "content": "Partition A previous user."},
+                    {"role": "assistant", "content": "Partition A previous assistant."},
+                ],
+                history_b=[
+                    {"role": "user", "content": "Partition B previous user."},
+                    {"role": "assistant", "content": "Partition B previous assistant."},
+                ],
+                history_a_cycle_id="a7",
+                history_b_cycle_id="b7",
+            )
+        if mode == "rp":
+            return ConversationPartition(
+                id="partition-rp-debug",
+                agent_id=agent_id or "azheng",
+                rp_room_id=rp_room_id or "debug_prompt_cache_room",
+                mode="rp",
+                history_a=[
+                    {"role": "user", "content": "Partition RP A user."},
+                    {"role": "assistant", "content": "Partition RP A assistant."},
+                ],
+                history_b=[
+                    {"role": "user", "content": "Partition RP B user."},
+                    {"role": "assistant", "content": "Partition RP B assistant."},
+                ],
+                history_a_cycle_id="a3",
+                history_b_cycle_id="b3",
+            )
+        return None
+
     pb.ai_runtime.resolve_prompt = fake_resolve_prompt
     pb.db.get_agent_persona = fake_get_agent_persona
     pb.db.get_context_summaries = fake_get_context_summaries
@@ -175,6 +232,7 @@ def _install_mock_context():
     pb.db.get_rp_room = fake_get_rp_room
     pb.db.get_recent_messages = fake_get_recent_messages
     pb.db.get_recent_rp_messages = fake_get_recent_rp_messages
+    pb.get_partition = fake_get_partition
 
 
 async def main():
@@ -193,6 +251,9 @@ async def main():
     agent_id = await _resolve_default_agent(args.agent_id)
     latest_a = "debug latest text A: cache boundary check"
     latest_b = "debug latest text B: dynamic block should change"
+    original_partition_read = pb.settings.conversation_partitions_read_enabled
+    pb._debug_partition_missing = False
+    pb.settings.conversation_partitions_read_enabled = False
 
     chat_a1 = await pb.build_chat_prompt(
         session_id=args.session_id,
@@ -237,10 +298,53 @@ async def main():
     )
     system_prompt = await pb.build_system_prompt(session_id=args.session_id, agent_id=agent_id)
 
+    pb.settings.conversation_partitions_read_enabled = True
+    pb._debug_partition_missing = False
+    partition_chat = await pb.build_chat_prompt(
+        session_id=args.session_id,
+        agent_id=agent_id,
+        latest_user_text=latest_a,
+        provider=args.provider,
+        model=args.model,
+        tool_profile="chat",
+    )
+    partition_rp = await pb.build_rp_prompt(
+        room_id=args.room_id,
+        agent_id=agent_id,
+        latest_user_text=latest_a,
+        provider=args.provider,
+        model=args.model,
+        tool_profile="rp",
+    )
+    pb._debug_partition_missing = True
+    fallback_chat = await pb.build_chat_prompt(
+        session_id=args.session_id,
+        agent_id=agent_id,
+        latest_user_text=latest_a,
+        provider=args.provider,
+        model=args.model,
+        tool_profile="chat",
+    )
+    fallback_rp = await pb.build_rp_prompt(
+        room_id=args.room_id,
+        agent_id=agent_id,
+        latest_user_text=latest_a,
+        provider=args.provider,
+        model=args.model,
+        tool_profile="rp",
+    )
+    pb._debug_partition_missing = False
+    pb.settings.conversation_partitions_read_enabled = original_partition_read
+
     chat_fixed = _block_content(chat_a1, "fixed")
     history_a = _block_content(chat_a1, "history_b")
+    partition_history_a = _block_content(partition_chat, "history_a")
+    partition_history_b = _block_content(partition_chat, "history_b")
     rp_history = _block_content(rp_prompt, "rp_history")
+    partition_rp_history = _block_content(partition_rp, "rp_history")
     rp_dynamic = _block_content(rp_prompt, "dynamic")
+    partition_dynamic = _block_content(partition_chat, "dynamic")
+    partition_rp_dynamic = _block_content(partition_rp, "dynamic")
     dynamic_a = _block_content(chat_a1, "dynamic")
     dynamic_b = _block_content(chat_b, "dynamic")
 
@@ -280,6 +384,22 @@ async def main():
         "summary_profile_tools_disabled": len(pb._tools_for_profile("summary")) == 0
         and pb._format_tool_descriptions("summary") == ""
         and "Available tools" not in _block_content(summary_like, "fixed"),
+        "partition_read_disabled_by_default": chat_a1.debug.get("partition_read_enabled") is False,
+        "partition_chat_hit_block_order": partition_chat.debug["block_order"] == ["fixed", "summary", "history_a", "history_b", "dynamic"],
+        "partition_chat_source": partition_chat.debug.get("history_source") == "conversation_partitions",
+        "partition_chat_counts": partition_chat.debug.get("partition_history_a_count") == 2
+        and partition_chat.debug.get("partition_history_b_count") == 2,
+        "partition_chat_latest_only_dynamic": latest_a not in partition_history_a
+        and latest_a not in partition_history_b
+        and latest_a in partition_dynamic,
+        "partition_rp_hit_block_order": partition_rp.debug["block_order"] == ["fixed", "rp_setting", "rp_history", "dynamic"],
+        "partition_rp_source": partition_rp.debug.get("rp_history_source") == "conversation_partitions",
+        "partition_rp_latest_only_dynamic": latest_a not in partition_rp_history and latest_a in partition_rp_dynamic,
+        "partition_fallback_chat_legacy": fallback_chat.debug.get("partition_fallback_reason") == "partition_not_found"
+        and fallback_chat.debug.get("history_source") == "legacy_recent_messages",
+        "partition_fallback_rp_legacy": fallback_rp.debug.get("partition_fallback_reason") == "partition_not_found"
+        and fallback_rp.debug.get("rp_history_source") == "rp_messages",
+        "partition_history_not_in_fixed_hash": partition_chat.debug["fixed_block_hash"] == chat_a1.debug["fixed_block_hash"],
     }
 
     _print_json("inputs", {
@@ -293,6 +413,10 @@ async def main():
     _print_json("chat_debug_second", _debug_subset(chat_a2))
     _print_json("chat_debug_different_latest", _debug_subset(chat_b))
     _print_json("rp_debug", _debug_subset(rp_prompt))
+    _print_json("partition_chat_debug", _debug_subset(partition_chat))
+    _print_json("partition_rp_debug", _debug_subset(partition_rp))
+    _print_json("partition_fallback_chat_debug", _debug_subset(fallback_chat))
+    _print_json("partition_fallback_rp_debug", _debug_subset(fallback_rp))
     _print_json("tool_profile_counts", {
         "total_registry": len(TOOLS_SCHEMA),
         "chat": len(pb._tools_for_profile("chat")),

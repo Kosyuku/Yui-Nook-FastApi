@@ -12,6 +12,7 @@ from typing import Any, Optional
 import ai_runtime
 import database as db
 from config import settings
+from partition_manager import ConversationPartition, get_partition
 from tools import TOOLS_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -253,12 +254,31 @@ async def build_chat_prompt(
         model=model,
         tool_profile=tool_profile,
     )
-    summary = await _load_summary_block(session_id=session_id, agent_id=agent_id)
-    history = await _load_history_block(
-        session_id=session_id,
+    partition, partition_debug = await _read_partition(
         agent_id=agent_id,
-        latest_user_text=latest_user_text,
+        session_id=session_id,
+        mode="chat",
     )
+    if partition:
+        summary = _load_partition_summary_block(partition)
+        history_a = _load_partition_history_block(
+            partition,
+            name="history_a",
+            latest_user_text=latest_user_text,
+        )
+        history = _load_partition_history_block(
+            partition,
+            name="history_b",
+            latest_user_text=latest_user_text,
+        )
+    else:
+        summary = await _load_summary_block(session_id=session_id, agent_id=agent_id)
+        history_a = None
+        history = await _load_history_block(
+            session_id=session_id,
+            agent_id=agent_id,
+            latest_user_text=latest_user_text,
+        )
     dynamic = await _load_dynamic_block(
         session_id=session_id,
         agent_id=agent_id,
@@ -267,8 +287,8 @@ async def build_chat_prompt(
         model=model,
         room_id=None,
     )
-    blocks = [block for block in [fixed, summary, history, dynamic] if block and block.content.strip()]
-    return _build_prompt_result(blocks, provider=provider, model=model)
+    blocks = [block for block in [fixed, summary, history_a, history, dynamic] if block and block.content.strip()]
+    return _build_prompt_result(blocks, provider=provider, model=model, partition_debug=partition_debug)
 
 
 async def build_rp_prompt(
@@ -289,11 +309,19 @@ async def build_rp_prompt(
         tool_profile=tool_profile,
     )
     rp = await _load_rp_setting_block(room_id=room_id, agent_id=agent_id)
-    rp_history = await _load_rp_history_block(
-        room_id=room_id,
+    partition, partition_debug = await _read_partition(
         agent_id=agent_id,
-        latest_user_text=latest_user_text,
+        rp_room_id=room_id,
+        mode="rp",
     )
+    if partition:
+        rp_history = _load_partition_rp_history_block(partition, latest_user_text=latest_user_text)
+    else:
+        rp_history = await _load_rp_history_block(
+            room_id=room_id,
+            agent_id=agent_id,
+            latest_user_text=latest_user_text,
+        )
     dynamic = await _load_dynamic_block(
         session_id=None,
         agent_id=agent_id,
@@ -303,7 +331,7 @@ async def build_rp_prompt(
         room_id=room_id,
     )
     blocks = [block for block in [fixed, rp, rp_history, dynamic] if block and block.content.strip()]
-    return _build_prompt_result(blocks, provider=provider, model=model)
+    return _build_prompt_result(blocks, provider=provider, model=model, partition_debug=partition_debug)
 
 
 async def build_system_prompt(
@@ -515,6 +543,154 @@ async def _load_summary_block(session_id: str, agent_id: str) -> Optional[Prompt
     )
 
 
+async def _read_partition(
+    *,
+    agent_id: str,
+    session_id: str = "",
+    rp_room_id: str = "",
+    mode: str,
+) -> tuple[Optional[ConversationPartition], dict[str, Any]]:
+    debug = {
+        "partition_read_enabled": bool(settings.conversation_partitions_read_enabled),
+        "partition_read_attempted": False,
+        "partition_read_hit": False,
+        "partition_read_source": "",
+        "partition_id": "",
+        "partition_history_a_count": 0,
+        "partition_history_b_count": 0,
+        "partition_fallback_reason": "",
+    }
+    if not settings.conversation_partitions_read_enabled:
+        return None, debug
+    debug["partition_read_attempted"] = True
+    try:
+        partition = await get_partition(
+            agent_id=agent_id,
+            session_id=session_id,
+            rp_room_id=rp_room_id,
+            mode=mode,
+        )
+        if partition is None:
+            debug["partition_fallback_reason"] = "partition_not_found"
+            return None, debug
+        debug.update({
+            "partition_read_hit": True,
+            "partition_read_source": "conversation_partitions",
+            "partition_id": partition.id,
+            "partition_history_a_count": len(partition.history_a),
+            "partition_history_b_count": len(partition.history_b),
+        })
+        return partition, debug
+    except Exception as exc:
+        logger.warning("Read conversation partition failed: %s", exc)
+        debug["partition_fallback_reason"] = "partition_read_failed"
+        return None, debug
+
+
+def _render_partition_messages(messages: list[dict[str, Any]], *, latest_user_text: str) -> list[dict[str, str]]:
+    latest = str(latest_user_text or "").strip()
+    rendered: list[dict[str, str]] = []
+    for item in messages:
+        role = str(item.get("role") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        if latest and role == "user" and content == latest:
+            continue
+        rendered.append({"role": role, "content": content})
+    return rendered
+
+
+def _format_history_lines(messages: list[dict[str, str]]) -> str:
+    return "\n".join(
+        f"[{item['role']}] {_clip_text(item['content'], max(80, settings.prompt_summary_item_max_chars))}"
+        for item in messages
+    )
+
+
+def _partition_cache_parts(partition: ConversationPartition, *, source: str) -> dict[str, str]:
+    return {
+        "partition_read_enabled": "true",
+        "partition_read_attempted": "true",
+        "partition_read_hit": "true",
+        "partition_read_source": source,
+        "partition_id": partition.id,
+        "partition_history_a_count": str(len(partition.history_a)),
+        "partition_history_b_count": str(len(partition.history_b)),
+        "partition_fallback_reason": "",
+        "history_a_cycle_id": partition.history_a_cycle_id,
+        "history_b_cycle_id": partition.history_b_cycle_id,
+    }
+
+
+def _load_partition_summary_block(partition: ConversationPartition) -> Optional[PromptBlock]:
+    summary = _clip_text(str(partition.summary_text or "").strip(), max(80, settings.prompt_summary_item_max_chars))
+    if not summary:
+        return None
+    cache_parts = _partition_cache_parts(partition, source="conversation_partitions")
+    cache_parts.update({
+        "summary_revision": partition.summary_revision,
+        "summary_source": "conversation_partitions",
+    })
+    return PromptBlock(
+        name="summary",
+        role="system",
+        content="## Conversation summary\n- " + summary,
+        cache_scope="summary",
+        cache_key_parts=cache_parts,
+    )
+
+
+def _load_partition_history_block(
+    partition: ConversationPartition,
+    *,
+    name: str,
+    latest_user_text: str,
+) -> Optional[PromptBlock]:
+    source_messages = partition.history_a if name == "history_a" else partition.history_b
+    messages = _render_partition_messages(source_messages, latest_user_text=latest_user_text)
+    if not messages:
+        return None
+    cache_parts = _partition_cache_parts(partition, source="conversation_partitions")
+    cache_parts.update({
+        "history_source": "conversation_partitions",
+        "history_message_count": str(len(messages)),
+    })
+    return PromptBlock(
+        name=name,
+        role="system",
+        content=f"## Committed {name.replace('_', ' ').title()}\n" + _format_history_lines(messages),
+        cache_scope=name,
+        cache_key_parts=cache_parts,
+    )
+
+
+def _load_partition_rp_history_block(
+    partition: ConversationPartition,
+    *,
+    latest_user_text: str,
+) -> Optional[PromptBlock]:
+    messages = _render_partition_messages(
+        [*partition.history_a, *partition.history_b],
+        latest_user_text=latest_user_text,
+    )
+    if not messages:
+        return None
+    cache_parts = _partition_cache_parts(partition, source="conversation_partitions")
+    cache_parts.update({
+        "rp_room_id": partition.rp_room_id,
+        "rp_history_source": "conversation_partitions",
+        "rp_history_message_count": str(len(messages)),
+    })
+    return PromptBlock(
+        name="rp_history",
+        role="system",
+        content="## Recent committed RP history\n" + _format_history_lines(messages),
+        cache_scope="rp_history",
+        cache_key_parts=cache_parts,
+    )
+
+
 async def _load_history_block(
     *,
     session_id: str,
@@ -642,11 +818,18 @@ async def _load_rp_history_block(
     )
 
 
-def _build_prompt_result(blocks: list[PromptBlock], *, provider: Optional[str], model: Optional[str]) -> BuiltPrompt:
+def _build_prompt_result(
+    blocks: list[PromptBlock],
+    *,
+    provider: Optional[str],
+    model: Optional[str],
+    partition_debug: Optional[dict[str, Any]] = None,
+) -> BuiltPrompt:
     fixed_content = "\n\n".join(block.content for block in blocks if block.name == "fixed")
     fixed_block_hash = _hash_text(fixed_content)
     messages = [{"role": block.role, "content": block.content} for block in blocks if block.content.strip()]
     summary_block = next((block for block in blocks if block.name == "summary"), None)
+    history_a_block = next((block for block in blocks if block.name == "history_a"), None)
     history_block = next((block for block in blocks if block.name == "history_b"), None)
     rp_setting_block = next((block for block in blocks if block.name == "rp_setting"), None)
     rp_history_block = next((block for block in blocks if block.name == "rp_history"), None)
@@ -656,11 +839,20 @@ def _build_prompt_result(blocks: list[PromptBlock], *, provider: Optional[str], 
         "block_token_estimates": {block.name: _estimate_tokens(block.content) for block in blocks},
         "fixed_block_hash": fixed_block_hash,
         "summary_revision": (summary_block.cache_key_parts.get("summary_revision", "") if summary_block else ""),
-        "history_a_cycle_id": "",
+        "history_a_cycle_id": (history_a_block.cache_key_parts.get("history_a_cycle_id", "") if history_a_block else ""),
         "history_b_cycle_id": (history_block.cache_key_parts.get("history_b_cycle_id", "") if history_block else ""),
-        "history_message_count": int(history_block.cache_key_parts.get("history_message_count", "0")) if history_block else 0,
-        "history_source": (history_block.cache_key_parts.get("history_source", "") if history_block else ""),
-        "history_token_estimate": _estimate_tokens(history_block.content) if history_block else 0,
+        "history_message_count": (
+            (int(history_a_block.cache_key_parts.get("history_message_count", "0")) if history_a_block else 0)
+            + (int(history_block.cache_key_parts.get("history_message_count", "0")) if history_block else 0)
+        ),
+        "history_source": (
+            (history_block.cache_key_parts.get("history_source", "") if history_block else "")
+            or (history_a_block.cache_key_parts.get("history_source", "") if history_a_block else "")
+        ),
+        "history_token_estimate": (
+            (_estimate_tokens(history_a_block.content) if history_a_block else 0)
+            + (_estimate_tokens(history_block.content) if history_block else 0)
+        ),
         "rp_history_message_count": int(rp_history_block.cache_key_parts.get("rp_history_message_count", "0")) if rp_history_block else 0,
         "rp_history_source": (rp_history_block.cache_key_parts.get("rp_history_source", "") if rp_history_block else ""),
         "rp_history_token_estimate": _estimate_tokens(rp_history_block.content) if rp_history_block else 0,
@@ -677,6 +869,16 @@ def _build_prompt_result(blocks: list[PromptBlock], *, provider: Optional[str], 
         "provider": str(provider or ""),
         "model": str(model or ""),
     }
+    debug.update(partition_debug or {
+        "partition_read_enabled": bool(settings.conversation_partitions_read_enabled),
+        "partition_read_attempted": False,
+        "partition_read_hit": False,
+        "partition_read_source": "",
+        "partition_id": "",
+        "partition_history_a_count": 0,
+        "partition_history_b_count": 0,
+        "partition_fallback_reason": "",
+    })
     return BuiltPrompt(blocks=blocks, messages=messages, debug=debug)
 
 
