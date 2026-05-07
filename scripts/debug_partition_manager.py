@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -11,15 +12,30 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-os.environ["DATABASE_BACKEND"] = "sqlite"
-os.environ["MEMORY_BACKEND"] = "sqlite"
-os.environ["CONVERSATION_PARTITIONS_ENABLED"] = "false"
-os.environ["DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / "yui_nook_debug_partition_manager.db")
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Inspect or locally validate conversation partitions.")
+    parser.add_argument("--live-db", action="store_true", help="Read the configured real DB. Default uses temp SQLite.")
+    parser.add_argument("--agent-id", default="azheng")
+    parser.add_argument("--session-id", default="")
+    parser.add_argument("--rp-room-id", default="")
+    parser.add_argument("--mode", choices=("chat", "rp"), default="chat")
+    parser.add_argument("--limit", type=int, default=10)
+    return parser.parse_args()
+
+
+ARGS = _parse_args()
+if not ARGS.live_db:
+    os.environ["DATABASE_BACKEND"] = "sqlite"
+    os.environ["MEMORY_BACKEND"] = "sqlite"
+    os.environ["CONVERSATION_PARTITIONS_ENABLED"] = "false"
+    os.environ["DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / "yui_nook_debug_partition_manager.db")
 
 import database as db
 from partition_manager import (
     append_committed_turn,
     get_or_create_partition,
+    inspect_partition,
     should_rotate,
     update_partition_summary,
 )
@@ -37,7 +53,20 @@ def _turn(index: int) -> tuple[dict[str, str], dict[str, str]]:
     )
 
 
-async def main() -> None:
+async def _run_live_inspect() -> None:
+    result = await inspect_partition(
+        agent_id=ARGS.agent_id,
+        session_id=ARGS.session_id,
+        rp_room_id=ARGS.rp_room_id,
+        mode=ARGS.mode,
+    )
+    if result and ARGS.limit >= 0:
+        result["history_b_recent"] = result["history_b_recent"][-max(0, min(ARGS.limit, 10)) :]
+    _dump("live_inspect", result)
+    await db.close_db()
+
+
+async def _run_local_checks() -> None:
     db_path = Path(os.environ["DATABASE_PATH"])
     if db_path.exists():
         db_path.unlink()
@@ -97,6 +126,9 @@ async def main() -> None:
         assistant_message=assistant_2,
     )
 
+    inspected_chat_s1 = await inspect_partition(agent_id="azheng", session_id="session-one", mode="chat")
+    inspected_missing = await inspect_partition(agent_id="azheng", session_id="missing", mode="chat")
+
     checks = {
         "chat_partition_created": chat_s1.mode == "chat" and chat_s1.session_id == "session-one",
         "rp_partition_created": rp_r1.mode == "rp" and rp_r1.rp_room_id == "room-one",
@@ -113,6 +145,8 @@ async def main() -> None:
         "history_a_cycle_incremented": chat_s1.history_a_cycle_id == "a1",
         "history_b_cycle_incremented": chat_s1.history_b_cycle_id == "b1",
         "summary_placeholder_retained": chat_s1.summary_text == "TODO: partition summary placeholder",
+        "inspect_existing_returns_dict": isinstance(inspected_chat_s1, dict),
+        "inspect_missing_returns_none": inspected_missing is None,
         "local_sqlite_only": os.environ["DATABASE_BACKEND"] == "sqlite" and str(db_path).startswith(tempfile.gettempdir()),
     }
 
@@ -123,6 +157,7 @@ async def main() -> None:
             "chat_s2": chat_s2.debug_metadata(),
             "rp_r1": rp_r1.debug_metadata(),
             "rp_r2": rp_r2.debug_metadata(),
+            "inspect_chat_s1": inspected_chat_s1,
         },
     )
     _dump("checks", checks)
@@ -133,6 +168,13 @@ async def main() -> None:
     if failed:
         raise SystemExit(f"FAILED: {', '.join(failed)}")
     print("\nOK: partition_manager checks passed.")
+
+
+async def main() -> None:
+    if ARGS.live_db:
+        await _run_live_inspect()
+    else:
+        await _run_local_checks()
 
 
 if __name__ == "__main__":

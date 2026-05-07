@@ -184,6 +184,46 @@ async def get_partition(
     return ConversationPartition.from_row(dict(row)) if row else None
 
 
+async def inspect_partition(
+    *,
+    agent_id: str,
+    session_id: str = "",
+    rp_room_id: str = "",
+    mode: str = "chat",
+) -> dict[str, Any] | None:
+    partition = await get_partition(
+        agent_id=agent_id,
+        session_id=session_id,
+        rp_room_id=rp_room_id,
+        mode=mode,
+    )
+    if partition is None:
+        return None
+    recent_history_b = [
+        {
+            "role": str(item.get("role") or ""),
+            "content": str(item.get("content") or "")[:160],
+        }
+        for item in partition.history_b[-2:]
+    ]
+    return {
+        "id": partition.id,
+        "agent_id": partition.agent_id,
+        "session_id": partition.session_id,
+        "rp_room_id": partition.rp_room_id,
+        "mode": partition.mode,
+        "turn_count": partition.turn_count,
+        "rotate_every": partition.rotate_every,
+        "history_a_cycle_id": partition.history_a_cycle_id,
+        "history_b_cycle_id": partition.history_b_cycle_id,
+        "history_a_message_count": len(partition.history_a),
+        "history_b_message_count": len(partition.history_b),
+        "summary_revision": partition.summary_revision,
+        "updated_at": partition.updated_at,
+        "history_b_recent": recent_history_b,
+    }
+
+
 async def get_or_create_partition(
     *,
     agent_id: str | None,
