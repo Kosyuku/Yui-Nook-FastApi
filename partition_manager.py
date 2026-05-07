@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import logging
 from typing import Any, Literal
 
 import database as db
@@ -15,6 +16,8 @@ from config import settings
 
 PartitionMode = Literal["chat", "rp"]
 TABLE_NAME = "conversation_partitions"
+SUMMARY_MAX_CHARS = 1600
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -84,6 +87,7 @@ class ConversationPartition:
             "session_id": self.session_id,
             "rp_room_id": self.rp_room_id,
             "summary_revision": self.summary_revision,
+            "summary_char_count": len(self.summary_text or ""),
             "history_a_cycle_id": self.history_a_cycle_id,
             "history_b_cycle_id": self.history_b_cycle_id,
             "history_a_message_count": len(self.history_a),
@@ -143,6 +147,103 @@ def _next_cycle_id(current: str, prefix: str) -> str:
 
 def should_rotate(partition: ConversationPartition) -> bool:
     return int(partition.turn_count or 0) + 1 >= max(1, int(partition.rotate_every or 15))
+
+
+def _clip_text(text: str, max_chars: int = 220) -> str:
+    compact = " ".join(str(text or "").strip().split())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[:max_chars].rstrip() + "..."
+
+
+def _render_messages(messages: list[dict[str, Any]], *, max_messages: int = 80) -> str:
+    lines: list[str] = []
+    for item in messages[-max_messages:]:
+        role = "user" if str(item.get("role") or "") == "user" else "assistant"
+        content = _clip_text(str(item.get("content") or ""))
+        if content:
+            lines.append(f"[{role}] {content}")
+    return "\n".join(lines)
+
+
+def _merge_summary_text(old_summary: str, new_summary: str, *, max_chars: int = SUMMARY_MAX_CHARS) -> str:
+    old_summary = " ".join(str(old_summary or "").split())
+    new_summary = " ".join(str(new_summary or "").split())
+    if old_summary and new_summary:
+        merged = f"{old_summary}\n{new_summary}"
+    else:
+        merged = old_summary or new_summary
+    if len(merged) <= max_chars:
+        return merged
+    return merged[-max_chars:].lstrip()
+
+
+def _extractive_partition_summary(partition: ConversationPartition) -> str:
+    transcript = _render_messages(partition.history_a)
+    if not transcript:
+        return ""
+    prefix = "Summary of earlier committed turns:"
+    return _clip_text(f"{prefix} {transcript}", max_chars=900)
+
+
+async def _model_partition_summary(partition: ConversationPartition, *, provider: str | None, model: str | None) -> str:
+    import ai_runtime
+    from models import EchoAdapter
+
+    transcript = _render_messages(partition.history_a)
+    if not transcript:
+        return ""
+
+    adapter, info, kwargs = await ai_runtime.resolve_adapter_for_slot(
+        "summary",
+        tools=[],
+        tool_choice="none",
+    )
+    if model or settings.conversation_partition_summary_model:
+        kwargs["model"] = model or settings.conversation_partition_summary_model
+    if isinstance(adapter, EchoAdapter):
+        return ""
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Compress old committed History A into a concise durable conversation summary. "
+                "Preserve stable facts, decisions, preferences, unresolved tasks, and roleplay continuity. "
+                "Do not include markdown headings. Keep it short."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Existing summary:\n{partition.summary_text or '(none)'}\n\n"
+                f"Old History A to compress:\n{transcript}\n\n"
+                "Return the updated compact summary only."
+            ),
+        },
+    ]
+    parts: list[str] = []
+    async for chunk in adapter.chat_stream(messages, temperature=0.2, **kwargs):
+        if isinstance(chunk, str) and chunk:
+            parts.append(chunk)
+    return _clip_text("".join(parts).strip(), max_chars=SUMMARY_MAX_CHARS)
+
+
+async def summarize_partition_history_a(
+    *,
+    partition: ConversationPartition,
+    provider: str | None = None,
+    model: str | None = None,
+) -> str:
+    if not partition.history_a:
+        return ""
+    model_summary = ""
+    try:
+        model_summary = await _model_partition_summary(partition, provider=provider, model=model)
+    except Exception as exc:
+        logger.warning("Partition summary model failed: %s", exc)
+    new_summary = model_summary or _extractive_partition_summary(partition)
+    return _merge_summary_text(partition.summary_text, new_summary)
 
 
 async def get_partition(
@@ -219,6 +320,7 @@ async def inspect_partition(
         "history_a_message_count": len(partition.history_a),
         "history_b_message_count": len(partition.history_b),
         "summary_revision": partition.summary_revision,
+        "summary_char_count": len(partition.summary_text or ""),
         "updated_at": partition.updated_at,
         "history_b_recent": recent_history_b,
     }
@@ -379,6 +481,35 @@ async def append_committed_turn(
     ])
     partition.turn_count += 1
     if partition.turn_count >= partition.rotate_every:
+        old_history_a = list(partition.history_a)
+        if old_history_a and settings.conversation_partition_summary_enabled:
+            summary_candidate = ConversationPartition(
+                id=partition.id,
+                agent_id=partition.agent_id,
+                session_id=partition.session_id,
+                rp_room_id=partition.rp_room_id,
+                mode=partition.mode,
+                summary_text=partition.summary_text,
+                summary_revision=partition.summary_revision,
+                history_a=old_history_a,
+                history_b=list(partition.history_b),
+                history_a_cycle_id=partition.history_a_cycle_id,
+                history_b_cycle_id=partition.history_b_cycle_id,
+                turn_count=partition.turn_count,
+                rotate_every=partition.rotate_every,
+                created_at=partition.created_at,
+                updated_at=partition.updated_at,
+            )
+            try:
+                summary_text = await summarize_partition_history_a(
+                    partition=summary_candidate,
+                    model=settings.conversation_partition_summary_model,
+                )
+                if summary_text:
+                    partition.summary_text = summary_text
+                    partition.summary_revision = db._now()
+            except Exception as exc:
+                logger.warning("Partition History A summary failed: %s", exc)
         partition.history_a = partition.history_b
         partition.history_b = []
         partition.history_a_cycle_id = _next_cycle_id(partition.history_a_cycle_id, "a")

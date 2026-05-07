@@ -32,6 +32,7 @@ if not ARGS.live_db:
     os.environ["DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / "yui_nook_debug_partition_manager.db")
 
 import database as db
+from config import settings
 from partition_manager import (
     append_committed_turn,
     get_or_create_partition,
@@ -129,6 +130,23 @@ async def _run_local_checks() -> None:
     inspected_chat_s1 = await inspect_partition(agent_id="azheng", session_id="session-one", mode="chat")
     inspected_missing = await inspect_partition(agent_id="azheng", session_id="missing", mode="chat")
 
+    original_summary_enabled = settings.conversation_partition_summary_enabled
+    settings.conversation_partition_summary_enabled = True
+    summary_partition = await get_or_create_partition(
+        agent_id="azheng",
+        session_id="summary-session",
+        mode="chat",
+        rotate_every=2,
+    )
+    for index in range(1, 5):
+        user, assistant = _turn(index + 10)
+        summary_partition = await append_committed_turn(
+            summary_partition,
+            user_message=user,
+            assistant_message=assistant,
+        )
+    settings.conversation_partition_summary_enabled = original_summary_enabled
+
     checks = {
         "chat_partition_created": chat_s1.mode == "chat" and chat_s1.session_id == "session-one",
         "rp_partition_created": rp_r1.mode == "rp" and rp_r1.rp_room_id == "room-one",
@@ -147,6 +165,8 @@ async def _run_local_checks() -> None:
         "summary_placeholder_retained": chat_s1.summary_text == "TODO: partition summary placeholder",
         "inspect_existing_returns_dict": isinstance(inspected_chat_s1, dict),
         "inspect_missing_returns_none": inspected_missing is None,
+        "summary_enabled_rollup_nonempty": bool(summary_partition.summary_text.strip()),
+        "summary_enabled_revision_set": bool(summary_partition.summary_revision.strip()),
         "local_sqlite_only": os.environ["DATABASE_BACKEND"] == "sqlite" and str(db_path).startswith(tempfile.gettempdir()),
     }
 
@@ -158,6 +178,7 @@ async def _run_local_checks() -> None:
             "rp_r1": rp_r1.debug_metadata(),
             "rp_r2": rp_r2.debug_metadata(),
             "inspect_chat_s1": inspected_chat_s1,
+            "summary_partition": summary_partition.debug_metadata(),
         },
     )
     _dump("checks", checks)

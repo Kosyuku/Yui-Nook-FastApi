@@ -631,6 +631,10 @@ def _load_partition_summary_block(partition: ConversationPartition) -> Optional[
     cache_parts.update({
         "summary_revision": partition.summary_revision,
         "summary_source": "conversation_partitions",
+        "summary_enabled": str(settings.conversation_partition_summary_enabled).lower(),
+        "summary_char_count": str(len(partition.summary_text or "")),
+        "summary_updated": "true" if partition.summary_revision else "false",
+        "summary_error": "",
     })
     return PromptBlock(
         name="summary",
@@ -649,17 +653,18 @@ def _load_partition_history_block(
 ) -> Optional[PromptBlock]:
     source_messages = partition.history_a if name == "history_a" else partition.history_b
     messages = _render_partition_messages(source_messages, latest_user_text=latest_user_text)
-    if not messages:
+    if not messages and name != "history_b":
         return None
     cache_parts = _partition_cache_parts(partition, source="conversation_partitions")
     cache_parts.update({
         "history_source": "conversation_partitions",
         "history_message_count": str(len(messages)),
     })
+    rendered = _format_history_lines(messages) if messages else "(no newer committed turns)"
     return PromptBlock(
         name=name,
         role="system",
-        content=f"## Committed {name.replace('_', ' ').title()}\n" + _format_history_lines(messages),
+        content=f"## Committed {name.replace('_', ' ').title()}\n" + rendered,
         cache_scope=name,
         cache_key_parts=cache_parts,
     )
@@ -839,6 +844,14 @@ def _build_prompt_result(
         "block_token_estimates": {block.name: _estimate_tokens(block.content) for block in blocks},
         "fixed_block_hash": fixed_block_hash,
         "summary_revision": (summary_block.cache_key_parts.get("summary_revision", "") if summary_block else ""),
+        "summary_enabled": (
+            (summary_block.cache_key_parts.get("summary_enabled", str(settings.conversation_partition_summary_enabled).lower()) == "true")
+            if summary_block else bool(settings.conversation_partition_summary_enabled)
+        ),
+        "summary_source": (summary_block.cache_key_parts.get("summary_source", "") if summary_block else ""),
+        "summary_char_count": int(summary_block.cache_key_parts.get("summary_char_count", "0")) if summary_block else 0,
+        "summary_updated": (summary_block.cache_key_parts.get("summary_updated", "false") == "true" if summary_block else False),
+        "summary_error": (summary_block.cache_key_parts.get("summary_error", "") if summary_block else ""),
         "history_a_cycle_id": (history_a_block.cache_key_parts.get("history_a_cycle_id", "") if history_a_block else ""),
         "history_b_cycle_id": (history_block.cache_key_parts.get("history_b_cycle_id", "") if history_block else ""),
         "history_message_count": (

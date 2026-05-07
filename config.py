@@ -137,6 +137,8 @@ class AppConfig:
     conversation_partitions_enabled: bool = False
     conversation_partition_rotate_every: int = 15
     conversation_partitions_read_enabled: bool = False
+    conversation_partition_summary_enabled: bool = False
+    conversation_partition_summary_model: str = ""
     prompt_debug: bool = False
     summary_trigger_messages: int = 24
     summary_keep_recent_messages: int = 12
@@ -296,6 +298,9 @@ class AppConfig:
             conversation_partition_rotate_every=int(os.getenv("CONVERSATION_PARTITION_ROTATE_EVERY", "15")),
             conversation_partitions_read_enabled=os.getenv("CONVERSATION_PARTITIONS_READ_ENABLED", "false").lower()
             in ("1", "true", "yes", "on"),
+            conversation_partition_summary_enabled=os.getenv("CONVERSATION_PARTITION_SUMMARY_ENABLED", "false").lower()
+            in ("1", "true", "yes", "on"),
+            conversation_partition_summary_model=os.getenv("CONVERSATION_PARTITION_SUMMARY_MODEL", ""),
             prompt_debug=os.getenv("PROMPT_DEBUG", "false").lower() in ("1", "true", "yes", "on"),
             summary_trigger_messages=int(os.getenv("SUMMARY_TRIGGER_MESSAGES", "24")),
             summary_keep_recent_messages=int(os.getenv("SUMMARY_KEEP_RECENT_MESSAGES", "12")),
