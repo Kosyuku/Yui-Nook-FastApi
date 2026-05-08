@@ -508,7 +508,68 @@ TOOLS_SCHEMA = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_extracted_item",
+            "description": (
+                "当对话中出现明显的待办、笔记、想法或日程时，直接调用此工具写入统一收件箱。"
+                "例如：'明天提醒我买猫粮'→todo，'想买香水'→todo/idea，"
+                "'周五下午3点开会'→event，'这个设定以后可以用'→note/idea。"
+                "同一句话重复说不会产生重复记录。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": ["todo", "note", "idea", "event"],
+                        "description": "事项类型",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "事项标题，简洁概括，10字以内最佳",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "事项详细内容，可为空",
+                    },
+                    "source_excerpt": {
+                        "type": "string",
+                        "description": "触发写入的原始对话片段（关键词/句），用于去重和溯源",
+                    },
+                    "target_module": {
+                        "type": "string",
+                        "enum": ["inbox", "folio", "perle", "drift"],
+                        "description": "目标模块，默认 inbox",
+                    },
+                },
+                "required": ["type", "title"],
+            },
+        },
+    },
 ]
+
+
+async def execute_create_extracted_item(args: dict) -> str:
+    try:
+        item = await db.create_extracted_item(
+            type=args.get("type", "todo"),
+            title=args.get("title", ""),
+            content=args.get("content", ""),
+            source_excerpt=args.get("source_excerpt", ""),
+            target_module=args.get("target_module", "inbox"),
+            agent_id=args.get("agent_id", ""),
+            session_id=args.get("session_id", ""),
+            message_id=args.get("message_id", ""),
+            metadata=args.get("metadata") or {},
+        )
+        return json.dumps(
+            {"status": "success", "item_id": item["id"], "title": item["title"]},
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
 
 
 TOOL_EXECUTORS: dict[str, Any] = {
@@ -527,6 +588,7 @@ TOOL_EXECUTORS: dict[str, Any] = {
     "delete_diary_entry": execute_delete_diary_entry,
     "comment_diary_entry": execute_comment_diary_entry,
     "underline_diary_entry": execute_underline_diary_entry,
+    "create_extracted_item": execute_create_extracted_item,
 }
 
 

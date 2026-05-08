@@ -199,6 +199,27 @@ class CompanionStatePayload(BaseModel):
     proactive_cooldown_until: Optional[str] = None
 
 
+class ExtractedItemCreate(BaseModel):
+    type: str                              # todo | note | idea | event
+    title: str
+    content: str = ""
+    source_excerpt: str = ""
+    target_module: str = "inbox"
+    agent_id: str = ""
+    session_id: str = ""
+    message_id: str = ""
+    metadata: dict = {}
+
+
+class ExtractedItemUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    type: Optional[str] = None
+    target_module: Optional[str] = None
+    status: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
 class CompanionStateSummaryPayload(BaseModel):
     agentId: Optional[str] = None
     impression: Optional[str] = None
@@ -243,6 +264,7 @@ class AgentProfilePayload(BaseModel):
     theme: Optional[str] = None
     settings: Optional[dict[str, Any]] = None
     roomBackground: Optional[str] = None
+    chatTheme: Optional[str] = None
     bubbleTheme: Optional[str] = None
     quickActions: Optional[list[dict[str, Any]]] = None
 
@@ -270,11 +292,13 @@ class AgentUpdatePayload(BaseModel):
 class MediaUploadUrlPayload(BaseModel):
     filename: str
     type: str = "other"
+    owner_type: str = "user"
     agent_id: Optional[str] = None
     mime_type: str = "application/octet-stream"
 
 
 class MediaItemCreatePayload(BaseModel):
+    owner_type: str = "user"
     agent_id: Optional[str] = None
     type: str = "other"
     title: str = ""
@@ -368,17 +392,23 @@ def _media_http_error(exc: Exception) -> HTTPException:
 @extra_api.post("/media/upload-url")
 async def create_media_upload_url(body: MediaUploadUrlPayload):
     try:
-        agent_id = await db.require_agent(body.agent_id) if body.agent_id else await db.resolve_agent_id(
-            purpose="media_upload_url"
-        )
+        owner_type = media_storage.normalize_owner_type(body.owner_type)
+        agent_id = await db.require_agent(body.agent_id) if owner_type == "agent" else None
         media_type = media_storage.normalize_media_type(body.type)
-        storage_key = media_storage.build_storage_key(media_type, agent_id, body.filename)
+        storage_key = media_storage.build_storage_key(
+            media_type,
+            agent_id,
+            body.filename,
+            owner_type=owner_type,
+        )
         mime_type = body.mime_type or "application/octet-stream"
         upload_url = media_storage.r2_client.presigned_upload_url(storage_key, mime_type=mime_type)
     except Exception as exc:
         raise _media_http_error(exc)
     return {
         "ok": True,
+        "owner_type": owner_type,
+        "agent_id": agent_id,
         "storage_provider": settings.media_storage_provider,
         "storage_key": storage_key,
         "upload_url": upload_url,
@@ -400,11 +430,12 @@ async def create_media_item(body: MediaItemCreatePayload):
 @extra_api.get("/media/items")
 async def list_media_items(
     type: Optional[str] = None,
+    owner_type: Optional[str] = None,
     agent_id: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
 ):
     try:
-        items = await db.list_media_items(type=type, agent_id=agent_id, limit=limit)
+        items = await db.list_media_items(type=type, owner_type=owner_type, agent_id=agent_id, limit=limit)
     except Exception as exc:
         raise _media_http_error(exc)
     return {"items": items}
@@ -605,7 +636,7 @@ async def get_agent_profile(agent_id: str):
         matched = next((item for item in contacts if str(item.get("id") or "") == safe_agent), {})
         profile = _compact_profile(
             _safe_profile_payload(matched),
-            {"avatar", "name", "bio", "theme", "settings", "roomBackground", "bubbleTheme", "quickActions"},
+            {"avatar", "name", "bio", "theme", "settings", "roomBackground", "chatTheme", "bubbleTheme", "quickActions"},
         )
     return {"ok": True, "agent_id": safe_agent, "profile": profile, "updated_at": updated_at, "storage": "supabase"}
 
@@ -619,7 +650,7 @@ async def save_agent_profile(agent_id: str, body: AgentProfilePayload):
     current, _ = await _load_setting_dict(_agent_profile_key(safe_agent))
     incoming = _compact_profile(
         body.dict(),
-        {"avatar", "name", "bio", "theme", "settings", "roomBackground", "bubbleTheme", "quickActions"},
+        {"avatar", "name", "bio", "theme", "settings", "roomBackground", "chatTheme", "bubbleTheme", "quickActions"},
     )
     profile = {**current, **incoming}
     row = await db.set_setting(_agent_profile_key(safe_agent), json.dumps(profile, ensure_ascii=False))
@@ -1805,3 +1836,66 @@ async def add_perle_track(track: PerleTrack):
 async def get_perle_tracks():
     rows = await db._supabase_select("perle_tracks", order="created_at.desc", limit=500)
     return {"tracks": rows}
+
+
+# ══════════ 统一收件箱 / Extracted Items ══════════
+
+@extra_api.get("/extracted-items")
+async def list_extracted_items(
+    status: Optional[str] = None,
+    type: Optional[str] = None,
+    target_module: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    items = await db.list_extracted_items(
+        status=status,
+        type=type,
+        target_module=target_module,
+        agent_id=agent_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {"items": items, "total": len(items)}
+
+
+@extra_api.post("/extracted-items")
+async def create_extracted_item(body: ExtractedItemCreate):
+    VALID_TYPES = {"todo", "note", "idea", "event"}
+    VALID_MODULES = {"inbox", "folio", "perle", "drift"}
+    if body.type not in VALID_TYPES:
+        raise HTTPException(status_code=400, detail=f"type 必须是 {VALID_TYPES} 之一")
+    if body.target_module not in VALID_MODULES:
+        raise HTTPException(status_code=400, detail=f"target_module 必须是 {VALID_MODULES} 之一")
+    item = await db.create_extracted_item(
+        type=body.type,
+        title=body.title,
+        content=body.content,
+        source_excerpt=body.source_excerpt,
+        target_module=body.target_module,
+        agent_id=body.agent_id,
+        session_id=body.session_id,
+        message_id=body.message_id,
+        metadata=body.metadata,
+    )
+    return {"item": item}
+
+
+@extra_api.patch("/extracted-items/{item_id}")
+async def update_extracted_item(item_id: str, body: ExtractedItemUpdate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="没有需要更新的字段")
+    ok = await db.update_extracted_item(item_id, **updates)
+    if not ok:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    return {"ok": True}
+
+
+@extra_api.delete("/extracted-items/{item_id}")
+async def delete_extracted_item(item_id: str):
+    ok = await db.delete_extracted_item(item_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    return {"ok": True}

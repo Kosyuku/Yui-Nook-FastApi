@@ -26,7 +26,7 @@ SUPABASE_MEDIA_ITEMS_TABLE=media_items
 
 ## Upload Flow
 
-1. 前端调用 `POST /api/media/upload-url`，传 `filename`、`type`、可选 `agent_id`、`mime_type`。
+1. 前端调用 `POST /api/media/upload-url`，传 `filename`、`type`、`owner_type`、可选 `agent_id`、`mime_type`。
 2. 后端返回 `upload_url` 和 `storage_key`。
 3. 前端用 `PUT` 把文件直接上传到 `upload_url`，`Content-Type` 要和返回的 headers 保持一致。
 4. 上传成功后，前端调用 `POST /api/media/items` 保存元数据。
@@ -36,12 +36,12 @@ SUPABASE_MEDIA_ITEMS_TABLE=media_items
 ```bash
 curl -X POST http://127.0.0.1:8000/api/media/upload-url \
   -H "Content-Type: application/json" \
-  -d '{"type":"music","filename":"song.mp3","agent_id":"azheng","mime_type":"audio/mpeg"}'
+  -d '{"type":"music","owner_type":"user","filename":"song.mp3","mime_type":"audio/mpeg"}'
 ```
 
 ## Read Flow
 
-1. 前端调用 `GET /api/media/items?agent_id=azheng&type=music` 获取媒体列表。
+1. 前端调用 `GET /api/media/items?owner_type=user&type=music` 获取个人媒体列表。
 2. 用户点开某条媒体时，调用 `GET /api/media/items/{id}/url`。
 3. 后端返回临时 read URL，前端用它播放音乐或打开电子书。
 
@@ -56,7 +56,8 @@ curl "http://127.0.0.1:8000/api/media/items/{id}/url?target=cover"
 `media_items` 至少包含：
 
 - `id`
-- `agent_id`
+- `owner_type`: `user` / `global` / `agent`
+- `agent_id`: 只有 `owner_type=agent` 时填写并校验真实聊天角色
 - `type`: `book` / `music` / `image` / `cover` / `other`
 - `title`, `artist`, `album`, `author`
 - `storage_provider`
@@ -74,5 +75,15 @@ curl "http://127.0.0.1:8000/api/media/items/{id}/url?target=cover"
 - `music/{agent_id}/{uuid}_{filename}`
 - `covers/{agent_id}/{uuid}_{filename}`
 - `images/{agent_id}/{uuid}_{filename}`
+
+个人媒体库默认走：
+
+- `books/user/{uuid}_{filename}`
+- `music/user/{uuid}_{filename}`
+
+公共媒体库默认走：
+
+- `books/global/{uuid}_{filename}`
+- `music/global/{uuid}_{filename}`
 
 文件名会被清理，避免路径穿越、空格和奇怪符号。
