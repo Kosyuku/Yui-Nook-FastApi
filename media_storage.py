@@ -15,10 +15,17 @@ MEDIA_TYPE_PREFIXES = {
     "other": "other",
 }
 
+MEDIA_OWNER_TYPES = {"user", "global", "agent"}
+
 
 def normalize_media_type(value: str | None) -> str:
     media_type = str(value or "other").strip().lower()
     return media_type if media_type in MEDIA_TYPE_PREFIXES else "other"
+
+
+def normalize_owner_type(value: str | None) -> str:
+    owner_type = str(value or "user").strip().lower()
+    return owner_type if owner_type in MEDIA_OWNER_TYPES else "user"
 
 
 def sanitize_filename(filename: str | None) -> str:
@@ -31,10 +38,22 @@ def sanitize_filename(filename: str | None) -> str:
     return name[:160]
 
 
-def build_storage_key(media_type: str | None, agent_id: str, filename: str | None) -> str:
+def build_storage_key(
+    media_type: str | None,
+    agent_id: str | None,
+    filename: str | None,
+    *,
+    owner_type: str | None = "user",
+) -> str:
     prefix = MEDIA_TYPE_PREFIXES[normalize_media_type(media_type)]
+    owner = normalize_owner_type(owner_type)
+    owner_segment = "global" if owner == "global" else "user"
+    if owner == "agent":
+        owner_segment = str(agent_id or "").strip()
+        if not owner_segment:
+            raise ValueError("agent_id is required when owner_type='agent'")
     safe_name = sanitize_filename(filename)
-    return f"{prefix}/{agent_id}/{uuid.uuid4().hex}_{safe_name}"
+    return f"{prefix}/{owner_segment}/{uuid.uuid4().hex}_{safe_name}"
 
 
 class R2Client:

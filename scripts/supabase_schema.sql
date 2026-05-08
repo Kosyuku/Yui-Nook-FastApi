@@ -189,7 +189,8 @@ create index if not exists idx_memories_embedding_hnsw
 
 create table if not exists media_items (
     id text primary key,
-    agent_id text not null references agents(agent_id),
+    owner_type text not null default 'user' check (owner_type in ('user', 'global', 'agent')),
+    agent_id text references agents(agent_id),
     type text not null default 'other' check (type in ('book', 'music', 'image', 'cover', 'other')),
     title text not null default '',
     artist text not null default '',
@@ -206,7 +207,11 @@ create table if not exists media_items (
     updated_at text not null
 );
 
-alter table media_items add column if not exists agent_id text not null default 'azheng' references agents(agent_id);
+alter table media_items add column if not exists owner_type text not null default 'user';
+alter table media_items add column if not exists agent_id text references agents(agent_id);
+alter table media_items alter column agent_id drop not null;
+alter table media_items alter column owner_type set default 'user';
+update media_items set owner_type = 'user' where coalesce(owner_type, '') = '' or owner_type not in ('user', 'global', 'agent');
 alter table media_items add column if not exists type text not null default 'other';
 alter table media_items add column if not exists title text not null default '';
 alter table media_items add column if not exists artist text not null default '';
@@ -224,6 +229,8 @@ alter table media_items add column if not exists updated_at text not null defaul
 
 create index if not exists idx_media_items_agent_type
     on media_items(agent_id, type, created_at desc);
+create index if not exists idx_media_items_owner_type
+    on media_items(owner_type, type, created_at desc);
 create index if not exists idx_media_items_type_created
     on media_items(type, created_at desc);
 create index if not exists idx_media_items_storage_key

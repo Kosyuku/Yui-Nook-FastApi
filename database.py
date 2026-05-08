@@ -478,6 +478,32 @@ CREATE TABLE IF NOT EXISTS memory_label_items (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_label_items_lid ON memory_label_items(label_id);
 CREATE INDEX IF NOT EXISTS idx_memory_label_items_mid ON memory_label_items(memory_id);
+
+CREATE TABLE IF NOT EXISTS extracted_items (
+    id             TEXT PRIMARY KEY,
+    agent_id       TEXT NOT NULL DEFAULT '',
+    session_id     TEXT NOT NULL DEFAULT '',
+    message_id     TEXT NOT NULL DEFAULT '',
+    type           TEXT NOT NULL,                          -- todo | note | idea | event
+    title          TEXT NOT NULL,
+    content        TEXT NOT NULL DEFAULT '',
+    source_excerpt TEXT NOT NULL DEFAULT '',
+    target_module  TEXT NOT NULL DEFAULT 'inbox',          -- inbox | folio | perle | drift
+    status         TEXT NOT NULL DEFAULT 'accepted',       -- accepted | done | dismissed | pending
+    metadata       TEXT NOT NULL DEFAULT '{}',
+    dedupe_key     TEXT UNIQUE,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    handled_at     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_extracted_items_status
+    ON extracted_items(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_extracted_items_type
+    ON extracted_items(type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_extracted_items_agent
+    ON extracted_items(agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_extracted_items_module
+    ON extracted_items(target_module, status, created_at DESC);
 """
 
 
@@ -6811,3 +6837,203 @@ def format_recent_activity_block(events: list[dict[str, Any]]) -> str:
         content = str(event.get("content") or event.get("url") or "").strip()
         lines.append(f"- {hhmm} {label}: {content}")
     return "\n".join(lines)
+
+
+# ==================== Extracted Items (Unified Inbox) ====================
+
+def _make_dedupe_key(item_type: str, source_excerpt: str, content: str) -> str:
+    """Generate a deduplication key based on type + normalized text content."""
+    text = (source_excerpt or content or "")[:100]
+    text = text.strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    raw = f"{item_type}:{text}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
+
+
+async def create_extracted_item(
+    *,
+    type: str,
+    title: str,
+    content: str = "",
+    source_excerpt: str = "",
+    target_module: str = "inbox",
+    status: str = "accepted",
+    agent_id: str = "",
+    session_id: str = "",
+    message_id: str = "",
+    metadata: dict | None = None,
+    dedupe_key: str | None = None,
+) -> dict[str, Any]:
+    item_id = _new_id()
+    now = _now()
+    meta_str = json.dumps(metadata or {}, ensure_ascii=False)
+    dk = dedupe_key or _make_dedupe_key(type, source_excerpt, content or title)
+
+    if _use_supabase_data():
+        payload = {
+            "id": item_id,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "message_id": message_id,
+            "type": type,
+            "title": title,
+            "content": content,
+            "source_excerpt": source_excerpt,
+            "target_module": target_module,
+            "status": status,
+            "metadata": metadata or {},
+            "dedupe_key": dk,
+            "created_at": now,
+            "updated_at": now,
+            "handled_at": "",
+        }
+        try:
+            return await _supabase_insert_verified(
+                settings.supabase_extracted_items_table,
+                payload,
+                on_conflict="dedupe_key",
+            )
+        except Exception:
+            # dedupe conflict — fetch existing
+            rows = await _supabase_select(
+                settings.supabase_extracted_items_table,
+                filters={"dedupe_key": f"eq.{dk}"},
+                limit=1,
+            )
+            if rows:
+                return rows[0]
+            raise
+
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO extracted_items
+               (id, agent_id, session_id, message_id, type, title, content,
+                source_excerpt, target_module, status, metadata, dedupe_key,
+                created_at, updated_at, handled_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (item_id, agent_id, session_id, message_id, type, title, content,
+             source_excerpt, target_module, status, meta_str, dk,
+             now, now, ""),
+        )
+        await db.commit()
+    except Exception as exc:
+        if "UNIQUE" in str(exc).upper():
+            cursor = await db.execute(
+                "SELECT * FROM extracted_items WHERE dedupe_key = ?", (dk,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                return dict(row)
+        raise
+    return {
+        "id": item_id, "agent_id": agent_id, "session_id": session_id,
+        "message_id": message_id, "type": type, "title": title, "content": content,
+        "source_excerpt": source_excerpt, "target_module": target_module,
+        "status": status, "metadata": metadata or {}, "dedupe_key": dk,
+        "created_at": now, "updated_at": now, "handled_at": "",
+    }
+
+
+async def list_extracted_items(
+    *,
+    status: str | None = None,
+    type: str | None = None,
+    target_module: str | None = None,
+    agent_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    if _use_supabase_data():
+        filters: dict[str, str] = {}
+        if status:
+            filters["status"] = f"eq.{status}"
+        if type:
+            filters["type"] = f"eq.{type}"
+        if target_module:
+            filters["target_module"] = f"eq.{target_module}"
+        if agent_id:
+            filters["agent_id"] = f"eq.{agent_id}"
+        rows = await _supabase_select(
+            settings.supabase_extracted_items_table,
+            filters=filters or None,
+            order="created_at.desc",
+            limit=limit,
+        )
+        return rows
+
+    db = await get_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if type:
+        clauses.append("type = ?")
+        params.append(type)
+    if target_module:
+        clauses.append("target_module = ?")
+        params.append(target_module)
+    if agent_id:
+        clauses.append("agent_id = ?")
+        params.append(agent_id)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params += [limit, offset]
+    cursor = await db.execute(
+        f"SELECT * FROM extracted_items {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        params,
+    )
+    rows = await cursor.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        try:
+            d["metadata"] = json.loads(d.get("metadata") or "{}")
+        except Exception:
+            d["metadata"] = {}
+        result.append(d)
+    return result
+
+
+async def update_extracted_item(item_id: str, **kwargs) -> bool:
+    now = _now()
+    terminal_statuses = {"done", "dismissed"}
+    if "status" in kwargs and kwargs["status"] in terminal_statuses:
+        kwargs.setdefault("handled_at", now)
+    kwargs["updated_at"] = now
+    if "metadata" in kwargs and isinstance(kwargs["metadata"], dict):
+        kwargs["metadata"] = json.dumps(kwargs["metadata"], ensure_ascii=False)
+
+    if _use_supabase_data():
+        payload = dict(kwargs)
+        rows = await _supabase_update(
+            settings.supabase_extracted_items_table,
+            {"id": f"eq.{item_id}"},
+            payload,
+        )
+        return len(rows) > 0
+
+    db = await get_db()
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    vals = list(kwargs.values()) + [item_id]
+    result = await db.execute(
+        f"UPDATE extracted_items SET {sets} WHERE id = ?", vals
+    )
+    await db.commit()
+    return result.rowcount > 0
+
+
+async def delete_extracted_item(item_id: str) -> bool:
+    if _use_supabase_data():
+        rows = await _supabase_delete(
+            settings.supabase_extracted_items_table,
+            {"id": f"eq.{item_id}"},
+        )
+        return len(rows) > 0
+
+    db = await get_db()
+    result = await db.execute(
+        "DELETE FROM extracted_items WHERE id = ?", (item_id,)
+    )
+    await db.commit()
+    return result.rowcount > 0

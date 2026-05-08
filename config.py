@@ -56,6 +56,7 @@ class AppConfig:
     supabase_rp_messages_table: str = "rp_messages"
     supabase_activity_events_table: str = "activity_events"
     supabase_media_items_table: str = "media_items"
+    supabase_extracted_items_table: str = "extracted_items"
     media_storage_provider: str = "r2"
     r2_account_id: str = ""
     r2_access_key_id: str = ""
@@ -214,6 +215,7 @@ class AppConfig:
             supabase_rp_messages_table=os.getenv("SUPABASE_RP_MESSAGES_TABLE", "rp_messages"),
             supabase_activity_events_table=os.getenv("SUPABASE_ACTIVITY_EVENTS_TABLE", "activity_events"),
             supabase_media_items_table=os.getenv("SUPABASE_MEDIA_ITEMS_TABLE", "media_items"),
+            supabase_extracted_items_table=os.getenv("SUPABASE_EXTRACTED_ITEMS_TABLE", "extracted_items"),
             media_storage_provider=os.getenv("MEDIA_STORAGE_PROVIDER", "r2").strip().lower() or "r2",
             r2_account_id=os.getenv("R2_ACCOUNT_ID", "").strip(),
             r2_access_key_id=os.getenv("R2_ACCESS_KEY_ID", "").strip(),
