@@ -1,0 +1,128 @@
+﻿<div id="page-calendar" class="page hidden sub-page">
+  <div class="mx-auto w-full max-w-[414px] h-full flex flex-col">
+
+    <header class="sub-header calendar-sub-header"><span class="glass-refraction"></span>
+      <button onclick="closePage('page-calendar')" class="cal-back-btn active:scale-90 transition-transform shrink-0" aria-label="返回">
+        <svg class="w-[18px] h-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6" />
+        </svg>
+      </button>
+      <div class="flex-1 text-center cal-header-stack">
+        <h1 class="cal-header-title">Drift</h1>
+        <p class="cal-header-subtitle">流转</p>
+      </div>
+      <div class="w-[34px] shrink-0"></div>
+    </header>
+
+    <div id="calendar-scroll-area">
+      <div id="calendar-scroll-content">
+        <div class="cal-shell">
+          <div class="cal-tabrow">
+            <div class="cal-tabbar">
+              <button id="cal-tab-calendar" type="button" class="cal-tab active" onclick="setCalendarView('calendar')">日历</button>
+              <button id="cal-tab-timeline" type="button" class="cal-tab" onclick="setCalendarView('timeline')">时间线</button>
+            </div>
+            <button type="button" class="cal-add-btn transition-transform" onclick="openSelectedDateEditor()" aria-label="添加事件"><span></span></button>
+          </div>
+
+          <section id="cal-panel-calendar" class="cal-panel">
+            <div class="flex items-center justify-between mb-3">
+              <button onclick="changeMonth(-1)" class="cal-nav-btn text-[12px] px-3 py-2 rounded-[12px] transition-transform">← 上月</button>
+              <span id="cal-month-label" class="text-[14px] font-semibold text-stone-700/92"></span>
+              <button onclick="changeMonth(1)" class="cal-nav-btn text-[12px] px-3 py-2 rounded-[12px] transition-transform">下月 →</button>
+            </div>
+
+            <div class="grid grid-cols-7 mb-1.5 px-1">
+              <div class="text-center text-[10px] font-semibold text-[#d491b6] py-1">日</div>
+              <div class="text-center text-[10px] font-medium text-stone-400/85 py-1">一</div>
+              <div class="text-center text-[10px] font-medium text-stone-400/85 py-1">二</div>
+              <div class="text-center text-[10px] font-medium text-stone-400/85 py-1">三</div>
+              <div class="text-center text-[10px] font-medium text-stone-400/85 py-1">四</div>
+              <div class="text-center text-[10px] font-medium text-stone-400/85 py-1">五</div>
+              <div class="text-center text-[10px] font-semibold text-[#c6a0d6] py-1">六</div>
+            </div>
+
+            <div class="cal-card p-3">
+              <div id="cal-grid" class="grid grid-cols-7 gap-[5px]"></div>
+            </div>
+
+            <div class="mt-3 cal-card p-3.5">
+              <div class="flex items-center justify-between gap-3 mb-2">
+                <p id="cal-events-title" class="text-[12px] font-semibold text-stone-600/92">📅 本月安排</p>
+              </div>
+              <div id="cal-events-list" class="space-y-2"></div>
+            </div>
+          </section>
+
+          <section id="cal-panel-timeline" class="cal-panel" hidden>
+            <div class="timeline-stage">
+              <div class="flex items-start justify-between gap-3 mb-2.5">
+                <div>
+                  <p class="text-[15px] font-semibold text-stone-700/92">大事记时间线</p>
+                  <p id="timeline-subtitle" class="text-[11px] text-stone-400 mt-1 leading-[1.45]">按时间倒序收好你们的重要时刻。</p>
+                  <div class="flex items-center gap-2 mt-2 flex-wrap">
+                    <span id="timeline-count-chip" class="px-2.5 py-1 rounded-full bg-[#faf5fb] text-[10px] font-semibold text-stone-500 border border-[#eadfed]">0 条记录</span>
+                    <button id="cal-clear-filter" type="button" onclick="clearTimelineFilter()" class="hidden px-2.5 py-1 rounded-full bg-[#f9e7f1] text-[10px] font-semibold text-[#c27aa0] border border-[#efcfdf]">查看全部</button>
+                  </div>
+                </div>
+              </div>
+              <div id="timeline-list" class="space-y-2.5"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Event bottom sheet -->
+  <div id="event-sheet">
+    <div id="event-sheet-panel" class="glass rounded-t-[22px] px-5 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+      <div class="w-10 h-1 bg-stone-300/55 rounded-full mx-auto mb-3"></div>
+      <div class="mb-2.5 flex items-center justify-between gap-3">
+        <button type="button" id="sheet-date-label" class="sheet-date-trigger" onclick="openSheetDatePicker()">3月22日 · 新建大事记</button>
+        <input id="event-date-input" type="date" class="hidden" />
+      </div>
+      <input id="event-title-input" type="text" placeholder="给这件事起个标题…"
+        class="w-full bg-white/96 rounded-[14px] px-4 py-3 text-[13px] text-stone-700/90 placeholder-stone-400/55 outline-none ring-1 ring-[#efe3f2] font-sans" />
+      <textarea id="event-detail-input" rows="3" placeholder="写下一点细节，比如发生了什么、当时的心情。"
+        class="w-full mt-2 bg-white/96 rounded-[14px] px-4 py-3 text-[12.5px] leading-[1.5] text-stone-700/90 placeholder-stone-400/55 outline-none ring-1 ring-[#efe3f2] resize-none font-sans"></textarea>
+      <div class="mt-2">
+        <p class="text-[11px] font-semibold text-stone-500/80 mb-2">标签</p>
+        <div id="event-tag-group" class="flex flex-wrap gap-2"></div>
+      </div>
+      <div class="sheet-actions">
+        <button onclick="closeEventSheet()" class="sheet-secondary-btn">取消</button>
+        <button id="event-delete-button" onclick="deleteEditingEvent()" class="hidden sheet-danger-btn">删除</button>
+        <button onclick="saveEvent()" class="sheet-primary-btn">保存</button>
+      </div>
+    </div>
+  </div>
+  <div id="tag-modal">
+    <div class="tag-modal-card">
+      <p class="text-[14px] font-semibold text-stone-700/92">新建自定义标签</p>
+      <p class="mt-1 text-[11px] leading-[1.45] text-stone-400/90">比如旅行清单、想一起完成，选好后会自动成为当前标签。</p>
+      <input id="tag-modal-input" type="text" placeholder="输入一个标签名" class="w-full mt-3 bg-white/96 rounded-[14px] px-4 py-3 text-[13px] text-stone-700/90 placeholder-stone-400/55 outline-none ring-1 ring-[#efe3f2] font-sans" />
+      <div class="sheet-actions mt-3">
+        <button type="button" class="sheet-secondary-btn" onclick="closeTagModal()">取消</button>
+        <button type="button" class="sheet-primary-btn" onclick="confirmCustomTag()">确定</button>
+      </div>
+    </div>
+  </div>
+  <div id="date-picker-modal">
+    <div class="date-picker-card">
+      <div class="flex items-center justify-between mb-3">
+        <button type="button" class="date-picker-nav" onclick="changeDatePickerMonth(-1)">‹</button>
+        <button type="button" id="date-picker-label" class="text-[14px] font-semibold text-stone-700/95 tracking-[.02em]" onclick="jumpDatePickerToday()">2026年3月</button>
+        <button type="button" class="date-picker-nav" onclick="changeDatePickerMonth(1)">›</button>
+      </div>
+      <div class="grid grid-cols-7 gap-1 mb-2 px-1 text-center text-[10px] text-stone-400/88">
+        <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+      </div>
+      <div id="date-picker-grid" class="grid grid-cols-7 gap-1.5"></div>
+      <div class="sheet-actions mt-4">
+        <button type="button" class="sheet-secondary-btn" onclick="closeDatePicker()">取消</button>
+        <button type="button" class="sheet-primary-btn" onclick="jumpDatePickerToday()">今天</button>
+      </div>
+    </div>
+  </div>
+</div><!-- /calendar -->

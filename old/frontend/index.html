@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#fce8f0" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <title>小手机</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['"Zen Maru Gothic"', '"Noto Sans SC"', 'system-ui', 'sans-serif'] },
+        },
+      },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+
+  <style>
+    /* ── Reset ── */
+    *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; overflow: hidden;
+      font-family: 'Zen Maru Gothic', 'Noto Sans SC', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased; }
+    * { scrollbar-width: none; }
+    *::-webkit-scrollbar { display: none; }
+
+    /* ── Wallpaper ── */
+    #wallpaper {
+      position: fixed; inset: 0; z-index: 0;
+      background: url('https://images.unsplash.com/photo-1578922746465-3a80a228f223?w=900&q=80') center/cover no-repeat;
+      transition: background-image .55s ease;
+    }
+    #veil {
+      position: fixed; inset: 0; z-index: 1; pointer-events: none;
+      background: linear-gradient(160deg,
+        rgba(255,248,254,.46) 0%,
+        rgba(248,238,255,.32) 50%,
+        rgba(255,242,250,.22) 100%);
+    }
+
+    /* ── Glass ── */
+    .glass {
+      background: rgba(255,255,255,.44);
+      -webkit-backdrop-filter: blur(22px) saturate(1.4);
+      backdrop-filter: blur(22px) saturate(1.4);
+      box-shadow: 0 8px 32px rgba(160,110,180,.10), 0 2px 10px rgba(160,110,180,.06);
+    }
+    .glass-dark {
+      background: rgba(12,6,22,.70);
+      -webkit-backdrop-filter: blur(20px) saturate(1.2);
+      backdrop-filter: blur(20px) saturate(1.2);
+    }
+
+    /* ── Page system ── */
+    .page {
+      position: fixed; inset: 0; z-index: 10;
+      transition: transform .44s cubic-bezier(.16,1,.3,1), opacity .36s ease;
+      will-change: transform, opacity;
+    }
+    .page.hidden { transform: scale(.07); opacity: 0; pointer-events: none; }
+    #page-home { background: transparent; display: flex; flex-direction: column;
+      overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .sub-page {
+      overflow-y: auto; -webkit-overflow-scrolling: touch;
+      background: rgba(252,247,255,.88);
+      -webkit-backdrop-filter: blur(26px) saturate(1.3);
+      backdrop-filter: blur(26px) saturate(1.3);
+    }
+
+    /* ── Dynamic Island ── */
+    #di-pill {
+      border-radius: 999px;
+      overflow: hidden;
+      transition: width .40s cubic-bezier(.16,1,.3,1),
+                  padding .34s cubic-bezier(.16,1,.3,1),
+                  border-radius .30s ease;
+      cursor: pointer; user-select: none;
+    }
+    #di-pill.collapsed { width: 118px; padding: 7px 16px; }
+    #di-pill.expanded  { width: min(92vw, 355px); padding: 12px 20px 15px; border-radius: 26px; }
+    #di-msg {
+      overflow: hidden; max-height: 0; opacity: 0;
+      transition: max-height .38s cubic-bezier(.16,1,.3,1), opacity .28s ease .06s;
+    }
+    #di-pill.expanded #di-msg { max-height: 90px; opacity: 1; }
+
+    /* ── Jiggle ── */
+    @keyframes jiggle {
+      0%, 100% { transform: rotate(-1.6deg) translateZ(0); }
+      50%       { transform: rotate(1.6deg)  translateZ(0); }
+    }
+    .jiggle { animation: jiggle .22s ease-in-out infinite; transform-origin: center; }
+
+    /* ── Delete badge ── */
+    .del-badge {
+      position: absolute; top: -5px; right: -5px;
+      width: 21px; height: 21px; border-radius: 50%;
+      background: #ff3b30; border: 2.5px solid rgba(255,255,255,.92);
+      color: #fff; font-size: 15px; font-weight: 700; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none;
+      transition: opacity .15s; z-index: 20; cursor: pointer;
+    }
+    #app-grid.edit-mode .del-badge { opacity: 1; pointer-events: auto; }
+
+    /* ── Edit done btn ── */
+    #btn-done {
+      position: fixed; top: max(.9rem, env(safe-area-inset-top)); left: 50%;
+      transform: translateX(-50%) translateY(-72px);
+      z-index: 200; opacity: 0; pointer-events: none;
+      transition: transform .32s cubic-bezier(.16,1,.3,1), opacity .24s;
+    }
+    #btn-done.show { transform: translateX(-50%) translateY(0); opacity: 1; pointer-events: auto; }
+
+    /* ── App icon ── */
+    .app-icon-img {
+      width: 58px; height: 58px;
+      border-radius: 16px; object-fit: cover; display: block;
+      box-shadow: 0 4px 16px rgba(100,70,150,.22), 0 1px 4px rgba(100,70,150,.1);
+    }
+
+    /* ── Marquee ── */
+    .mq-wrap { overflow: hidden; white-space: nowrap; }
+    @keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+    .mq-inner { display: inline-block; animation: marquee 14s linear infinite; }
+
+    /* ── Whisper bubble ── */
+    #whisper-bubble {
+      position: absolute; right: 80px; top: 50%;
+      transform: translateY(-50%) scale(.82);
+      min-width: 130px; max-width: 176px;
+      padding: 9px 12px; border-radius: 14px; border-bottom-left-radius: 3px;
+      background: rgba(255,253,255,.93);
+      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+      box-shadow: 0 6px 20px rgba(130,80,160,.14);
+      font-size: .72rem; color: #5a3060; line-height: 1.55;
+      opacity: 0; pointer-events: none;
+      transition: opacity .24s, transform .28s cubic-bezier(.16,1,.3,1);
+      z-index: 30; white-space: pre-line;
+    }
+    #whisper-bubble.show { opacity: 1; transform: translateY(-50%) scale(1); pointer-events: auto; }
+
+    /* ── Sub-page header ── */
+    .sub-header {
+      position: sticky; top: 0; z-index: 20;
+      display: flex; align-items: center; gap: .5rem;
+      padding: max(.65rem, env(safe-area-inset-top)) 1.25rem .65rem;
+      background: rgba(252,247,255,.78);
+      -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+    }
+
+    /* ── Status dot ── */
+    .s-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid rgba(255,255,255,.9); }
+    .s-online { background: #34d399; box-shadow: 0 0 5px rgba(52,211,153,.7); }
+    .s-busy   { background: #f87171; box-shadow: 0 0 5px rgba(248,113,113,.6); }
+    .s-away   { background: #fbbf24; }
+    .s-off    { background: #9ca3af; }
+
+    /* ── Calendar ── */
+    .cal-day {
+      aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+      font-size: .78rem; border-radius: 9px; cursor: pointer;
+      transition: background .15s;
+    }
+    .cal-day:hover     { background: rgba(240,160,190,.22); }
+    .cal-day.today     { background: rgba(240,90,130,.74); color: #fff; font-weight: 700; }
+    .cal-day.selected  { outline: 2px solid rgba(240,120,155,.65); font-weight: 600; }
+    .cal-day.dim       { opacity: .28; }
+
+    /* ── Event bottom sheet ── */
+    #event-sheet {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+      max-width: 414px; margin: 0 auto;
+      transform: translateY(110%);
+      transition: transform .38s cubic-bezier(.16,1,.3,1);
+    }
+    #event-sheet.open { transform: translateY(0); }
+
+    /* ── Photo grid ── */
+    .photo-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: .4rem; }
+    .photo-item {
+      aspect-ratio: 1; border-radius: 11px; overflow: hidden;
+      background: rgba(215,205,230,.28); cursor: pointer;
+    }
+    .photo-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  </style>
+</head>
+
+<body>
+<!-- Wallpaper layers -->
+<div id="wallpaper"></div>
+<div id="veil"></div>
+
+<!-- Hidden file inputs -->
+<input type="file" id="wp-input"    accept="image/*"          style="display:none" onchange="onWpFile(event)" />
+<input type="file" id="photo-input" accept="image/*" multiple style="display:none" onchange="onPhotoFiles(event)" />
+
+<!-- Edit-mode done button -->
+<button id="btn-done"
+  class="glass text-[12.5px] font-semibold text-rose-500 px-6 py-2 rounded-full ring-1 ring-white/60 shadow-md"
+  onclick="exitEditMode()">完成</button>
+
+
+<!-- ████████████████ HOME PAGE ████████████████ -->
+<div id="page-home" class="page">
+  <div class="mx-auto w-full max-w-[414px] flex flex-col min-h-full px-4 pb-36"
+       style="padding-top:max(.7rem,env(safe-area-inset-top))">
+
+    <!-- ① Dynamic Island -->
+    <div class="flex justify-center mb-5 shrink-0">
+      <div id="di-pill" class="glass-dark collapsed" onclick="toggleDI()">
+        <!-- Collapsed state: indicator dots -->
+        <div id="di-idle" class="flex items-center justify-between">
+          <div class="flex gap-1.5 items-center">
+            <div class="w-2 h-2 rounded-full bg-rose-400/90 shadow-[0_0_6px_rgba(251,113,133,.9)]"></div>
+            <div class="w-1.5 h-1.5 rounded-full bg-pink-300/55"></div>
+          </div>
+          <div class="w-8 h-[3px] rounded-full bg-white/14 ml-3"></div>
+        </div>
+        <!-- Expanded state: message -->
+        <div id="di-msg" class="mt-2.5">
+          <p class="text-[12.5px] leading-relaxed">
+            <span class="text-rose-300/95 font-semibold">阿延（Gu Yan）</span>
+            <span class="text-white/50">：</span>
+            <span class="text-white/88">小酒，今天也要开开心心哦~ ✨</span>
+          </p>
+          <p class="text-[9px] text-white/32 mt-1.5 tracking-wide">轻触收起</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ② Love Tile -->
+    <section class="mb-5 shrink-0">
+      <div class="glass rounded-[26px] relative overflow-hidden py-5 px-5">
+        <div class="absolute inset-0 bg-gradient-to-br from-rose-50/45 via-transparent to-purple-50/30 pointer-events-none"></div>
+
+        <div class="relative z-10 flex items-start">
+          <!-- Left: My avatar (shifted slightly up) -->
+          <div class="flex flex-col items-center gap-1.5 -translate-y-1 shrink-0">
+            <div class="w-[66px] h-[66px] rounded-full overflow-hidden ring-[2.5px] ring-white/82 shadow-[0_4px_18px_rgba(200,140,180,.26)]">
+              <img src="https://picsum.photos/seed/me_avatar/200/200" alt="我" class="w-full h-full object-cover" />
+            </div>
+            <span class="text-[11px] text-stone-500/90 font-medium">我</span>
+          </div>
+
+          <!-- Center: SVG arc + days -->
+          <div class="flex-1 flex flex-col items-center justify-center px-2 -mt-1" style="min-height:74px">
+            <svg viewBox="0 0 100 38" class="w-full max-w-[108px]" preserveAspectRatio="none" style="overflow:visible">
+              <defs>
+                <linearGradient id="arcGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%"   stop-color="#fda4af" stop-opacity=".55"/>
+                  <stop offset="50%"  stop-color="#f472b6" stop-opacity=".90"/>
+                  <stop offset="100%" stop-color="#fda4af" stop-opacity=".55"/>
+                </linearGradient>
+              </defs>
+              <path d="M 4 30 Q 50 -4 96 30" stroke="url(#arcGrad)" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <text x="50" y="9" text-anchor="middle" font-size="10" fill="#f472b6" opacity=".88">♡</text>
+            </svg>
+            <p class="text-[18px] font-bold text-rose-400/95 leading-none mt-1" id="love-days-big">❤️ 365</p>
+            <p class="text-[9px] text-stone-400/80 mt-0.5">在一起的第 <span id="love-days-num">365</span> 天</p>
+          </div>
+
+          <!-- Right: Partner avatar (shifted down) + whisper bubble -->
+          <div class="flex flex-col items-center gap-1.5 translate-y-3 shrink-0 relative" id="partner-wrap">
+            <div id="whisper-bubble">
+              <p id="whisper-text"></p>
+            </div>
+            <button onclick="toggleWhisper()"
+              class="w-[66px] h-[66px] rounded-full overflow-hidden ring-[2.5px] ring-rose-200/75 shadow-[0_4px_18px_rgba(200,140,180,.26)] active:scale-95 transition-transform">
+              <img src="https://picsum.photos/seed/partner_gu/200/200" alt="老公" class="w-full h-full object-cover" />
+            </button>
+            <span class="text-[11px] text-stone-500/90 font-medium">阿延</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ③ App Grid + Right composite widget -->
+    <section class="mb-4 shrink-0">
+      <div class="flex gap-3 items-start">
+
+        <!-- Left 2/3: App icons -->
+        <div class="flex-[2] min-w-0">
+          <div id="app-grid" class="grid grid-cols-2 gap-[18px]">
+
+            <div class="app-cell flex flex-col items-center gap-[7px] cursor-pointer relative" id="app-chat" data-page="page-chat">
+              <div class="relative">
+                <img src="https://picsum.photos/seed/icon_chat/180/180" class="app-icon-img" draggable="false" />
+                <button class="del-badge" onclick="delApp(event,'app-chat')">−</button>
+              </div>
+              <span class="text-[11px] text-white font-medium drop-shadow-[0_1px_3px_rgba(0,0,0,.45)]">聊天</span>
+            </div>
+
+            <div class="app-cell flex flex-col items-center gap-[7px] cursor-pointer relative" id="app-diary" data-page="page-diary">
+              <div class="relative">
+                <img src="https://picsum.photos/seed/icon_diary/180/180" class="app-icon-img" draggable="false" />
+                <button class="del-badge" onclick="delApp(event,'app-diary')">−</button>
+              </div>
+              <span class="text-[11px] text-white font-medium drop-shadow-[0_1px_3px_rgba(0,0,0,.45)]">日记</span>
+            </div>
+
+            <div class="app-cell flex flex-col items-center gap-[7px] cursor-pointer relative" id="app-photos" data-page="page-photos">
+              <div class="relative">
+                <img src="https://picsum.photos/seed/icon_photos/180/180" class="app-icon-img" draggable="false" />
+                <button class="del-badge" onclick="delApp(event,'app-photos')">−</button>
+              </div>
+              <span class="text-[11px] text-white font-medium drop-shadow-[0_1px_3px_rgba(0,0,0,.45)]">照片库</span>
+            </div>
+
+            <div class="app-cell flex flex-col items-center gap-[7px] cursor-pointer relative" id="app-calendar" data-page="page-calendar">
+              <div class="relative">
+                <img src="https://picsum.photos/seed/icon_cal/180/180" class="app-icon-img" draggable="false" />
+                <button class="del-badge" onclick="delApp(event,'app-calendar')">−</button>
+              </div>
+              <span class="text-[11px] text-white font-medium drop-shadow-[0_1px_3px_rgba(0,0,0,.45)]">日历</span>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Right 1/3: Date widget + Music player -->
+        <div class="flex-1 min-w-0 flex flex-col gap-2.5">
+          <!-- Date -->
+          <div class="glass rounded-[20px] p-3.5">
+            <p class="text-[9.5px] text-stone-400/80 font-semibold tracking-widest mb-1">今 天</p>
+            <p id="w-date" class="text-[16px] font-bold text-stone-700/95 leading-none tracking-tight">3月22日</p>
+            <p id="w-wday" class="text-[11px] text-stone-500/88 mt-1">星期日</p>
+            <div class="mt-2.5 pt-2 border-t border-white/40">
+              <p class="text-[9px] text-rose-400/88 leading-relaxed">今天也是元气满满的一天呀 🌸</p>
+            </div>
+          </div>
+          <!-- Music mini player -->
+          <div class="glass rounded-[20px] p-3 overflow-hidden">
+            <div class="mq-wrap mb-2">
+              <span class="mq-inner text-[10px] font-medium text-stone-600/85">
+                ♫ 恋に落ちて&nbsp;／&nbsp;小林明子&nbsp;&nbsp;&nbsp;&nbsp;♫ 恋に落ちて&nbsp;／&nbsp;小林明子&nbsp;&nbsp;&nbsp;&nbsp;
+              </span>
+            </div>
+            <div class="flex items-center justify-between px-0.5">
+              <button class="text-stone-500/70 text-[1.05rem] active:scale-90 transition-transform">⏮</button>
+              <button id="play-btn" onclick="togglePlay(this)"
+                class="w-9 h-9 rounded-full bg-rose-200/55 flex items-center justify-center text-rose-500 text-[13px] shadow-sm active:scale-90 transition-transform">▶</button>
+              <button class="text-stone-500/70 text-[1.05rem] active:scale-90 transition-transform">⏭</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ④ Spacer (breathing room) -->
+    <div class="flex-1 min-h-[11vh] shrink-0"></div>
+
+  </div><!-- /inner -->
+
+  <!-- ⑤ Dock — fixed bottom -->
+  <nav class="fixed bottom-0 left-0 right-0 z-40 flex justify-center"
+       style="padding-bottom:max(.5rem,env(safe-area-inset-bottom));padding-top:.35rem">
+    <div class="w-full max-w-[382px] mx-4">
+      <div class="glass rounded-[22px] px-4 py-2.5 flex items-center justify-around">
+        <button onclick="openPage('page-chat','app-chat')"       class="active:scale-90 transition-transform p-0.5"><img src="https://picsum.photos/seed/icon_chat/128/128"    class="w-12 h-12 rounded-[14px] object-cover shadow-sm ring-1 ring-white/50" /></button>
+        <button onclick="openPage('page-diary','app-diary')"     class="active:scale-90 transition-transform p-0.5"><img src="https://picsum.photos/seed/icon_diary/128/128"   class="w-12 h-12 rounded-[14px] object-cover shadow-sm ring-1 ring-white/50" /></button>
+        <button onclick="openPage('page-photos','app-photos')"   class="active:scale-90 transition-transform p-0.5"><img src="https://picsum.photos/seed/icon_photos/128/128"  class="w-12 h-12 rounded-[14px] object-cover shadow-sm ring-1 ring-white/50" /></button>
+        <button onclick="openPage('page-calendar','app-calendar')" class="active:scale-90 transition-transform p-0.5"><img src="https://picsum.photos/seed/icon_cal/128/128"  class="w-12 h-12 rounded-[14px] object-cover shadow-sm ring-1 ring-white/50" /></button>
+      </div>
+    </div>
+  </nav>
+</div><!-- /home -->
+
+
+<!-- ████████████████ CHAT PAGE ████████████████ -->
+<div id="page-chat" class="page hidden sub-page">
+  <div class="mx-auto w-full max-w-[414px] min-h-full">
+
+    <header class="sub-header">
+      <button onclick="closePage('page-chat')"
+        class="text-rose-400 font-medium px-1 text-[1.05rem] active:scale-90 transition-transform shrink-0">‹ 返回</button>
+      <h1 class="flex-1 text-center text-[17px] font-bold text-stone-700/95 pr-8">消 息</h1>
+    </header>
+
+    <div class="px-4 pt-3 pb-10 space-y-2">
+
+      <!-- Contact: partner (AI + real) -->
+      <div class="glass rounded-[20px] px-4 py-3.5 flex items-center gap-3.5 active:scale-[.98] transition-transform cursor-pointer">
+        <div class="relative shrink-0">
+          <img src="https://picsum.photos/seed/partner_gu/200/200" class="w-[50px] h-[50px] rounded-full object-cover ring-2 ring-white/72 shadow-sm" />
+          <span class="s-dot s-online absolute -bottom-0.5 -right-0.5"></span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex justify-between items-baseline mb-[3px]">
+            <span class="text-[14px] font-semibold text-stone-700/95">阿延 ❤️</span>
+            <span class="text-[10.5px] text-stone-400/75 ml-2 shrink-0">3分钟前</span>
+          </div>
+          <p class="text-[12px] text-stone-500/88 truncate">你昨晚睡好了吗~ 我今天想你了 🌙</p>
+        </div>
+        <div class="w-[20px] h-[20px] rounded-full bg-rose-400 text-white text-[10px] font-bold flex items-center justify-center shrink-0">2</div>
+      </div>
+
+      <!-- Contact: AI -->
+      <div class="glass rounded-[20px] px-4 py-3.5 flex items-center gap-3.5 active:scale-[.98] transition-transform cursor-pointer">
+        <div class="relative shrink-0">
+          <img src="https://picsum.photos/seed/ai_zheng/200/200" class="w-[50px] h-[50px] rounded-full object-cover ring-2 ring-violet-200/70 shadow-sm" />
+          <span class="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-gradient-to-br from-violet-400 to-pink-400 border-2 border-white flex items-center justify-center text-[7px] text-white font-bold">AI</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex justify-between items-baseline mb-[3px]">
+            <span class="text-[14px] font-semibold text-stone-700/95">阿筝 ✨</span>
+            <span class="text-[10.5px] text-stone-400/75 ml-2 shrink-0">刚刚</span>
+          </div>
+          <p class="text-[12px] text-stone-500/88 truncate">好的，来陪你聊聊吧~ 今天怎么了呀？</p>
+        </div>
+      </div>
+
+      <!-- Contact: friend 1 -->
+      <div class="glass rounded-[20px] px-4 py-3.5 flex items-center gap-3.5 active:scale-[.98] transition-transform cursor-pointer">
+        <div class="relative shrink-0">
+          <img src="https://picsum.photos/seed/friend_sakura/200/200" class="w-[50px] h-[50px] rounded-full object-cover ring-2 ring-white/72 shadow-sm" />
+          <span class="s-dot s-busy absolute -bottom-0.5 -right-0.5"></span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex justify-between items-baseline mb-[3px]">
+            <span class="text-[14px] font-semibold text-stone-700/95">小樱 🌸</span>
+            <span class="text-[10.5px] text-stone-400/75 ml-2 shrink-0">1小时前</span>
+          </div>
+          <p class="text-[12px] text-stone-500/88 truncate">周末要不要一起去看展？听说很好看的！</p>
+        </div>
+      </div>
+
+      <!-- Contact: friend 2 -->
+      <div class="glass rounded-[20px] px-4 py-3.5 flex items-center gap-3.5 active:scale-[.98] transition-transform cursor-pointer">
+        <div class="relative shrink-0">
+          <img src="https://picsum.photos/seed/friend_yuzu/200/200" class="w-[50px] h-[50px] rounded-full object-cover ring-2 ring-white/72 shadow-sm" />
+          <span class="s-dot s-away absolute -bottom-0.5 -right-0.5"></span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex justify-between items-baseline mb-[3px]">
+            <span class="text-[14px] font-semibold text-stone-700/95">柚子 🍋</span>
+            <span class="text-[10.5px] text-stone-400/75 ml-2 shrink-0">昨天</span>
+          </div>
+          <p class="text-[12px] text-stone-500/88 truncate">那个推荐的甜品店超好吃！下次带你去 🍰</p>
+        </div>
+      </div>
+
+      <!-- Contact: friend 3 -->
+      <div class="glass rounded-[20px] px-4 py-3.5 flex items-center gap-3.5 active:scale-[.98] transition-transform cursor-pointer">
+        <div class="relative shrink-0">
+          <img src="https://picsum.photos/seed/friend_hana/200/200" class="w-[50px] h-[50px] rounded-full object-cover ring-2 ring-white/72 shadow-sm" />
+          <span class="s-dot s-off absolute -bottom-0.5 -right-0.5"></span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex justify-between items-baseline mb-[3px]">
+            <span class="text-[14px] font-semibold text-stone-700/95">花花</span>
+            <span class="text-[10.5px] text-stone-400/75 ml-2 shrink-0">3天前</span>
+          </div>
+          <p class="text-[12px] text-stone-500/88 truncate">好久不见，最近在忙什么呀？</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div><!-- /chat -->
+
+
+<!-- ████████████████ DIARY PAGE ████████████████ -->
+<div id="page-diary" class="page hidden sub-page">
+  <div class="mx-auto w-full max-w-[414px] min-h-full">
+
+    <header class="sub-header">
+      <button onclick="closePage('page-diary')"
+        class="text-rose-400 font-medium px-1 text-[1.05rem] active:scale-90 transition-transform shrink-0">‹ 返回</button>
+      <h1 class="flex-1 text-center text-[17px] font-bold text-stone-700/95 pr-8">日 记</h1>
+    </header>
+
+    <div class="px-4 pt-4 pb-10 space-y-4">
+
+      <!-- My diary section card -->
+      <div class="glass rounded-[24px] overflow-hidden cursor-pointer active:scale-[.985] transition-transform">
+        <div class="h-[140px] relative">
+          <img src="https://picsum.photos/seed/diary_mybg/500/200" class="w-full h-full object-cover" />
+          <div class="absolute inset-0 bg-gradient-to-t from-black/42 via-transparent to-transparent"></div>
+          <div class="absolute bottom-3 left-4">
+            <p class="text-white font-bold text-[15px]">我的日记</p>
+            <p class="text-white/68 text-[11px] mt-0.5">15 篇 · 最近更新：3月15日</p>
+          </div>
+        </div>
+        <div class="px-4 py-3.5">
+          <p class="text-[12.5px] text-stone-600/85 leading-relaxed"
+             style="-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden">
+            3月15日 / 今天风很大，但是心情很好。和阿延视频了很久，他说想带我去看樱花...
+          </p>
+        </div>
+      </div>
+
+      <!-- Partner diary section card -->
+      <div class="glass rounded-[24px] overflow-hidden cursor-pointer active:scale-[.985] transition-transform">
+        <div class="h-[140px] relative">
+          <img src="https://picsum.photos/seed/diary_parbg/500/200" class="w-full h-full object-cover" />
+          <div class="absolute inset-0 bg-gradient-to-t from-black/42 via-transparent to-transparent"></div>
+          <div class="absolute bottom-3 left-4">
+            <p class="text-white font-bold text-[15px]">阿延的日记</p>
+            <p class="text-white/68 text-[11px] mt-0.5">8 篇 · 最近更新：3月14日</p>
+          </div>
+        </div>
+        <div class="px-4 py-3.5">
+          <p class="text-[12.5px] text-stone-600/85 leading-relaxed"
+             style="-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden">
+            3月14日 / 小酒今天发来了一首歌，听了好多遍，心里暖暖的，很想抱抱她...
+          </p>
+        </div>
+      </div>
+
+      <!-- New entry btn -->
+      <button class="w-full glass rounded-[20px] py-4 text-[14px] font-semibold text-rose-400/90
+                     flex items-center justify-center gap-2 active:scale-[.98] transition-transform">
+        <span class="text-[18px] leading-none">＋</span> 写一篇新日记
+      </button>
+
+    </div>
+  </div>
+</div><!-- /diary -->
+
+
+<!-- ████████████████ CALENDAR PAGE ████████████████ -->
+<div id="page-calendar" class="page hidden sub-page">
+  <div class="mx-auto w-full max-w-[414px] min-h-full">
+
+    <header class="sub-header">
+      <button onclick="closePage('page-calendar')"
+        class="text-rose-400 font-medium px-1 text-[1.05rem] active:scale-90 transition-transform shrink-0">‹ 返回</button>
+      <h1 class="flex-1 text-center text-[17px] font-bold text-stone-700/95 pr-8" id="cal-page-title">日 历</h1>
+    </header>
+
+    <div class="px-4 pt-3 pb-10">
+
+      <!-- Month nav -->
+      <div class="flex items-center justify-between mb-4">
+        <button onclick="changeMonth(-1)" class="glass text-[12.5px] px-4 py-1.5 rounded-full text-stone-600/88 active:scale-90 transition-transform">← 上月</button>
+        <span id="cal-month-label" class="text-[14.5px] font-semibold text-stone-700/90"></span>
+        <button onclick="changeMonth(1)"  class="glass text-[12.5px] px-4 py-1.5 rounded-full text-stone-600/88 active:scale-90 transition-transform">下月 →</button>
+      </div>
+
+      <!-- Weekday row -->
+      <div class="grid grid-cols-7 mb-1.5 px-0.5">
+        <div class="text-center text-[10px] font-semibold text-rose-400/85 py-1">日</div>
+        <div class="text-center text-[10px] font-medium text-stone-400/80 py-1">一</div>
+        <div class="text-center text-[10px] font-medium text-stone-400/80 py-1">二</div>
+        <div class="text-center text-[10px] font-medium text-stone-400/80 py-1">三</div>
+        <div class="text-center text-[10px] font-medium text-stone-400/80 py-1">四</div>
+        <div class="text-center text-[10px] font-medium text-stone-400/80 py-1">五</div>
+        <div class="text-center text-[10px] font-semibold text-rose-400/85 py-1">六</div>
+      </div>
+
+      <!-- Calendar grid -->
+      <div class="glass rounded-[22px] p-3.5">
+        <div id="cal-grid" class="grid grid-cols-7 gap-[3px]"></div>
+      </div>
+
+      <!-- Events list -->
+      <div class="mt-4 glass rounded-[20px] p-4">
+        <p class="text-[12px] font-semibold text-stone-600/88 mb-2.5">📅 本月纪念日</p>
+        <div class="space-y-2.5">
+          <div class="flex items-center gap-2.5">
+            <div class="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0"></div>
+            <span class="text-[12px] text-stone-600/85">3月10日 · 恋爱周年纪念 🎉</span>
+          </div>
+          <div class="flex items-center gap-2.5">
+            <div class="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0"></div>
+            <span class="text-[12px] text-stone-600/85">3月22日 · 视频约会 💕</span>
+          </div>
+          <div class="flex items-center gap-2.5">
+            <div class="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></div>
+            <span class="text-[12px] text-stone-600/85">3月30日 · 阿延生日 🎂</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Event bottom sheet -->
+  <div id="event-sheet">
+    <div class="glass rounded-t-[26px] px-5 pt-3 pb-[max(2rem,env(safe-area-inset-bottom))]">
+      <div class="w-10 h-1 bg-stone-300/55 rounded-full mx-auto mb-3.5"></div>
+      <p class="text-[14px] font-semibold text-stone-700/88 mb-3" id="sheet-date-label">3月22日 · 新事件</p>
+      <input id="event-input" type="text" placeholder="记录一件事…"
+        class="w-full bg-white/52 rounded-[14px] px-4 py-3 text-[13.5px] text-stone-700/90
+               placeholder-stone-400/55 outline-none ring-1 ring-white/65 font-sans" />
+      <div class="flex gap-2.5 mt-3">
+        <button onclick="closeEventSheet()"
+          class="flex-1 py-2.5 rounded-[14px] text-[13px] text-stone-500/88 glass active:scale-[.98] transition-transform">取消</button>
+        <button onclick="saveEvent()"
+          class="flex-1 py-2.5 rounded-[14px] text-[13px] font-semibold text-white
+                 bg-gradient-to-r from-rose-400/88 to-pink-400/88 shadow-sm active:scale-[.98] transition-transform">保存</button>
+      </div>
+    </div>
+  </div>
+</div><!-- /calendar -->
+
+
+<!-- ████████████████ PHOTOS PAGE ████████████████ -->
+<div id="page-photos" class="page hidden sub-page">
+  <div class="mx-auto w-full max-w-[414px] min-h-full">
+
+    <header class="sub-header">
+      <button onclick="closePage('page-photos')"
+        class="text-rose-400 font-medium px-1 text-[1.05rem] active:scale-90 transition-transform shrink-0">‹ 返回</button>
+      <h1 class="flex-1 text-center text-[17px] font-bold text-stone-700/95">照片库</h1>
+      <button onclick="document.getElementById('photo-input').click()"
+        class="text-rose-400 text-[13px] font-semibold shrink-0 active:scale-90 transition-transform">＋ 添加</button>
+    </header>
+
+    <div class="px-3 pt-3 pb-10">
+
+      <!-- Album filter tabs -->
+      <div class="flex gap-2 overflow-x-auto pb-2 mb-3" style="scroll-snap-type:x mandatory">
+        <button class="shrink-0 glass text-[12px] font-semibold text-rose-500 px-4 py-1.5 rounded-full ring-1 ring-rose-200/45">全部</button>
+        <button class="shrink-0 glass text-[12px] text-stone-500/88 px-4 py-1.5 rounded-full">和阿延 ❤️</button>
+        <button class="shrink-0 glass text-[12px] text-stone-500/88 px-4 py-1.5 rounded-full">风景 🌸</button>
+        <button class="shrink-0 glass text-[12px] text-stone-500/88 px-4 py-1.5 rounded-full">美食 🍰</button>
+        <button class="shrink-0 glass text-[12px] text-stone-500/88 px-4 py-1.5 rounded-full">日常 📷</button>
+      </div>
+
+      <!-- Photo grid -->
+      <div id="photo-grid" class="photo-grid">
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph1/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph2/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph3/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph4/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph5/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph6/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph7/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph8/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph9/300/300" /></div>
+      </div>
+
+    </div>
+  </div>
+</div><!-- /photos -->
+
+
+<!-- ████████████████ JAVASCRIPT ████████████████ -->
+<script>
+/* ─── Constants ─── */
+const LOVE_START = new Date('2023-03-22');
+const WHISPERS   = [
+  '偷偷说：今天看到路边的猫，想到你了 🐱',
+  '嘿嘿，你今天是我最想见的人 💕',
+  '小秘密：我今天也一直在想你哦 ✨',
+  '悄悄告诉你，你笑起来超好看的 🌸',
+  '昨天做梦梦到你了，醒来傻笑了好久 😊',
+  '你知道吗，我最喜欢你睡前发给我的那条消息 🌙',
+];
+
+const state = {
+  diExpanded: false,
+  editMode:   false,
+  playing:    false,
+  calYear:    new Date().getFullYear(),
+  calMonth:   new Date().getMonth(),
+  whisperOn:  false,
+};
+
+/* ─── Boot ─── */
+document.addEventListener('DOMContentLoaded', () => {
+  initDateWidget();
+  initLoveDays();
+  initAppGrid();
+  initCalendar();
+  restoreWallpaper();
+  // Auto-expand DI after 1.8s
+  setTimeout(expandDI, 1800);
+});
+
+/* ─── Dynamic Island ─── */
+function expandDI() {
+  const p = document.getElementById('di-pill');
+  p.classList.replace('collapsed', 'expanded');
+  state.diExpanded = true;
+  setTimeout(collapseDI, 6000);
+}
+function collapseDI() {
+  const p = document.getElementById('di-pill');
+  p.classList.replace('expanded', 'collapsed');
+  state.diExpanded = false;
+}
+function toggleDI() {
+  state.diExpanded ? collapseDI() : expandDI();
+}
+
+/* ─── Love days ─── */
+function initLoveDays() {
+  const days = Math.max(0, Math.floor((Date.now() - LOVE_START) / 86400000));
+  const big  = document.getElementById('love-days-big');
+  const num  = document.getElementById('love-days-num');
+  if (big) big.textContent = `❤️ ${days}`;
+  if (num) num.textContent  = days;
+}
+
+/* ─── Whisper bubble ─── */
+let whisperTimer = null;
+function toggleWhisper() {
+  const el  = document.getElementById('whisper-bubble');
+  const txt = document.getElementById('whisper-text');
+  if (!el) return;
+
+  if (state.whisperOn) {
+    el.classList.remove('show');
+    state.whisperOn = false;
+    clearTimeout(whisperTimer);
+    return;
+  }
+  txt.textContent = WHISPERS[Math.floor(Math.random() * WHISPERS.length)];
+  el.classList.add('show');
+  state.whisperOn = true;
+  clearTimeout(whisperTimer);
+  whisperTimer = setTimeout(() => {
+    el.classList.remove('show');
+    state.whisperOn = false;
+  }, 5000);
+}
+
+/* ─── Date widget ─── */
+function initDateWidget() {
+  const d  = new Date();
+  const wd = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
+  const de = document.getElementById('w-date');
+  const we = document.getElementById('w-wday');
+  if (de) de.textContent = `${d.getMonth()+1}月${d.getDate()}日`;
+  if (we) we.textContent  = wd[d.getDay()];
+}
+
+/* ─── App grid: long-press jiggle + SortableJS ─── */
+let lpTimer = null, lpFired = false;
+
+function initAppGrid() {
+  const grid = document.getElementById('app-grid');
+  if (!grid) return;
+
+  // SortableJS drag-to-reorder
+  Sortable.create(grid, {
+    animation: 200,
+    delay: 300,
+    delayOnTouchOnly: true,
+    ghostClass: 'opacity-40',
+    onStart() { if (!state.editMode) enterEditMode(); },
+  });
+
+  // Long-press handler
+  const startLP = (el) => {
+    if (!el.closest('.app-cell')) return;
+    lpFired = false;
+    clearTimeout(lpTimer);
+    lpTimer = setTimeout(() => {
+      lpFired = true;
+      enterEditMode();
+      if (navigator.vibrate) navigator.vibrate(10);
+    }, 500);
+  };
+  const cancelLP = () => clearTimeout(lpTimer);
+
+  grid.addEventListener('touchstart', e => startLP(e.target), { passive: true });
+  grid.addEventListener('touchend',   cancelLP);
+  grid.addEventListener('touchcancel',cancelLP);
+  grid.addEventListener('mousedown',  e => startLP(e.target));
+  grid.addEventListener('mouseup',    cancelLP);
+  grid.addEventListener('mouseleave', cancelLP);
+
+  // Tap to open
+  grid.addEventListener('click', e => {
+    if (state.editMode) return;
+    if (lpFired) { lpFired = false; return; }
+    const cell = e.target.closest('.app-cell');
+    if (cell?.dataset.page) openPage(cell.dataset.page, cell.id);
+  });
+}
+
+function enterEditMode() {
+  state.editMode = true;
+  document.getElementById('app-grid').classList.add('edit-mode');
+  document.getElementById('app-grid').querySelectorAll('.app-icon-img').forEach(i => i.classList.add('jiggle'));
+  document.getElementById('btn-done').classList.add('show');
+}
+function exitEditMode() {
+  state.editMode = false;
+  document.getElementById('app-grid').classList.remove('edit-mode');
+  document.getElementById('app-grid').querySelectorAll('.app-icon-img').forEach(i => i.classList.remove('jiggle'));
+  document.getElementById('btn-done').classList.remove('show');
+}
+function delApp(e, id) {
+  e.stopPropagation();
+  const cell = document.getElementById(id);
+  if (!cell) return;
+  cell.animate([{transform:'scale(1)',opacity:1},{transform:'scale(0)',opacity:0}],{duration:200})
+      .onfinish = () => cell.remove();
+}
+
+/* ─── Page transitions (zoom from icon) ─── */
+function openPage(pageId, originId) {
+  const page   = document.getElementById(pageId);
+  const origin = originId ? document.getElementById(originId) : null;
+  if (!page) return;
+  if (origin) {
+    const r  = origin.getBoundingClientRect();
+    page.style.transformOrigin = `${r.left + r.width/2}px ${r.top + r.height/2}px`;
+  } else {
+    page.style.transformOrigin = 'center center';
+  }
+  page.classList.remove('hidden');
+  page.scrollTop = 0;
+  if (pageId === 'page-calendar') renderCalendar();
+}
+function closePage(pageId) {
+  document.getElementById(pageId)?.classList.add('hidden');
+}
+
+/* ─── Music mini player ─── */
+function togglePlay(btn) {
+  state.playing = !state.playing;
+  btn.textContent = state.playing ? '⏸' : '▶';
+}
+
+/* ─── Calendar ─── */
+function initCalendar() {
+  renderCalendar();
+}
+function changeMonth(d) {
+  state.calMonth += d;
+  if (state.calMonth > 11) { state.calMonth = 0; state.calYear++; }
+  if (state.calMonth < 0)  { state.calMonth = 11; state.calYear--; }
+  renderCalendar();
+}
+function renderCalendar() {
+  const grid  = document.getElementById('cal-grid');
+  const label = document.getElementById('cal-month-label');
+  if (!grid) return;
+
+  const y = state.calYear, m = state.calMonth;
+  const today     = new Date();
+  const firstDay  = new Date(y, m, 1).getDay();
+  const daysInM   = new Date(y, m + 1, 0).getDate();
+  const daysInPrev= new Date(y, m, 0).getDate();
+  const mNames    = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+
+  if (label) label.textContent = `${y}年 ${mNames[m]}`;
+
+  grid.innerHTML = '';
+
+  // Previous month tail
+  for (let i = firstDay - 1; i >= 0; i--) {
+    addCalCell(grid, daysInPrev - i, true, false);
+  }
+  // Current month
+  for (let d = 1; d <= daysInM; d++) {
+    const isToday = today.getFullYear()===y && today.getMonth()===m && today.getDate()===d;
+    const el = addCalCell(grid, d, false, isToday);
+    el.onclick = () => onDateClick(y, m, d, el);
+  }
+  // Next month head
+  const total = Math.ceil((firstDay + daysInM) / 7) * 7;
+  for (let d = 1; d <= total - firstDay - daysInM; d++) {
+    addCalCell(grid, d, true, false);
+  }
+}
+function addCalCell(grid, num, dim, isToday) {
+  const el = document.createElement('div');
+  el.className = 'cal-day text-stone-700/90' + (dim ? ' dim' : '') + (isToday ? ' today' : '');
+  el.textContent = num;
+  grid.appendChild(el);
+  return el;
+}
+function onDateClick(y, m, d, el) {
+  document.querySelectorAll('.cal-day.selected').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  const lbl = document.getElementById('sheet-date-label');
+  if (lbl) lbl.textContent = `${m+1}月${d}日 · 新事件`;
+  document.getElementById('event-sheet')?.classList.add('open');
+}
+function closeEventSheet() {
+  document.getElementById('event-sheet')?.classList.remove('open');
+}
+function saveEvent() {
+  const inp = document.getElementById('event-input');
+  if (inp) inp.value = '';
+  closeEventSheet();
+}
+
+/* ─── Photos ─── */
+function onPhotoFiles(e) {
+  const grid = document.getElementById('photo-grid');
+  if (!grid) return;
+  Array.from(e.target.files).forEach(f => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const item = document.createElement('div');
+      item.className = 'photo-item';
+      item.innerHTML = `<img src="${ev.target.result}" />`;
+      grid.prepend(item);
+    };
+    reader.readAsDataURL(f);
+  });
+  e.target.value = '';
+}
+
+/* ─── Wallpaper ─── */
+function applyWallpaper(url) {
+  const el = document.getElementById('wallpaper');
+  if (!el) return;
+  el.style.backgroundImage = `url("${url.replace(/"/g, '\\"')}")`;
+  try { localStorage.setItem('launcher_wp', url); } catch(_) {}
+}
+function restoreWallpaper() {
+  try {
+    const s = localStorage.getItem('launcher_wp');
+    if (s) applyWallpaper(s);
+  } catch(_) {}
+}
+// Public API
+window.setWallpaperUrl      = url  => applyWallpaper(url);
+window.pickWallpaperFromFile = ()  => document.getElementById('wp-input')?.click();
+function onWpFile(e) {
+  const f = e.target.files?.[0];
+  if (!f || !f.type.startsWith('image/')) return;
+  const r = new FileReader();
+  r.onload = ev => applyWallpaper(ev.target.result);
+  r.readAsDataURL(f);
+  e.target.value = '';
+}
+
+/* ─── Dismiss edit mode on outside tap ─── */
+document.addEventListener('click', e => {
+  if (!state.editMode) return;
+  if (e.target.closest('#app-grid') || e.target.closest('#btn-done')) return;
+  exitEditMode();
+}, true);
+
+/* ─── Close event sheet on outside tap ─── */
+document.getElementById('event-sheet')?.addEventListener('click', e => {
+  if (e.target === document.getElementById('event-sheet')) closeEventSheet();
+});
+</script>
+</body>
+</html>

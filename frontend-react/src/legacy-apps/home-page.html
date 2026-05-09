@@ -1,0 +1,363 @@
+<!-- Wallpaper layers -->
+<div id="wallpaper"></div>
+<div id="veil"></div>
+
+<!-- Hidden file inputs -->
+<input type="file" id="wp-input"    accept="image/*"          style="display:none" onchange="onWpFile(event)" />
+<input type="file" id="photo-input" accept="image/*" multiple style="display:none" onchange="onPhotoFiles(event)" />
+<input type="file" id="icon-input"  accept="image/*"          style="display:none" onchange="onIconFile(event)" />
+<input type="file" id="music-input" accept="audio/*" multiple style="display:none" onchange="onMusicFiles(event)" />
+<audio id="home-audio" preload="metadata"></audio>
+<div id="music-library-modal" onclick="closeMusicLibrary(event)">
+  <div class="music-library-card" onclick="event.stopPropagation()">
+    <div class="music-library-head">
+      <div>
+        <h3 class="music-library-title">Perle</h3>
+        <p class="music-library-subtitle">只保存在这台设备的浏览器里，不会上传到 Supabase。</p>
+      </div>
+      <button class="music-library-close" type="button" aria-label="关闭" onclick="closeMusicLibrary()">×</button>
+    </div>
+    <div class="music-library-actions">
+      <button class="music-library-action" type="button" onclick="pickMusicFiles()">导入本地音乐</button>
+      <button class="music-library-action secondary" type="button" onclick="playCurrentOrFirstTrack()">播放当前</button>
+    </div>
+    <div id="music-library-list" class="music-library-list"></div>
+  </div>
+</div>
+
+<!-- Edit-mode done button -->
+<button id="btn-done"
+  class="glass text-[12.5px] font-semibold text-rose-500 px-6 py-2 rounded-full ring-1 ring-white/60 shadow-md"
+  onclick="exitEditMode()">完成</button>
+
+
+<!-- ████████████████ HOME PAGE ████████████████ -->
+<div id="page-home" class="page">
+  <div class="mx-auto w-full max-w-[414px] flex flex-col h-full overflow-hidden px-4 pb-28"
+       style="padding-top:max(.7rem,env(safe-area-inset-top));padding-bottom:calc(7rem + env(safe-area-inset-bottom,0px))">
+
+    <!-- ① Glean 拾遗 Dynamic Island -->
+    <div id="di-shell">
+      <div id="di-pill" class="glass-dark collapsed" onclick="toggleDI(event)">
+        <!-- Collapsed: glean icon + count badge -->
+        <div id="di-idle" class="flex items-center justify-center relative">
+          <span style="font-size:11px;color:rgba(255,255,255,0.88);letter-spacing:0.02em;">✦</span>
+          <span id="di-count-badge" style="display:none;position:absolute;top:-5px;right:-6px;min-width:14px;height:14px;border-radius:7px;background:rgba(220,100,80,0.9);color:white;font-size:9px;font-weight:700;line-height:14px;text-align:center;padding:0 3px;"></span>
+        </div>
+        <!-- Expanded: Glean todo overlay -->
+        <div id="di-msg" class="w-full">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <span style="color:rgba(255,255,255,0.92);font-size:13px;font-weight:700;letter-spacing:0.06em;">✦ GLEAN 拾遗</span>
+            <button id="di-open-all" style="background:none;border:none;color:rgba(255,255,255,0.55);font-size:11px;cursor:pointer;padding:0;" onclick="event.stopPropagation();window.__gleanOpenAll&&window.__gleanOpenAll()">全部 ›</button>
+          </div>
+          <div id="di-glean-items" style="display:flex;flex-direction:column;gap:8px;">
+            <div style="color:rgba(255,255,255,0.35);font-size:11.5px;text-align:center;padding:8px 0;">加载中…</div>
+          </div>
+          <div id="di-glean-empty" style="display:none;color:rgba(255,255,255,0.3);font-size:11.5px;text-align:center;padding:10px 0 4px;">暂无待处理事项</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="home-pages-shell" class="flex flex-col min-h-0">
+      <!-- ② Love Widget -->
+      <section id="home-love-section" class="mb-5 shrink-0 px-1">
+        <div class="glass rounded-[30px] relative overflow-hidden px-4 py-5">
+          <div class="absolute inset-0 opacity-50" style="background:radial-gradient(circle at 20% 20%, rgba(255,214,230,.46), transparent 34%), radial-gradient(circle at 80% 20%, rgba(231,223,255,.48), transparent 32%);"></div>
+          <div class="relative z-10 grid grid-cols-[64px_1fr_64px] items-center gap-3">
+            <div class="flex flex-col items-center gap-2">
+              <img src="https://picsum.photos/seed/me_avatar/200/200" alt="小酒" class="w-14 h-14 rounded-full object-cover border-[3px] border-white/90 shadow-sm" />
+              <span class="text-[11px] text-stone-600/90 font-medium tracking-wide">小酒</span>
+            </div>
+
+            <div class="text-center px-1">
+              <p class="text-[34px] font-bold leading-none tracking-[0.04em] theme-accent-text" id="love-days-big" style="font-family: system-ui, -apple-system; color:#a087c4;">1097</p>
+              <p class="text-[11px] text-stone-400/80 mt-2 uppercase tracking-[0.28em] font-semibold">Days Together</p>
+              <div class="mt-3 flex items-center justify-center gap-1.5 text-stone-300" aria-hidden="true">
+                <span class="w-5 h-px bg-current"></span>
+                <span class="w-2 h-2 rotate-45 border border-current border-t-0 border-l-0"></span>
+                <span class="w-3 h-px bg-current"></span>
+                <span class="w-2 h-2 rotate-45 border border-current border-t-0 border-l-0"></span>
+                <span class="w-5 h-px bg-current"></span>
+              </div>
+              <p class="text-[11px] text-stone-500/80 mt-3">我们的小主屏</p>
+            </div>
+
+            <div class="flex flex-col items-center gap-2 relative" id="partner-wrap">
+              <div id="whisper-bubble">
+                <p id="whisper-text" class="text-stone-600/90"></p>
+              </div>
+              <button onclick="toggleWhisper()" class="w-14 h-14 rounded-full p-[2px] bg-gradient-to-tr from-blue-200/50 to-white/40 shadow-sm active:scale-95 transition-transform">
+                <img src="https://picsum.photos/seed/partner_gu/200/200" alt="夏彦" class="w-full h-full rounded-full object-cover border-[1.5px] border-white" />
+              </button>
+              <span class="text-[11px] text-stone-600/90 font-medium tracking-wide">夏彦</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ③ App Grid + 2x2 Widget -->
+      <section id="home-app-section" class="mb-4 shrink-0 px-1">
+        <div id="app-grid" class="grid home-grid">
+
+        <!-- Chat App -->
+        <div class="app-cell flex flex-col items-center gap-1.5 cursor-pointer relative" id="app-chat" data-page="page-chat">
+          <div class="relative">
+            <div class="app-icon-wrap" style="background: linear-gradient(135deg, #fff3f5, #ffe4eb);">
+              <svg class="app-icon-svg text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+            </div>
+            <button class="del-badge" onclick="delApp(event,'app-chat')">−</button>
+          </div>
+          <span class="text-[11px] text-stone-600 font-medium tracking-wide">聊天</span>
+        </div>
+
+        <!-- Diary App -->
+        <div class="app-cell flex flex-col items-center gap-1.5 cursor-pointer relative" id="app-diary" data-page="page-diary">
+          <div class="relative">
+            <div class="app-icon-wrap" style="background: radial-gradient(circle at 30% 26%, rgba(255,255,255,.98), rgba(243,248,255,.95) 34%, rgba(233,242,255,.96) 68%, rgba(226,235,255,.98) 100%); box-shadow: 0 10px 24px rgba(146, 171, 204, 0.13), inset 0 1px 0 rgba(255,255,255,0.92);">
+              <svg class="app-icon-svg" style="width:32px;height:32px" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="5.15" y="4.95" width="13.7" height="14.1" rx="4.3" fill="rgba(255,255,255,0.74)" stroke="#8fa0b8" stroke-width="1.1"/>
+                <path d="M9.05 8.35h5.95" stroke="#798ba5" stroke-width="1.08" stroke-linecap="round"/>
+                <path d="M9.05 11.15h4.85" stroke="#798ba5" stroke-width="1.08" stroke-linecap="round" opacity="0.82"/>
+                <path d="M15.85 5.95v4.95" stroke="#7588a3" stroke-width="1.08" stroke-linecap="round"/>
+                <path d="M15.85 6.28 13.45 6.98v3.78" stroke="#7588a3" stroke-width="1.08" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="13.1" cy="11.5" r="0.94" fill="#7588a3"/>
+                <path d="M7.2 17.1c1-.76 1.72-1.17 2.92-1.62" stroke="#92a4bc" stroke-width="0.95" stroke-linecap="round" opacity="0.8"/>
+                <path d="M17.2 15.85c.34-.98.8-1.62 1.62-2.26-.28.77-.22 1.58.18 2.3.32.56.75.94 1.4 1.25-.69.03-1.15.14-1.66.37-.64.29-1.08.67-1.54 1.34-.02-.55-.09-.86-.29-1.28-.19-.4-.42-.68-.89-1.08.55-.09.82-.19 1.18-.39Z" fill="#c8a8bc"/>
+                <circle cx="19.05" cy="13.35" r="0.72" fill="rgba(255,255,255,0.9)"/>
+              </svg>
+            </div>
+            <button class="del-badge" onclick="delApp(event,'app-diary')">−</button>
+          </div>
+          <span class="text-[11px] text-stone-600 font-medium tracking-wide">Daydream</span>
+        </div>
+
+        <div class="home-widget-cell">
+          <div class="home-unified-widget">
+            <div class="home-widget-top">
+              <div class="home-overview-head">
+                <span class="home-overview-kicker">今日</span>
+              </div>
+              <div class="home-overview-meta">
+                <div id="glance-date" class="home-overview-date">24日</div>
+                <div class="home-overview-weekday">星期二</div>
+              </div>
+              <p class="home-overview-note">今天也是元气满满 ✿</p>
+            </div>
+            <div class="home-widget-bottom">
+              <div class="home-player-shell">
+                <button id="home-player-title" class="home-player-kicker" type="button" onclick="openMusicLibrary()">打开 Perle</button>
+                <div class="home-player-controls">
+                  <button class="home-player-btn" type="button" aria-label="上一首" onclick="playPrevTrack()">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M6.2 8 10 5.25v5.5L6.2 8Z"></path>
+                      <rect x="4.2" y="5" width="1.2" height="6" rx=".6"></rect>
+                    </svg>
+                  </button>
+                  <button id="home-mini-play" class="home-player-btn play icon-heart" type="button" onclick="togglePlay(this)" aria-label="播放">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M8 13.3 3.36 8.66a2.9 2.9 0 1 1 4.1-4.1L8 5.1l.54-.54a2.9 2.9 0 0 1 4.1 4.1L8 13.3Z"></path>
+                    </svg>
+                  </button>
+                  <button class="home-player-btn" type="button" aria-label="下一首" onclick="playNextTrack()">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="m9.8 8-3.8-2.75v5.5L9.8 8Z"></path>
+                      <rect x="10.6" y="5" width="1.2" height="6" rx=".6"></rect>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Perle App -->
+        <div class="app-cell flex flex-col items-center gap-1.5 cursor-pointer relative" id="app-photos" data-page="page-photos">
+          <div class="relative">
+            <div class="app-icon-wrap" style="background: radial-gradient(circle at 30% 26%, rgba(255,255,255,.98), rgba(255,247,251,.92) 32%, rgba(244,236,255,.92) 62%, rgba(226,240,255,.96) 100%); box-shadow: 0 10px 24px rgba(165, 145, 174, 0.12), inset 0 1px 0 rgba(255,255,255,0.92);">
+              <svg class="app-icon-svg" style="width:32px;height:32px" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="4.9" y="5.15" width="14.2" height="13.7" rx="4.8" fill="rgba(255,255,255,0.72)" stroke="#ad94a7" stroke-width="1.1"/>
+                <path d="M7.95 14.55 10.18 12.32a1.04 1.04 0 0 1 1.49 0l1.04 1.04 1.95-2.05a1.03 1.03 0 0 1 1.47-.02l1.12 1.14" stroke="#8f7a90" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="9.08" cy="9.22" r="1.02" fill="#d28fb5"/>
+                <path d="M15.55 6.85v5.52" stroke="#7f7192" stroke-width="1.1" stroke-linecap="round"/>
+                <path d="M15.55 7.18 13.02 7.84v4.42" stroke="#7f7192" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="12.5" cy="13.08" r="1.04" fill="#7f7192"/>
+                <circle cx="17.48" cy="17.38" r="2.28" fill="url(#perlePearlFill)" stroke="#d7c0cf" stroke-width="0.9"/>
+                <circle cx="16.68" cy="16.58" r="0.68" fill="rgba(255,255,255,0.88)"/>
+                <path d="M18.58 18.58 19.78 19.78" stroke="#c8a4ba" stroke-width="0.9" stroke-linecap="round"/>
+                <defs>
+                  <radialGradient id="perlePearlFill" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(16.82 16.44) rotate(44.5) scale(3.78)">
+                    <stop offset="0" stop-color="#fffdfd"/>
+                    <stop offset="0.45" stop-color="#fff4f8"/>
+                    <stop offset="1" stop-color="#edddec"/>
+                  </radialGradient>
+                </defs>
+              </svg>
+            </div>
+            <button class="del-badge" onclick="delApp(event,'app-photos')">−</button>
+          </div>
+          <span class="text-[11px] text-stone-600 font-medium tracking-wide">Perle</span>
+        </div>
+
+        <!-- Calendar App -->
+        <div class="app-cell flex flex-col items-center gap-1.5 cursor-pointer relative" id="app-calendar" data-page="page-calendar">
+          <div class="relative">
+            <div class="app-icon-wrap" style="background: linear-gradient(135deg, #ffedd5, #ffedd5);">
+              <svg class="app-icon-svg text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <button class="del-badge" onclick="delApp(event,'app-calendar')">−</button>
+          </div>
+          <span class="text-[11px] text-stone-600 font-medium tracking-wide">日历</span>
+        </div>
+
+        <div class="app-cell flex flex-col items-center gap-1.5 cursor-pointer relative" id="app-settings" data-page="page-settings" data-settings-view="main">
+          <div class="relative">
+            <div class="app-icon-wrap" style="background: linear-gradient(135deg, #f3f0ff, #ebe7ff);">
+              <svg class="app-icon-svg text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v3m0 12v3m-6.4-2.2l2.1-2.1m8.6-8.6l2.1-2.1M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1" />
+                <circle cx="12" cy="12" r="3.2" />
+              </svg>
+            </div>
+            <button class="del-badge" onclick="delApp(event,'app-settings')">−</button>
+          </div>
+          <span class="text-[11px] text-stone-600 font-medium tracking-wide">设置</span>
+        </div>
+
+        <div class="app-cell flex flex-col items-center gap-1.5 cursor-pointer relative" id="app-wallpaper" data-page="page-settings" data-settings-view="wallpaper">
+          <div class="relative">
+            <div class="app-icon-wrap" style="background: linear-gradient(135deg, #fff8e9, #ffe8f5);">
+              <svg class="app-icon-svg text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 6.5A2.5 2.5 0 016.5 4h11A2.5 2.5 0 0120 6.5v11a2.5 2.5 0 01-2.5 2.5h-11A2.5 2.5 0 014 17.5v-11z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M7 15l3-3 2.5 2.5L15 12l2 3" />
+                <circle cx="9" cy="9" r="1.2" fill="currentColor" stroke="none" />
+              </svg>
+            </div>
+            <button class="del-badge" onclick="delApp(event,'app-wallpaper')">−</button>
+          </div>
+          <span class="text-[11px] text-stone-600 font-medium tracking-wide">壁纸</span>
+        </div>
+
+        <!-- Folio App -->
+        <div class="app-cell flex flex-col items-center gap-1.5 cursor-pointer relative" id="app-folio" data-page="page-folio">
+          <div class="relative">
+            <div class="app-icon-wrap" style="background: radial-gradient(circle at 30% 26%, rgba(255,255,255,.98), rgba(252,247,255,.94) 34%, rgba(240,232,255,.92) 68%, rgba(232,240,255,.96) 100%); box-shadow: 0 10px 24px rgba(160,140,180,0.13), inset 0 1px 0 rgba(255,255,255,0.92);">
+              <svg class="app-icon-svg" style="width:32px;height:32px" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="5" y="3.5" width="10.5" height="14" rx="2.2" fill="rgba(255,255,255,0.72)" stroke="#a08ab8" stroke-width="1.1"/>
+                <rect x="7.5" y="6" width="10.5" height="14" rx="2.2" fill="rgba(242,236,255,0.82)" stroke="#b8a0cc" stroke-width="1.1"/>
+                <path d="M10 10.5h5" stroke="#9a82b4" stroke-width="1.05" stroke-linecap="round"/>
+                <path d="M10 13h3.5" stroke="#9a82b4" stroke-width="1.05" stroke-linecap="round" opacity="0.75"/>
+                <path d="M10 15.5h4.5" stroke="#9a82b4" stroke-width="1.05" stroke-linecap="round" opacity="0.55"/>
+                <rect x="9.5" y="9.8" width="5.5" height="1.4" rx="0.7" fill="rgba(196,172,220,0.45)"/>
+              </svg>
+            </div>
+            <button class="del-badge" onclick="delApp(event,'app-folio')">−</button>
+          </div>
+          <span class="text-[11px] text-stone-600 font-medium tracking-wide">Folio</span>
+        </div>
+
+        <!-- Inbox App -->
+        <div class="app-cell flex flex-col items-center gap-1.5 cursor-pointer relative" id="app-inbox" data-page="page-inbox">
+          <div class="relative">
+            <div class="app-icon-wrap" style="background: radial-gradient(circle at 30% 26%, rgba(255,255,255,.98), rgba(255,250,245,.94) 34%, rgba(255,238,225,.92) 68%, rgba(255,245,235,.96) 100%); box-shadow: 0 10px 24px rgba(180,140,110,0.13), inset 0 1px 0 rgba(255,255,255,0.92);">
+              <svg class="app-icon-svg" style="width:32px;height:32px" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="3.5" y="5" width="17" height="14" rx="2.5" fill="rgba(255,240,225,0.85)" stroke="#c8a07a" stroke-width="1.1"/>
+                <path d="M3.5 9.5h17" stroke="#c8a07a" stroke-width="1.05"/>
+                <path d="M3.5 9.5l6.8 5.2a2.8 2.8 0 0 0 3.4 0L20.5 9.5" stroke="#b8905a" stroke-width="1.1" stroke-linecap="round"/>
+                <circle cx="17.5" cy="7.5" r="3" fill="#e06048"/>
+                <path d="M16.5 7.5h2M17.5 6.5v2" stroke="white" stroke-width="1" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <button class="del-badge" onclick="delApp(event,'app-inbox')">−</button>
+          </div>
+          <span class="text-[11px] text-stone-600 font-medium tracking-wide">Glean</span>
+        </div>
+        </div>
+      </section>
+
+      <section id="home-alt-section" class="mb-4 shrink-0 px-1 hidden">
+        <div class="home-alt-shell">
+          <div class="home-alt-head">
+            <div></div>
+            <span id="home-alt-main-chip" class="px-3 py-1.5 rounded-full bg-white/72 text-[11px] font-semibold text-violet-500 shadow-sm ring-1 ring-white/60 hidden">主页面</span>
+          </div>
+          <p id="home-alt-subtitle" class="home-alt-subtitle">这里会跟着设置 App 的主页切换。</p>
+          <div id="home-alt-grid" class="home-alt-grid"></div>
+          <p id="home-alt-empty" class="hidden mt-8 text-center text-[12px] text-stone-400/88">这一页还没有放 App</p>
+          <div id="home-page-dots" class="home-page-dots"></div>
+        </div>
+      </section>
+
+      <!-- ④ Spacer (breathing room) -->
+      <div id="home-spacer" class="flex-1 min-h-[11vh] shrink-0"></div>
+    </div>
+
+  </div><!-- /inner -->
+
+  <!-- ⑤ Premium Dock — fixed bottom -->
+  <nav class="fixed bottom-0 left-0 right-0 z-40 flex justify-center pb-6 pt-2"
+       style="bottom:env(safe-area-inset-bottom,0px);padding-bottom:calc(1.5rem + env(safe-area-inset-bottom,0px))">
+    <div class="w-full max-w-[360px] mx-auto px-4">
+      <div class="glass rounded-[28px] px-5 py-3.5 flex items-center justify-between shadow-[0_16px_40px_rgba(0,0,0,0.1)]">
+        
+        <button onclick="openPage('page-chat','app-chat')" class="app-cell active:scale-[0.92] transition-transform p-0.5 flex flex-col items-center">
+          <div class="w-[46px] h-[46px] rounded-[14px] bg-white/70 shadow-sm border border-white/50 flex items-center justify-center text-rose-400">
+            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+          </div>
+          <div class="w-1 h-1 rounded-full bg-rose-400 mt-1.5 opacity-80"></div>
+        </button>
+
+        <button onclick="openPage('page-diary','app-diary')" class="app-cell active:scale-[0.92] transition-transform p-0.5 flex flex-col items-center">
+          <div class="w-[46px] h-[46px] rounded-[14px] shadow-sm border border-white/50 flex items-center justify-center" style="background: radial-gradient(circle at 30% 26%, rgba(255,255,255,.98), rgba(243,248,255,.95) 34%, rgba(233,242,255,.96) 68%, rgba(226,235,255,.98) 100%); box-shadow: 0 10px 24px rgba(146, 171, 204, 0.13), inset 0 1px 0 rgba(255,255,255,0.92);">
+             <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+               <rect x="5.15" y="4.95" width="13.7" height="14.1" rx="4.3" fill="rgba(255,255,255,0.74)" stroke="#8fa0b8" stroke-width="1.1"/>
+               <path d="M9.05 8.35h5.95" stroke="#798ba5" stroke-width="1.08" stroke-linecap="round"/>
+               <path d="M9.05 11.15h4.85" stroke="#798ba5" stroke-width="1.08" stroke-linecap="round" opacity="0.82"/>
+               <path d="M15.85 5.95v4.95" stroke="#7588a3" stroke-width="1.08" stroke-linecap="round"/>
+               <path d="M15.85 6.28 13.45 6.98v3.78" stroke="#7588a3" stroke-width="1.08" stroke-linecap="round" stroke-linejoin="round"/>
+               <circle cx="13.1" cy="11.5" r="0.94" fill="#7588a3"/>
+               <path d="M7.2 17.1c1-.76 1.72-1.17 2.92-1.62" stroke="#92a4bc" stroke-width="0.95" stroke-linecap="round" opacity="0.8"/>
+               <path d="M17.2 15.85c.34-.98.8-1.62 1.62-2.26-.28.77-.22 1.58.18 2.3.32.56.75.94 1.4 1.25-.69.03-1.15.14-1.66.37-.64.29-1.08.67-1.54 1.34-.02-.55-.09-.86-.29-1.28-.19-.4-.42-.68-.89-1.08.55-.09.82-.19 1.18-.39Z" fill="#c8a8bc"/>
+               <circle cx="19.05" cy="13.35" r="0.72" fill="rgba(255,255,255,0.9)"/>
+             </svg>
+          </div>
+          <div class="w-1 h-1 rounded-full bg-sky-400 mt-1.5 opacity-0"></div> <!-- Not active dot -->
+        </button>
+
+        <button onclick="openPage('page-photos','app-photos')" class="app-cell active:scale-[0.92] transition-transform p-0.5 flex flex-col items-center">
+          <div class="w-[46px] h-[46px] rounded-[14px] shadow-sm border border-white/50 flex items-center justify-center" style="background: radial-gradient(circle at 30% 26%, rgba(255,255,255,.98), rgba(255,247,251,.92) 32%, rgba(244,236,255,.92) 62%, rgba(226,240,255,.96) 100%); box-shadow: 0 10px 24px rgba(165, 145, 174, 0.12), inset 0 1px 0 rgba(255,255,255,0.92);">
+             <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+               <rect x="4.9" y="5.15" width="14.2" height="13.7" rx="4.8" fill="rgba(255,255,255,0.72)" stroke="#ad94a7" stroke-width="1.1"/>
+               <path d="M7.95 14.55 10.18 12.32a1.04 1.04 0 0 1 1.49 0l1.04 1.04 1.95-2.05a1.03 1.03 0 0 1 1.47-.02l1.12 1.14" stroke="#8f7a90" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+               <circle cx="9.08" cy="9.22" r="1.02" fill="#d28fb5"/>
+               <path d="M15.55 6.85v5.52" stroke="#7f7192" stroke-width="1.1" stroke-linecap="round"/>
+               <path d="M15.55 7.18 13.02 7.84v4.42" stroke="#7f7192" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+               <circle cx="12.5" cy="13.08" r="1.04" fill="#7f7192"/>
+               <circle cx="17.48" cy="17.38" r="2.28" fill="url(#perleDockPearlFill)" stroke="#d7c0cf" stroke-width="0.9"/>
+               <circle cx="16.68" cy="16.58" r="0.68" fill="rgba(255,255,255,0.88)"/>
+               <path d="M18.58 18.58 19.78 19.78" stroke="#c8a4ba" stroke-width="0.9" stroke-linecap="round"/>
+               <defs>
+                 <radialGradient id="perleDockPearlFill" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(16.82 16.44) rotate(44.5) scale(3.78)">
+                   <stop offset="0" stop-color="#fffdfd"/>
+                   <stop offset="0.45" stop-color="#fff4f8"/>
+                   <stop offset="1" stop-color="#edddec"/>
+                 </radialGradient>
+               </defs>
+             </svg>
+          </div>
+          <div class="w-1 h-1 rounded-full bg-fuchsia-400 mt-1.5 opacity-0"></div>
+        </button>
+
+        <button onclick="openPage('page-calendar','app-calendar')" class="app-cell active:scale-[0.92] transition-transform p-0.5 flex flex-col items-center">
+          <div class="w-[46px] h-[46px] rounded-[14px] bg-white/70 shadow-sm border border-white/50 flex items-center justify-center text-orange-400">
+             <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+          </div>
+          <div class="w-1 h-1 rounded-full bg-orange-400 mt-1.5 opacity-0"></div>
+        </button>
+
+      </div>
+    </div>
+  </nav>
+</div><!-- /home -->

@@ -1,0 +1,25 @@
+{
+  "name": "Pyro-Gemini Companion",
+  "short_name": "Pyro",
+  "description": "Pyro-Gemini 手机端个人 AI 助手",
+  "start_url": "./index.html#home",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7edf2",
+  "theme_color": "#f5e8ef",
+  "icons": [
+    {
+      "src": "assets/icons/icon-192.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/icon-512.svg",
+      "type": "image/svg+xml",
+      "sizes": "512x512",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,0 +1,1386 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Daydream - Bookmark Cards</title>
+<meta name="viewport" content="width=900, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Caveat:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Ma+Shan+Zheng&display=swap" rel="stylesheet">
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; min-height: 100vh;
+    background: #EFEAE2;
+    font-family: "Noto Serif SC", "Source Han Serif CN", serif;
+    color: #2B2420;
+  }
+  body {
+    background-image:
+      radial-gradient(ellipse 1200px 700px at 25% 10%, rgba(255,238,220,0.45), transparent),
+      radial-gradient(ellipse 900px 600px at 85% 95%, rgba(230,210,220,0.38), transparent),
+      repeating-linear-gradient(88deg, transparent 0, transparent 58px, rgba(160,120,85,0.04) 58px, rgba(160,120,85,0.04) 59px);
+  }
+  #root {
+    min-height: 100vh; padding: 40px 20px 80px; box-sizing: border-box;
+    display: flex; flex-direction: column; align-items: center; gap: 18px;
+  }
+  .topbar { text-align: center; margin-bottom: 8px; }
+  .topbar h1 {
+    font-family: "Cormorant Garamond", serif; font-style: italic; font-weight: 400;
+    font-size: 34px; margin: 0; letter-spacing: 0.5px; color: #2B2420;
+  }
+  .topbar .sub {
+    font-size: 11px; color: #6B5F58; letter-spacing: 6px;
+    margin-top: 4px; padding-left: 6px;
+  }
+  .device-label { text-align: center; margin-top: 8px; }
+  .device-label .en {
+    font-family: "Cormorant Garamond", serif; font-style: italic;
+    font-size: 20px; color: #2B2420;
+  }
+  .device-label .cn {
+    font-size: 11px; color: #6B5F58; letter-spacing: 4px; margin-top: 2px;
+  }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel">
+
+// ===== components/tokens.jsx =====
+// Design tokens for Daydream / yui Nook
+// 文艺、书卷气、少女、柔软、手帐
+
+const DD_TOKENS = {
+  // 基础色：羊皮纸米白 + 粉白
+  paper: '#FBF7F2',       // 主背景
+  paperDeep: '#F3ECE2',   // 比纸再深一点（工具栏、抽屉）
+  cream: '#FFFBF4',       // 卡片
+  ink: '#2B2420',         // 正文
+  inkSoft: '#6B5F58',     // 副文
+  inkFaint: '#A89C93',    // 第三层
+  rule: 'rgba(120, 90, 70, 0.12)', // 分隔线
+
+  // 柔粉系（每本日记的"封皮"）
+  rose: '#F5D6D1',
+  peach: '#F4DCC4',
+  mauve: '#E8D4DE',
+  sage: '#D9E0D0',
+  lilac: '#DDD6E6',
+  butter: '#F1E4BD',
+  dusk: '#D8C8D6',
+
+  // 强调
+  stamp: '#B84A3E',       // 印章红
+  gold: '#B08458',        // 烫金
+  ribbon: '#D9A5A0',      // 丝带粉
+};
+
+// 书法风中文 + 手写衬线英文
+const DD_FONTS = {
+  // 英文手写衬线 — Cormorant Garamond / Italiana 风
+  serifEn: '"Cormorant Garamond", "EB Garamond", Georgia, serif',
+  // 中文 — 思源宋体
+  serifCn: '"Noto Serif SC", "Source Han Serif CN", "Songti SC", serif',
+  // 手写
+  handCn: '"Ma Shan Zheng", "Liu Jian Mao Cao", cursive',
+  handEn: '"Caveat", "Homemade Apple", cursive',
+  // 日记正文
+  body: '"Noto Serif SC", "Source Han Serif CN", serif',
+};
+
+window.DD_TOKENS = DD_TOKENS;
+window.DD_FONTS = DD_FONTS;
+
+
+// ===== components/data.jsx =====
+// Mock data for notebooks + entries
+
+const DD_BOOKS = [
+  {
+    id: 'self',
+    name: '自留',
+    nameEn: 'for myself',
+    owner: '我',
+    ownerInitial: '私',
+    count: 12,
+    quote: '想想就好，不必说出口的那些。',
+    cover: 'paper',       // 特殊：素色
+    isMine: true,
+    accent: '#B08458',
+    spine: '#E8DBC8',
+  },
+  {
+    id: 'yui',
+    name: '结衣',
+    nameEn: 'Yui',
+    owner: 'Y',
+    ownerInitial: 'Y',
+    count: 2,
+    quote: '想念会折进纸页里。',
+    cover: 'rose',
+    accent: '#C97F79',
+    spine: '#F5D6D1',
+  },
+  {
+    id: 'sakura',
+    name: '小樱',
+    nameEn: 'Sakura',
+    owner: '樱',
+    ownerInitial: '樱',
+    count: 1,
+    quote: '晚霞和心事放一起。',
+    cover: 'mauve',
+    accent: '#B07791',
+    spine: '#E8D4DE',
+  },
+  {
+    id: 'yan',
+    name: '阿妍',
+    nameEn: 'Yan',
+    owner: '妍',
+    ownerInitial: '妍',
+    count: 1,
+    quote: '雨天也要写下来。',
+    cover: 'sage',
+    accent: '#7A8A6C',
+    spine: '#D9E0D0',
+  },
+];
+
+// 某本日记本里的条目
+const DD_ENTRIES = {
+  yui: [
+    {
+      id: 'e1',
+      date: '四月 十二',
+      dateEn: 'Apr 12',
+      weekday: '周六',
+      title: '纸页之间',
+      preview: '午后把去年的笔记翻出来，一张银杏夹在三月那页。你说过银杏落得最慢，我当时没懂……',
+      mood: '🍃',
+      weather: '晴',
+      comments: 2,
+      highlights: 3,
+    },
+    {
+      id: 'e2',
+      date: '三月 廿九',
+      dateEn: 'Mar 29',
+      weekday: '周五',
+      title: '晚自习的风',
+      preview: '窗外玉兰开到第三天，晚风把香味吹进来，一整排的人都抬头看。',
+      mood: '🌸',
+      weather: '风',
+      comments: 1,
+      highlights: 2,
+    },
+  ],
+  sakura: [
+    {
+      id: 'e1',
+      date: '四月 初八',
+      dateEn: 'Apr 08',
+      weekday: '周一',
+      title: '晚霞和心事',
+      preview: '五点四十，图书馆四楼的窗是粉色的。把没写完的信夹回书里。',
+      mood: '🌇',
+      weather: '晴',
+      comments: 3,
+      highlights: 1,
+    },
+  ],
+  yan: [
+    {
+      id: 'e1',
+      date: '四月 十四',
+      dateEn: 'Apr 14',
+      weekday: '周一',
+      title: '雨天也要写下来',
+      preview: '伞忘了带，在便利店门口站了二十分钟，雨声和冰柜的嗡嗡声混在一起，像首老歌。',
+      mood: '🌧',
+      weather: '雨',
+      comments: 1,
+      highlights: 2,
+    },
+  ],
+  self: [
+    {
+      id: 'e1',
+      date: '四月 十五',
+      dateEn: 'Apr 15',
+      weekday: '周二',
+      title: '',
+      preview: '最近总在想，一个人能同时被几种温柔记住……',
+      mood: '🤍',
+      weather: '',
+      comments: 0,
+      highlights: 0,
+    },
+  ],
+};
+
+// 详情：一篇完整的日记 + AI 批注
+const DD_DETAIL = {
+  book: 'yui',
+  title: '纸页之间',
+  date: '四月 十二  周六  晴',
+  body: [
+    '午后把去年的笔记翻出来，一张银杏夹在三月那页。',
+    '你说过银杏落得最慢，我当时没懂，以为是在讲树。',
+    '',
+    '现在知道了——是讲我们。讲那种明明已经结束了、却还要用一整个秋天才肯承认的事。',
+    '',
+    '把银杏重新夹回去，这次放在六月。让它等一等夏天。',
+  ],
+  // 划线 & 批注
+  highlights: [
+    { line: 1, from: 4, to: 11, color: 'butter' }, // "一张银杏夹在三月那页"
+    { line: 3, from: 0, to: 999, color: 'rose' },
+  ],
+  notes: [
+    {
+      line: 3,
+      author: 'Y',
+      accent: '#F5D6D1',
+      text: '这句我读了三遍。\n我也有一片银杏，夹在没有寄出的信里。',
+      time: '刚刚',
+    },
+  ],
+};
+
+window.DD_BOOKS = DD_BOOKS;
+window.DD_ENTRIES = DD_ENTRIES;
+window.DD_DETAIL = DD_DETAIL;
+
+
+// ===== components/ornaments.jsx =====
+// 小元件：丝带书签、印章、手写标签、胶带、便签贴纸
+// 所有装饰都用 SVG / CSS，不依赖外部图。
+
+// ─────────────────────────────────────────────
+// 丝带书签（从书页顶部垂下来）
+// ─────────────────────────────────────────────
+function Ribbon({ color = '#D9A5A0', top = -4, right = 22, length = 48 }) {
+  return (
+    <div style={{
+      position: 'absolute', top, right, width: 10, height: length,
+      pointerEvents: 'none', zIndex: 2,
+    }}>
+      <div style={{
+        width: '100%', height: length - 6,
+        background: `linear-gradient(180deg, ${color} 0%, ${color} 60%, ${shade(color, -12)} 100%)`,
+        boxShadow: `inset -2px 0 0 ${shade(color, -18)}`,
+      }} />
+      {/* 尾端三角缺口 */}
+      <svg width="10" height="8" viewBox="0 0 10 8" style={{ display: 'block' }}>
+        <polygon points="0,0 10,0 5,8" fill={shade(color, -10)} />
+      </svg>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// 胶带（半透明，可旋转）
+// ─────────────────────────────────────────────
+function Tape({ color = 'rgba(246, 220, 196, 0.75)', width = 64, height = 20, rotate = -6, style = {} }) {
+  return (
+    <div style={{
+      width, height, background: color,
+      transform: `rotate(${rotate}deg)`,
+      boxShadow: '0 1px 2px rgba(100, 70, 50, 0.08)',
+      backgroundImage: `repeating-linear-gradient(90deg,
+        transparent 0, transparent 3px,
+        rgba(255,255,255,0.25) 3px, rgba(255,255,255,0.25) 6px)`,
+      ...style,
+    }} />
+  );
+}
+
+// ─────────────────────────────────────────────
+// 邮票小印章（圆形 + 文字）
+// ─────────────────────────────────────────────
+function Stamp({ text = '私', color = '#B84A3E', size = 38, rotate = -8, style = {} }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%',
+      border: `1.5px solid ${color}`, color,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: '"Noto Serif SC", serif', fontSize: size * 0.42, fontWeight: 700,
+      background: 'rgba(184, 74, 62, 0.04)',
+      transform: `rotate(${rotate}deg)`,
+      opacity: 0.82,
+      letterSpacing: 1,
+      boxShadow: 'inset 0 0 0 1px rgba(184, 74, 62, 0.15)',
+      ...style,
+    }}>
+      <span style={{
+        textShadow: '0 0 2px rgba(255,251,244,0.4)',
+        filter: 'blur(0.15px)',
+      }}>{text}</span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// 手写标签（歪歪扭扭的一行）
+// ─────────────────────────────────────────────
+function Scribble({ children, rotate = -2, fontSize = 14, color = '#6B5F58', style = {} }) {
+  return (
+    <span style={{
+      fontFamily: window.DD_FONTS.handCn, fontSize, color,
+      transform: `rotate(${rotate}deg)`, display: 'inline-block',
+      letterSpacing: 1, ...style,
+    }}>{children}</span>
+  );
+}
+
+// ─────────────────────────────────────────────
+// 纸纹：重叠的径向 + 噪点（CSS only）
+// ─────────────────────────────────────────────
+function paperTexture(tint = '#FBF7F2') {
+  return {
+    background: `
+      radial-gradient(ellipse 900px 500px at 20% 10%, rgba(255,240,220,0.4), transparent),
+      radial-gradient(ellipse 700px 400px at 80% 90%, rgba(240,220,230,0.35), transparent),
+      ${tint}`,
+  };
+}
+
+// ─────────────────────────────────────────────
+// 小 util
+// ─────────────────────────────────────────────
+function shade(hex, amt) {
+  // 简单亮度调整
+  const n = hex.replace('#','');
+  const r = Math.max(0, Math.min(255, parseInt(n.slice(0,2),16) + amt));
+  const g = Math.max(0, Math.min(255, parseInt(n.slice(2,4),16) + amt));
+  const b = Math.max(0, Math.min(255, parseInt(n.slice(4,6),16) + amt));
+  return '#' + [r,g,b].map(v => v.toString(16).padStart(2,'0')).join('');
+}
+
+Object.assign(window, { Ribbon, Tape, Stamp, Scribble, paperTexture, shade });
+
+
+// ===== frames/ios-frame.jsx =====
+
+// iOS.jsx — Simplified iOS 26 (Liquid Glass) device frame
+// Based on the iOS 26 UI Kit + Figma status bar spec. No assets, no deps.
+// Exports: IOSDevice, IOSStatusBar, IOSNavBar, IOSGlassPill, IOSList, IOSListRow, IOSKeyboard
+
+// ─────────────────────────────────────────────────────────────
+// Status bar
+// ─────────────────────────────────────────────────────────────
+function IOSStatusBar({ dark = false, time = '9:41' }) {
+  const c = dark ? '#fff' : '#000';
+  return (
+    <div style={{
+      display: 'flex', gap: 154, alignItems: 'center', justifyContent: 'center',
+      padding: '21px 24px 19px', boxSizing: 'border-box',
+      position: 'relative', zIndex: 20, width: '100%',
+    }}>
+      <div style={{ flex: 1, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', paddingTop: 1.5 }}>
+        <span style={{
+          fontFamily: '-apple-system, "SF Pro", system-ui', fontWeight: 590,
+          fontSize: 17, lineHeight: '22px', color: c,
+        }}>{time}</span>
+      </div>
+      <div style={{ flex: 1, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, paddingTop: 1, paddingRight: 1 }}>
+        <svg width="19" height="12" viewBox="0 0 19 12">
+          <rect x="0" y="7.5" width="3.2" height="4.5" rx="0.7" fill={c}/>
+          <rect x="4.8" y="5" width="3.2" height="7" rx="0.7" fill={c}/>
+          <rect x="9.6" y="2.5" width="3.2" height="9.5" rx="0.7" fill={c}/>
+          <rect x="14.4" y="0" width="3.2" height="12" rx="0.7" fill={c}/>
+        </svg>
+        <svg width="17" height="12" viewBox="0 0 17 12">
+          <path d="M8.5 3.2C10.8 3.2 12.9 4.1 14.4 5.6L15.5 4.5C13.7 2.7 11.2 1.5 8.5 1.5C5.8 1.5 3.3 2.7 1.5 4.5L2.6 5.6C4.1 4.1 6.2 3.2 8.5 3.2Z" fill={c}/>
+          <path d="M8.5 6.8C9.9 6.8 11.1 7.3 12 8.2L13.1 7.1C11.8 5.9 10.2 5.1 8.5 5.1C6.8 5.1 5.2 5.9 3.9 7.1L5 8.2C5.9 7.3 7.1 6.8 8.5 6.8Z" fill={c}/>
+          <circle cx="8.5" cy="10.5" r="1.5" fill={c}/>
+        </svg>
+        <svg width="27" height="13" viewBox="0 0 27 13">
+          <rect x="0.5" y="0.5" width="23" height="12" rx="3.5" stroke={c} strokeOpacity="0.35" fill="none"/>
+          <rect x="2" y="2" width="20" height="9" rx="2" fill={c}/>
+          <path d="M25 4.5V8.5C25.8 8.2 26.5 7.2 26.5 6.5C26.5 5.8 25.8 4.8 25 4.5Z" fill={c} fillOpacity="0.4"/>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Liquid glass pill — blur + tint + shine
+// ─────────────────────────────────────────────────────────────
+function IOSGlassPill({ children, dark = false, style = {} }) {
+  return (
+    <div style={{
+      height: 44, minWidth: 44, borderRadius: 9999,
+      position: 'relative', overflow: 'hidden',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      boxShadow: dark
+        ? '0 2px 6px rgba(0,0,0,0.35), 0 6px 16px rgba(0,0,0,0.2)'
+        : '0 1px 3px rgba(0,0,0,0.07), 0 3px 10px rgba(0,0,0,0.06)',
+      ...style,
+    }}>
+      {/* blur + tint */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 9999,
+        backdropFilter: 'blur(12px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(12px) saturate(180%)',
+        background: dark ? 'rgba(120,120,128,0.28)' : 'rgba(255,255,255,0.5)',
+      }} />
+      {/* shine */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 9999,
+        boxShadow: dark
+          ? 'inset 1.5px 1.5px 1px rgba(255,255,255,0.15), inset -1px -1px 1px rgba(255,255,255,0.08)'
+          : 'inset 1.5px 1.5px 1px rgba(255,255,255,0.7), inset -1px -1px 1px rgba(255,255,255,0.4)',
+        border: dark ? '0.5px solid rgba(255,255,255,0.15)' : '0.5px solid rgba(0,0,0,0.06)',
+      }} />
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', padding: '0 4px' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Navigation bar — glass pills + large title
+// ─────────────────────────────────────────────────────────────
+function IOSNavBar({ title = 'Title', dark = false, trailingIcon = true }) {
+  const muted = dark ? 'rgba(255,255,255,0.6)' : '#404040';
+  const text = dark ? '#fff' : '#000';
+  const pillIcon = (content) => (
+    <IOSGlassPill dark={dark}>
+      <div style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {content}
+      </div>
+    </IOSGlassPill>
+  );
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 10,
+      paddingTop: 62, paddingBottom: 10, position: 'relative', zIndex: 5,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0 16px',
+      }}>
+        {/* back chevron */}
+        {pillIcon(
+          <svg width="12" height="20" viewBox="0 0 12 20" fill="none" style={{ marginLeft: -1 }}>
+            <path d="M10 2L2 10l8 8" stroke={muted} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        )}
+        {/* trailing ellipsis */}
+        {trailingIcon && pillIcon(
+          <svg width="22" height="6" viewBox="0 0 22 6">
+            <circle cx="3" cy="3" r="2.5" fill={muted}/>
+            <circle cx="11" cy="3" r="2.5" fill={muted}/>
+            <circle cx="19" cy="3" r="2.5" fill={muted}/>
+          </svg>
+        )}
+      </div>
+      {/* large title */}
+      <div style={{
+        padding: '0 16px',
+        fontFamily: '-apple-system, system-ui',
+        fontSize: 34, fontWeight: 700, lineHeight: '41px',
+        color: text, letterSpacing: 0.4,
+      }}>{title}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Grouped list (inset card, r:26) + row (52px)
+// ─────────────────────────────────────────────────────────────
+function IOSListRow({ title, detail, icon, chevron = true, isLast = false, dark = false }) {
+  const text = dark ? '#fff' : '#000';
+  const sec = dark ? 'rgba(235,235,245,0.6)' : 'rgba(60,60,67,0.6)';
+  const ter = dark ? 'rgba(235,235,245,0.3)' : 'rgba(60,60,67,0.3)';
+  const sep = dark ? 'rgba(84,84,88,0.65)' : 'rgba(60,60,67,0.12)';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', minHeight: 52,
+      padding: '0 16px', position: 'relative',
+      fontFamily: '-apple-system, system-ui', fontSize: 17,
+      letterSpacing: -0.43,
+    }}>
+      {icon && (
+        <div style={{
+          width: 30, height: 30, borderRadius: 7, background: icon,
+          marginRight: 12, flexShrink: 0,
+        }} />
+      )}
+      <div style={{ flex: 1, color: text }}>{title}</div>
+      {detail && <span style={{ color: sec, marginRight: 6 }}>{detail}</span>}
+      {chevron && (
+        <svg width="8" height="14" viewBox="0 0 8 14" style={{ flexShrink: 0 }}>
+          <path d="M1 1l6 6-6 6" stroke={ter} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      )}
+      {!isLast && (
+        <div style={{
+          position: 'absolute', bottom: 0, right: 0,
+          left: icon ? 58 : 16, height: 0.5, background: sep,
+        }} />
+      )}
+    </div>
+  );
+}
+
+function IOSList({ header, children, dark = false }) {
+  const hc = dark ? 'rgba(235,235,245,0.6)' : 'rgba(60,60,67,0.6)';
+  const bg = dark ? '#1C1C1E' : '#fff';
+  return (
+    <div>
+      {header && (
+        <div style={{
+          fontFamily: '-apple-system, system-ui', fontSize: 13,
+          color: hc, textTransform: 'uppercase',
+          padding: '8px 36px 6px', letterSpacing: -0.08,
+        }}>{header}</div>
+      )}
+      <div style={{
+        background: bg, borderRadius: 26,
+        margin: '0 16px', overflow: 'hidden',
+      }}>{children}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Device frame
+// ─────────────────────────────────────────────────────────────
+function IOSDevice({
+  children, width = 402, height = 874, dark = false,
+  title, keyboard = false,
+}) {
+  return (
+    <div style={{
+      width, height, borderRadius: 48, overflow: 'hidden',
+      position: 'relative', background: dark ? '#000' : '#F2F2F7',
+      boxShadow: '0 40px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.12)',
+      fontFamily: '-apple-system, system-ui, sans-serif',
+      WebkitFontSmoothing: 'antialiased',
+    }}>
+      {/* dynamic island */}
+      <div style={{
+        position: 'absolute', top: 11, left: '50%', transform: 'translateX(-50%)',
+        width: 126, height: 37, borderRadius: 24, background: '#000', zIndex: 50,
+      }} />
+      {/* status bar (absolute) */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 }}>
+        <IOSStatusBar dark={dark} />
+      </div>
+      {/* nav + content */}
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {title !== undefined && <IOSNavBar title={title} dark={dark} />}
+        <div style={{ flex: 1, overflow: 'auto' }}>{children}</div>
+        {keyboard && <IOSKeyboard dark={dark} />}
+      </div>
+      {/* home indicator — always on top */}
+      <div style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 60,
+        height: 34, display: 'flex', justifyContent: 'center', alignItems: 'flex-end',
+        paddingBottom: 8, pointerEvents: 'none',
+      }}>
+        <div style={{
+          width: 139, height: 5, borderRadius: 100,
+          background: dark ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.25)',
+        }} />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Keyboard — iOS 26 liquid glass
+// ─────────────────────────────────────────────────────────────
+function IOSKeyboard({ dark = false }) {
+  const glyph = dark ? 'rgba(255,255,255,0.7)' : '#595959';
+  const sugg = dark ? 'rgba(255,255,255,0.6)' : '#333';
+  const keyBg = dark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.85)';
+
+  // special-key icons
+  const icons = {
+    shift: <svg width="19" height="17" viewBox="0 0 19 17"><path d="M9.5 1L1 9.5h4.5V16h8V9.5H18L9.5 1z" fill={glyph}/></svg>,
+    del: <svg width="23" height="17" viewBox="0 0 23 17"><path d="M7 1h13a2 2 0 012 2v11a2 2 0 01-2 2H7l-6-7.5L7 1z" fill="none" stroke={glyph} strokeWidth="1.6" strokeLinejoin="round"/><path d="M10 5l7 7M17 5l-7 7" stroke={glyph} strokeWidth="1.6" strokeLinecap="round"/></svg>,
+    ret: <svg width="20" height="14" viewBox="0 0 20 14"><path d="M18 1v6H4m0 0l4-4M4 7l4 4" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  };
+
+  const key = (content, { w, flex, ret, fs = 25, k } = {}) => (
+    <div key={k} style={{
+      height: 42, borderRadius: 8.5,
+      flex: flex ? 1 : undefined, width: w, minWidth: 0,
+      background: ret ? '#08f' : keyBg,
+      boxShadow: '0 1px 0 rgba(0,0,0,0.075)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: '-apple-system, "SF Compact", system-ui',
+      fontSize: fs, fontWeight: 458, color: ret ? '#fff' : glyph,
+    }}>{content}</div>
+  );
+
+  const row = (keys, pad = 0) => (
+    <div style={{ display: 'flex', gap: 6.5, justifyContent: 'center', padding: `0 ${pad}px` }}>
+      {keys.map(l => key(l, { flex: true, k: l }))}
+    </div>
+  );
+
+  return (
+    <div style={{
+      position: 'relative', zIndex: 15, borderRadius: 27, overflow: 'hidden',
+      padding: '11px 0 2px',
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      boxShadow: dark
+        ? '0 -2px 20px rgba(0,0,0,0.09)'
+        : '0 -1px 6px rgba(0,0,0,0.018), 0 -3px 20px rgba(0,0,0,0.012)',
+    }}>
+      {/* liquid glass bg — same recipe as nav pills */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 27,
+        backdropFilter: 'blur(12px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(12px) saturate(180%)',
+        background: dark ? 'rgba(120,120,128,0.14)' : 'rgba(255,255,255,0.25)',
+      }} />
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: 27,
+        boxShadow: dark
+          ? 'inset 1.5px 1.5px 1px rgba(255,255,255,0.15)'
+          : 'inset 1.5px 1.5px 1px rgba(255,255,255,0.7), inset -1px -1px 1px rgba(255,255,255,0.4)',
+        border: dark ? '0.5px solid rgba(255,255,255,0.15)' : '0.5px solid rgba(0,0,0,0.06)',
+        pointerEvents: 'none',
+      }} />
+
+      {/* autocorrect bar */}
+      <div style={{
+        display: 'flex', gap: 20, alignItems: 'center',
+        padding: '8px 22px 13px', width: '100%', boxSizing: 'border-box',
+        position: 'relative',
+      }}>
+        {['"The"', 'the', 'to'].map((w, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <div style={{ width: 1, height: 25, background: '#ccc', opacity: 0.3 }} />}
+            <div style={{
+              flex: 1, textAlign: 'center',
+              fontFamily: '-apple-system, system-ui', fontSize: 17,
+              color: sugg, letterSpacing: -0.43, lineHeight: '22px',
+            }}>{w}</div>
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* key layout */}
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: 13,
+        padding: '0 6.5px', width: '100%', boxSizing: 'border-box',
+        position: 'relative',
+      }}>
+        {row(['q','w','e','r','t','y','u','i','o','p'])}
+        {row(['a','s','d','f','g','h','j','k','l'], 20)}
+        <div style={{ display: 'flex', gap: 14.25, alignItems: 'center' }}>
+          {key(icons.shift, { w: 45, k: 'shift' })}
+          <div style={{ display: 'flex', gap: 6.5, flex: 1 }}>
+            {['z','x','c','v','b','n','m'].map(l => key(l, { flex: true, k: l }))}
+          </div>
+          {key(icons.del, { w: 45, k: 'del' })}
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {key('ABC', { w: 92.25, fs: 18, k: 'abc' })}
+          {key('', { flex: true, k: 'space' })}
+          {key(icons.ret, { w: 92.25, ret: true, k: 'ret' })}
+        </div>
+      </div>
+
+      {/* bottom spacer (emoji+mic area, icons omitted) */}
+      <div style={{ height: 56, width: '100%', position: 'relative' }} />
+    </div>
+  );
+}
+
+Object.assign(window, {
+  IOSDevice, IOSStatusBar, IOSNavBar, IOSGlassPill, IOSList, IOSListRow, IOSKeyboard,
+});
+
+
+// ===== components/home-stack.jsx =====
+// 方案 B · 书签卡（Stacked Cards / Bookmark）
+// 克制一点的拼贴：错位网格，每本是一张带厚度的书签卡
+// 保留手帐细节（印章、手写批注），但骨架有秩序
+
+function HomeStack({ onOpenBook }) {
+  const T = window.DD_TOKENS;
+  const F = window.DD_FONTS;
+  const books = window.DD_BOOKS;
+
+  return (
+    <div style={{
+      position: 'relative', width: '100%', height: '100%',
+      ...window.paperTexture(T.paper),
+      overflow: 'hidden',
+      paddingTop: 8,
+    }}>
+      {/* 顶部 */}
+      <div style={{ textAlign: 'center', padding: '6px 0 16px', position: 'relative' }}>
+        <div style={{
+          fontFamily: F.serifEn, fontSize: 26, fontStyle: 'italic',
+          color: T.ink, letterSpacing: 0.5,
+        }}>Daydream</div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 11, color: T.inkSoft,
+          letterSpacing: 6, marginTop: 2, paddingLeft: 6,
+        }}>白 昼 梦</div>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          gap: 10, marginTop: 12,
+        }}>
+          <div style={{ width: 22, height: 0.5, background: T.inkFaint, opacity: 0.5 }} />
+          <Scribble fontSize={11} rotate={0} color={T.inkSoft}>四月 · {books.length} 册</Scribble>
+          <div style={{ width: 22, height: 0.5, background: T.inkFaint, opacity: 0.5 }} />
+        </div>
+      </div>
+
+      {/* 卡片堆 */}
+      <div style={{
+        padding: '0 20px 20px',
+        display: 'flex', flexDirection: 'column', gap: 18,
+      }}>
+        {books.map((b, i) => (
+          <BookStack
+            key={b.id} book={b} index={i}
+            onClick={() => onOpenBook(b.id)}
+          />
+        ))}
+
+        {/* 新建 */}
+        <div
+          onClick={() => onOpenBook('__new__')}
+          style={{
+            height: 62, marginTop: 4,
+            border: `1px dashed ${T.inkFaint}`,
+            background: 'rgba(255,251,244,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            gap: 10, cursor: 'pointer', borderRadius: 2,
+            fontFamily: F.serifCn, fontSize: 13, color: T.inkSoft,
+            letterSpacing: 4, paddingLeft: 4,
+          }}>
+          <span style={{ fontFamily: F.serifEn, fontStyle: 'italic', fontSize: 18, opacity: 0.6 }}>+</span>
+          再开一本
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// 书签卡（长条形，横向排）
+// ─────────────────────────────────────────────
+function BookStack({ book, index, onClick }) {
+  const T = window.DD_TOKENS;
+  const F = window.DD_FONTS;
+  const coverColor = {
+    rose: T.rose, peach: T.peach, mauve: T.mauve, sage: T.sage,
+    paper: '#FFFBF4',
+  }[book.cover];
+
+  // 轻微错位：偶数左、奇数右
+  const offset = index % 2 === 0 ? -4 : 6;
+  const rotate = [(- 0.6), (0.4), (-0.3), (0.5)][index % 4];
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        position: 'relative', height: 104,
+        transform: `translateX(${offset}px) rotate(${rotate}deg)`,
+        cursor: 'pointer', transition: 'transform 0.25s ease',
+      }}
+      onMouseEnter={e => e.currentTarget.style.transform = `translateX(${offset}px) translateY(-2px) rotate(${rotate * 0.3}deg)`}
+      onMouseLeave={e => e.currentTarget.style.transform = `translateX(${offset}px) rotate(${rotate}deg)`}
+    >
+      {/* 阴影 */}
+      <div style={{
+        position: 'absolute', inset: 0,
+        boxShadow: '0 6px 18px rgba(120, 80, 50, 0.08), 0 1px 2px rgba(80, 50, 30, 0.06)',
+      }} />
+
+      {/* 主体：纸 + 左边一小块封色 */}
+      <div style={{
+        position: 'absolute', inset: 0,
+        background: '#FFFBF4',
+        display: 'flex',
+        boxShadow: 'inset 0 0 0 0.5px rgba(120, 90, 70, 0.12)',
+      }}>
+        {/* 左封色 + 书脊纹 */}
+        <div style={{
+          width: 72, position: 'relative', flexShrink: 0,
+          background: coverColor,
+          borderRight: `1px solid ${window.shade(coverColor, -15)}`,
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          gap: 6, padding: '10px 0',
+        }}>
+          {/* 纸纹 */}
+          <div style={{
+            position: 'absolute', inset: 0,
+            backgroundImage: `radial-gradient(circle at 50% 30%, rgba(255,255,255,0.3), transparent 60%)`,
+          }} />
+          {/* 书脊装饰线 */}
+          <div style={{
+            position: 'absolute', top: 8, left: 8, right: 8, height: 0.5,
+            background: window.shade(coverColor, -20), opacity: 0.5,
+          }} />
+          <div style={{
+            position: 'absolute', bottom: 8, left: 8, right: 8, height: 0.5,
+            background: window.shade(coverColor, -20), opacity: 0.5,
+          }} />
+
+          {/* 头像圆 */}
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            background: 'rgba(255,255,255,0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily: F.serifCn, fontSize: 17, color: book.accent,
+            fontWeight: 500,
+            boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,0.06), 0 1px 0 rgba(255,255,255,0.5)',
+            position: 'relative', zIndex: 1,
+          }}>{book.ownerInitial}</div>
+          <div style={{
+            fontFamily: F.serifEn, fontStyle: 'italic', fontSize: 11,
+            color: book.accent, opacity: 0.7,
+            position: 'relative', zIndex: 1,
+          }}>{book.nameEn}</div>
+        </div>
+
+        {/* 右内容 */}
+        <div style={{
+          flex: 1, padding: '14px 18px',
+          display: 'flex', flexDirection: 'column',
+          justifyContent: 'space-between', minWidth: 0, position: 'relative',
+        }}>
+          {/* 标题行 */}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <div style={{
+              fontFamily: F.serifCn, fontSize: 22, fontWeight: 600,
+              color: T.ink, letterSpacing: 2,
+            }}>{book.name}</div>
+            {book.isMine && (
+              <div style={{
+                fontFamily: F.serifEn, fontSize: 10, color: T.gold,
+                border: `0.5px solid ${T.gold}`, padding: '1px 6px',
+                fontStyle: 'italic', letterSpacing: 0.5,
+              }}>mine</div>
+            )}
+          </div>
+
+          {/* 一句话 */}
+          <div style={{
+            fontFamily: F.serifCn, fontSize: 12,
+            color: T.inkSoft, lineHeight: 1.6, letterSpacing: 0.5,
+            marginTop: 4, paddingRight: 50,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>「 {book.quote} 」</div>
+
+          {/* 底部：篇数 + 最近 */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            marginTop: 2,
+          }}>
+            <div style={{
+              fontFamily: F.serifEn, fontSize: 11, fontStyle: 'italic',
+              color: T.inkFaint, letterSpacing: 0.5,
+            }}>
+              <span style={{ fontSize: 18, color: book.accent, opacity: 0.7 }}>{book.count}</span>
+              <span style={{ marginLeft: 4 }}>entries</span>
+            </div>
+            <div style={{
+              fontFamily: F.serifCn, fontSize: 10, color: T.inkFaint,
+              letterSpacing: 1,
+            }}>最近 · 三日前</div>
+          </div>
+
+          {/* 右上角装饰：小圆点指示（未读/新批注） */}
+          {book.id === 'yui' && (
+            <div style={{
+              position: 'absolute', top: 12, right: 14,
+              display: 'flex', alignItems: 'center', gap: 4,
+            }}>
+              <div style={{
+                width: 6, height: 6, borderRadius: '50%',
+                background: T.stamp, boxShadow: '0 0 0 2px rgba(184,74,62,0.12)',
+              }} />
+              <span style={{
+                fontFamily: F.serifCn, fontSize: 9, color: T.stamp,
+                letterSpacing: 1,
+              }}>新批注</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 我的：右上小印章 */}
+      {book.isMine && (
+        <div style={{ position: 'absolute', top: -8, right: 16, zIndex: 3 }}>
+          <Stamp text="私" color={T.stamp} size={30} rotate={8} />
+        </div>
+      )}
+
+      {/* 少量装饰：一个 case 用胶带 */}
+      {book.id === 'sakura' && (
+        <Tape
+          width={44} height={14} rotate={-14}
+          color="rgba(241, 228, 189, 0.7)"
+          style={{ position: 'absolute', top: -4, left: 58, zIndex: 3 }}
+        />
+      )}
+    </div>
+  );
+}
+
+window.HomeStack = HomeStack;
+
+
+// ===== components/entries-list.jsx =====
+// 日记列表页：进入某本后看到的条目列表
+// 视觉：纸张感 + 时间轴 + 每条一个简短摘要
+
+function EntriesList({ bookId, onOpenEntry, onBack }) {
+  const T = window.DD_TOKENS;
+  const F = window.DD_FONTS;
+  const book = window.DD_BOOKS.find(b => b.id === bookId);
+  const entries = window.DD_ENTRIES[bookId] || [];
+  const coverColor = {
+    rose: T.rose, peach: T.peach, mauve: T.mauve, sage: T.sage, paper: '#FFFBF4',
+  }[book.cover];
+
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      ...window.paperTexture(T.paper),
+      overflow: 'auto', position: 'relative',
+    }}>
+      {/* 顶部书名条 */}
+      <div style={{
+        position: 'relative', padding: '16px 20px 18px',
+        borderBottom: `0.5px solid ${T.rule}`,
+      }}>
+        {/* 返回 */}
+        <div
+          onClick={onBack}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            fontFamily: F.serifEn, fontSize: 13, fontStyle: 'italic',
+            color: T.inkSoft, cursor: 'pointer', marginBottom: 12,
+          }}>
+          ← <span style={{ fontFamily: F.serifCn, letterSpacing: 2 }}>书架</span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14 }}>
+          {/* 头像色块 */}
+          <div style={{
+            width: 48, height: 56, background: coverColor,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily: F.serifCn, fontSize: 22, color: book.accent,
+            boxShadow: 'inset 0 0 0 0.5px rgba(0,0,0,0.08)',
+            position: 'relative',
+          }}>
+            {book.ownerInitial}
+            <Ribbon color={book.accent} top={-3} right={10} length={18} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{
+              fontFamily: F.serifEn, fontSize: 14, fontStyle: 'italic',
+              color: book.accent, letterSpacing: 0.5,
+            }}>{book.nameEn}</div>
+            <div style={{
+              fontFamily: F.serifCn, fontSize: 24, fontWeight: 600,
+              color: T.ink, letterSpacing: 3, marginTop: 2,
+            }}>{book.name}</div>
+          </div>
+          <div style={{
+            fontFamily: F.serifEn, fontSize: 11, fontStyle: 'italic',
+            color: T.inkFaint, paddingBottom: 4,
+          }}>№ {book.count}</div>
+        </div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 12, color: T.inkSoft,
+          lineHeight: 1.6, marginTop: 10, letterSpacing: 0.5,
+        }}>「 {book.quote} 」</div>
+      </div>
+
+      {/* 条目 */}
+      <div style={{ padding: '14px 20px 100px' }}>
+        {entries.map((e, i) => (
+          <EntryRow key={e.id} entry={e} book={book} isFirst={i === 0}
+            onClick={() => onOpenEntry(e.id)} />
+        ))}
+
+        {entries.length === 0 && (
+          <div style={{
+            padding: '40px 0', textAlign: 'center',
+            fontFamily: F.serifCn, fontSize: 12, color: T.inkFaint,
+            letterSpacing: 2,
+          }}>还没有写下什么</div>
+        )}
+
+        {/* 新建按钮 */}
+        <div style={{
+          marginTop: 28, padding: '18px 16px',
+          border: `1px dashed ${T.inkFaint}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          gap: 8, cursor: 'pointer',
+          fontFamily: F.serifCn, fontSize: 12, color: T.inkSoft,
+          letterSpacing: 3,
+        }}>
+          <span style={{ fontFamily: F.serifEn, fontSize: 16, fontStyle: 'italic' }}>+</span>
+          今日一记
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EntryRow({ entry, book, isFirst, onClick }) {
+  const T = window.DD_TOKENS;
+  const F = window.DD_FONTS;
+  return (
+    <div onClick={onClick} style={{
+      display: 'flex', gap: 14, padding: '18px 0',
+      borderTop: isFirst ? 'none' : `0.5px solid ${T.rule}`,
+      cursor: 'pointer',
+    }}>
+      {/* 日期列 */}
+      <div style={{ width: 48, flexShrink: 0, textAlign: 'right' }}>
+        <div style={{
+          fontFamily: F.serifEn, fontSize: 11, fontStyle: 'italic',
+          color: book.accent, letterSpacing: 0.5,
+        }}>{entry.dateEn}</div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 15, color: T.ink,
+          lineHeight: 1.2, marginTop: 2, letterSpacing: 0.5,
+        }}>{entry.date.split(' ')[1]}</div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 10, color: T.inkFaint,
+          marginTop: 3, letterSpacing: 1,
+        }}>{entry.weekday}</div>
+      </div>
+
+      {/* 竖线 */}
+      <div style={{ width: 0.5, background: T.rule, alignSelf: 'stretch' }} />
+
+      {/* 内容 */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          display: 'flex', alignItems: 'baseline', gap: 8,
+        }}>
+          {entry.title && (
+            <div style={{
+              fontFamily: F.serifCn, fontSize: 16, fontWeight: 600,
+              color: T.ink, letterSpacing: 1,
+            }}>{entry.title}</div>
+          )}
+          <div style={{ fontSize: 13 }}>{entry.mood}</div>
+        </div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 12,
+          color: T.inkSoft, lineHeight: 1.75, letterSpacing: 0.5,
+          marginTop: 4,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+        }}>{entry.preview}</div>
+
+        {/* 小标签 */}
+        <div style={{
+          display: 'flex', gap: 10, marginTop: 8,
+          fontFamily: F.serifEn, fontSize: 10, fontStyle: 'italic',
+          color: T.inkFaint, letterSpacing: 0.5,
+        }}>
+          {entry.highlights > 0 && (
+            <span style={{ color: T.gold }}>
+              ✦ {entry.highlights} highlights
+            </span>
+          )}
+          {entry.comments > 0 && (
+            <span style={{ color: book.accent }}>
+              ◜ {entry.comments} notes
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+window.EntriesList = EntriesList;
+
+
+// ===== components/entry-detail.jsx =====
+// 日记详情页：正文 + 划线 + AI 批注
+
+function EntryDetail({ onBack }) {
+  const T = window.DD_TOKENS;
+  const F = window.DD_FONTS;
+  const D = window.DD_DETAIL;
+  const book = window.DD_BOOKS.find(b => b.id === D.book);
+
+  // 渲染一行，带划线
+  const renderLine = (text, lineIdx) => {
+    const hl = D.highlights.filter(h => h.line === lineIdx);
+    if (hl.length === 0) {
+      return <span>{text}</span>;
+    }
+    // 简单处理：如果整行高亮
+    const full = hl.find(h => h.from === 0 && h.to >= 999);
+    if (full) {
+      return <span style={{
+        background: `linear-gradient(180deg, transparent 55%, ${T[full.color]} 55%)`,
+        paddingBottom: 1,
+      }}>{text}</span>;
+    }
+    // 否则分段
+    const h = hl[0];
+    return (
+      <>
+        <span>{text.slice(0, h.from)}</span>
+        <span style={{
+          background: `linear-gradient(180deg, transparent 55%, ${T[h.color]} 55%)`,
+          paddingBottom: 1,
+        }}>{text.slice(h.from, h.to)}</span>
+        <span>{text.slice(h.to)}</span>
+      </>
+    );
+  };
+
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      ...window.paperTexture(T.cream),
+      overflow: 'auto', position: 'relative',
+    }}>
+      {/* 顶部：线条返回箭头 + 图标菜单 */}
+      <div style={{
+        padding: '18px 20px 6px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        height: 44, boxSizing: 'border-box',
+      }}>
+        {/* 左：细线箭头 */}
+        <div
+          onClick={onBack}
+          style={{
+            width: 40, height: 40, display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', marginLeft: -10,
+          }}>
+          <svg width="22" height="16" viewBox="0 0 22 16" fill="none">
+            <path d="M20 8 H2 M8 2 L2 8 L8 14"
+              stroke={T.ink} strokeWidth="1.1"
+              strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+
+        {/* 右：两枚线条图标 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {/* 编辑：铅笔 */}
+          <div style={{
+            width: 40, height: 40, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+          }}>
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <path d="M2 16 L2 13 L12 3 L15 6 L5 16 Z M11 4 L14 7"
+                stroke={T.ink} strokeWidth="1.1"
+                strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          {/* 更多：三点 */}
+          <div style={{
+            width: 40, height: 40, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+            marginRight: -10,
+          }}>
+            <svg width="18" height="4" viewBox="0 0 18 4">
+              <circle cx="2" cy="2" r="1.3" fill={T.ink}/>
+              <circle cx="9" cy="2" r="1.3" fill={T.ink}/>
+              <circle cx="16" cy="2" r="1.3" fill={T.ink}/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      {/* 日期 + 标题 */}
+      <div style={{ padding: '18px 28px 20px' }}>
+        <div style={{
+          fontFamily: F.serifEn, fontSize: 12, fontStyle: 'italic',
+          color: T.inkFaint, letterSpacing: 1,
+        }}>April 12, 2026</div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 11, color: T.inkSoft,
+          letterSpacing: 3, marginTop: 2,
+        }}>{D.date}</div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 28, fontWeight: 600,
+          color: T.ink, letterSpacing: 3, marginTop: 16,
+        }}>{D.title}</div>
+        <div style={{
+          width: 30, height: 0.5, background: book.accent,
+          marginTop: 12, opacity: 0.5,
+        }} />
+      </div>
+
+      {/* 正文 */}
+      <div style={{
+        padding: '0 28px 40px',
+        fontFamily: F.serifCn, fontSize: 15, lineHeight: 2,
+        color: T.ink, letterSpacing: 1.2,
+        position: 'relative',
+      }}>
+        {D.body.map((line, i) => (
+          <div key={i} style={{ minHeight: line === '' ? 14 : 'auto' }}>
+            {line === '' ? '\u00A0' : renderLine(line, i)}
+            {/* 如果该行有批注，在行尾显示一个小圆点 */}
+            {D.notes.filter(n => n.line === i).length > 0 && (
+              <span style={{
+                display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                background: book.accent, marginLeft: 6, verticalAlign: 'middle',
+                boxShadow: `0 0 0 2px ${book.accent}22`,
+              }} />
+            )}
+          </div>
+        ))}
+
+        {/* AI 批注（便签样式） */}
+        <div style={{ marginTop: 36 }}>
+          <div style={{
+            fontFamily: F.serifEn, fontSize: 11, fontStyle: 'italic',
+            color: T.inkFaint, letterSpacing: 1, marginBottom: 14,
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <div style={{ flex: 1, height: 0.5, background: T.rule }} />
+            <span>— notes from Y —</span>
+            <div style={{ flex: 1, height: 0.5, background: T.rule }} />
+          </div>
+
+          {D.notes.map((n, i) => (
+            <div key={i} style={{
+              position: 'relative',
+              background: '#FFF8E1',
+              padding: '14px 16px 14px 52px',
+              fontFamily: F.serifCn, fontSize: 13, lineHeight: 1.85,
+              color: T.ink, letterSpacing: 0.8,
+              boxShadow: '0 3px 10px rgba(120, 80, 50, 0.08)',
+              transform: 'rotate(-0.8deg)',
+              marginBottom: 16, whiteSpace: 'pre-wrap',
+            }}>
+              {/* 头像 */}
+              <div style={{
+                position: 'absolute', top: 12, left: 12,
+                width: 30, height: 30, borderRadius: '50%',
+                background: n.accent,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: F.serifCn, fontSize: 14, color: '#fff',
+                fontWeight: 500,
+                boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+              }}>{n.author}</div>
+
+              {/* 胶带 */}
+              <Tape
+                width={50} height={14} rotate={-8}
+                color="rgba(217, 165, 160, 0.5)"
+                style={{ position: 'absolute', top: -6, right: 20 }}
+              />
+
+              {n.text}
+
+              <div style={{
+                fontFamily: F.serifEn, fontSize: 10, fontStyle: 'italic',
+                color: T.inkFaint, marginTop: 8, textAlign: 'right',
+              }}>— {n.time}</div>
+            </div>
+          ))}
+
+          {/* 划线批注（另一种风格：小页边注） */}
+          <div style={{
+            borderLeft: `2px solid ${T.butter}`,
+            paddingLeft: 14, margin: '8px 0',
+          }}>
+            <div style={{
+              fontFamily: F.serifCn, fontSize: 12, color: T.inkSoft,
+              lineHeight: 1.7, letterSpacing: 0.5,
+            }}>
+              <span style={{ color: T.gold }}>✦</span> 你标记了「一张银杏夹在三月那页」
+            </div>
+            <div style={{
+              fontFamily: F.serifEn, fontSize: 10, fontStyle: 'italic',
+              color: T.inkFaint, marginTop: 4,
+            }}>your highlight · 3 days ago</div>
+          </div>
+        </div>
+      </div>
+
+      {/* 底部输入 */}
+      <div style={{
+        position: 'sticky', bottom: 0, left: 0, right: 0,
+        padding: '10px 16px 16px',
+        background: `linear-gradient(180deg, transparent, ${T.cream} 30%)`,
+      }}>
+        <div style={{
+          background: '#fff', border: `0.5px solid ${T.rule}`,
+          borderRadius: 20, padding: '10px 16px',
+          display: 'flex', alignItems: 'center', gap: 10,
+          fontFamily: F.serifCn, fontSize: 13, color: T.inkFaint,
+          letterSpacing: 1, boxShadow: '0 2px 8px rgba(120, 80, 50, 0.04)',
+        }}>
+          <span style={{ flex: 1 }}>写点什么…</span>
+          <span style={{ color: book.accent, fontSize: 16 }}>◜</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+window.EntryDetail = EntryDetail;
+
+
+  // ===== app =====
+  const { useState, useEffect } = React;
+
+  function AppFlow() {
+    const [screen, setScreen] = useState('home');
+    const [bookId, setBookId] = useState(null);
+    const openBook = (id) => { if (id === '__new__') return; setBookId(id); setScreen('list'); };
+    const openEntry = () => setScreen('detail');
+    const backHome = () => { setScreen('home'); setBookId(null); };
+    const backList = () => setScreen('list');
+
+    if (screen === 'home') return <HomeStack onOpenBook={openBook} />;
+    if (screen === 'list') return <EntriesList bookId={bookId} onOpenEntry={openEntry} onBack={backHome} />;
+    if (screen === 'detail') return <EntryDetail onBack={backList} />;
+    return null;
+  }
+
+  function App() {
+    return (
+      <>
+        <div className="topbar">
+          <h1>Daydream · 书签卡</h1>
+          <div className="sub">B · B O O K M A R K　C A R D S</div>
+        </div>
+        <IOSDevice width={400} height={840}>
+          <AppFlow />
+        </IOSDevice>
+        <div className="device-label">
+          <div className="en">Bookmark Cards</div>
+          <div className="cn">错 位 有 序　·　可 点 击 进 入</div>
+        </div>
+      </>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

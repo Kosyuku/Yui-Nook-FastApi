@@ -1,0 +1,45 @@
+﻿<div id="page-photos" class="page hidden sub-page">
+  <div class="mx-auto w-full max-w-[414px] h-full flex flex-col">
+    <header class="sub-header media-sub-header"><span class="glass-refraction"></span>
+      <button onclick="closePage('page-photos')"
+        class="media-back-btn active:scale-90 transition-transform shrink-0" aria-label="返回">
+        <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6" /></svg>
+      </button>
+      <h1 class="media-title">Perle</h1>
+      <button onclick="document.getElementById('photo-input').click()"
+        class="media-action-btn active:scale-90 transition-transform shrink-0">+ 添加</button>
+    </header>
+    <div class="media-scroll-area">
+      <div class="media-card">
+      <div class="media-tag-row">
+        <button class="media-tag active">全部</button>
+        <button class="media-tag">和阿延 ❤️</button>
+        <button class="media-tag">风景 🌸</button>
+        <button class="media-tag">美食 🍰</button>
+        <button class="media-tag">日常 📷</button>
+      </div>
+      <div id="photo-grid" class="photo-grid">
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph1/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph2/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph3/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph4/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph5/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph6/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph7/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph8/300/300" /></div>
+        <div class="photo-item"><img src="https://picsum.photos/seed/ph9/300/300" /></div>
+      </div>
+    </div>
+  </div>
+  <div class="media-page-tabbar">
+    <button class="media-page-tab active" type="button" onclick="switchMediaPage('photos')">
+      <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      <span>图库</span>
+    </button>
+    <button class="media-page-tab" type="button" onclick="switchMediaPage('music')">
+      <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 18V7.8l9-1.8v10.4"/><circle cx="7.4" cy="18" r="2.2"/><circle cx="16.4" cy="16.2" r="2.2"/></svg>
+      <span>音乐</span>
+    </button>
+  </div>
+</div>
+</div><!-- /photos -->

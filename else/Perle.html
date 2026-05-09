@@ -1,0 +1,1234 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Perle · 最终版</title>
+<meta name="viewport" content="width=900, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Caveat:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Ma+Shan+Zheng&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; min-height: 100vh; background: #F1ECEC;
+    font-family: "Noto Serif SC", serif; color: #2B2420; }
+  body { background-image:
+    radial-gradient(ellipse 1100px 600px at 20% 10%, rgba(240,225,235,0.55), transparent),
+    radial-gradient(ellipse 800px 500px at 80% 90%, rgba(225,215,235,0.45), transparent); }
+  #root { padding: 36px 20px 80px;
+    display: flex; flex-direction: column; align-items: center; gap: 26px; }
+
+  *::-webkit-scrollbar { width: 0; height: 0; display: none; }
+  * { scrollbar-width: none; -ms-overflow-style: none; }
+
+  .topbar { text-align: center; }
+  .topbar h1 { font-family: "Cormorant Garamond", serif; font-style: italic; font-weight: 400;
+    font-size: 36px; margin: 0; letter-spacing: 0.5px; }
+  .topbar .sub { font-size: 11px; color: #6B5F68; letter-spacing: 5px; margin-top: 4px; padding-left: 4px; }
+
+  .pair { display: flex; gap: 28px; align-items: flex-start; }
+  .pair > div { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .pair small { font-family: Caveat, cursive; font-size: 16px; color: #8B7395; letter-spacing: 1px; }
+  .pair .desc { font-size: 11px; color: #9E8894; letter-spacing: 1.5px; line-height: 1.7;
+    max-width: 320px; text-align: center; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel">
+
+
+
+// ===== components/tokens.jsx =====
+// Design tokens for Daydream / yui Nook
+// 文艺、书卷气、少女、柔软、手帐
+
+const DD_TOKENS = {
+  // 基础色：羊皮纸米白 + 粉白
+  paper: '#FBF7F2', // 主背景
+  paperDeep: '#F3ECE2', // 比纸再深一点（工具栏、抽屉）
+  cream: '#FFFBF4', // 卡片
+  ink: '#2B2420', // 正文
+  inkSoft: '#6B5F58', // 副文
+  inkFaint: '#A89C93', // 第三层
+  rule: 'rgba(120, 90, 70, 0.12)', // 分隔线
+
+  // 柔粉系（每本日记的"封皮"）
+  rose: '#F5D6D1',
+  peach: '#F4DCC4',
+  mauve: '#E8D4DE',
+  sage: '#D9E0D0',
+  lilac: '#DDD6E6',
+  butter: '#F1E4BD',
+  dusk: '#D8C8D6',
+
+  // 强调
+  stamp: '#B84A3E', // 印章红
+  gold: '#B08458', // 烫金
+  ribbon: '#D9A5A0' // 丝带粉
+};
+
+// 书法风中文 + 手写衬线英文
+const DD_FONTS = {
+  // 英文手写衬线 — Cormorant Garamond / Italiana 风
+  serifEn: '"Cormorant Garamond", "EB Garamond", Georgia, serif',
+  // 中文 — 思源宋体
+  serifCn: '"Noto Serif SC", "Source Han Serif CN", "Songti SC", serif',
+  // 手写
+  handCn: '"Ma Shan Zheng", "Liu Jian Mao Cao", cursive',
+  handEn: '"Caveat", "Homemade Apple", cursive',
+  // 日记正文
+  body: '"Noto Serif SC", "Source Han Serif CN", serif'
+};
+
+window.DD_TOKENS = DD_TOKENS;
+window.DD_FONTS = DD_FONTS;
+
+
+// ===== components/ornaments.jsx =====
+// 小元件：丝带书签、印章、手写标签、胶带、便签贴纸
+// 所有装饰都用 SVG / CSS，不依赖外部图。
+
+// ─────────────────────────────────────────────
+// 丝带书签（从书页顶部垂下来）
+// ─────────────────────────────────────────────
+function Ribbon({ color = '#D9A5A0', top = -4, right = 22, length = 48 }) {
+  return (
+    <div style={{
+      position: 'absolute', top, right, width: 10, height: length,
+      pointerEvents: 'none', zIndex: 2
+    }}>
+      <div style={{
+        width: '100%', height: length - 6,
+        background: `linear-gradient(180deg, ${color} 0%, ${color} 60%, ${shade(color, -12)} 100%)`,
+        boxShadow: `inset -2px 0 0 ${shade(color, -18)}`
+      }} />
+      {/* 尾端三角缺口 */}
+      <svg width="10" height="8" viewBox="0 0 10 8" style={{ display: 'block' }}>
+        <polygon points="0,0 10,0 5,8" fill={shade(color, -10)} />
+      </svg>
+    </div>);
+
+}
+
+// ─────────────────────────────────────────────
+// 胶带（半透明，可旋转）
+// ─────────────────────────────────────────────
+function Tape({ color = 'rgba(246, 220, 196, 0.75)', width = 64, height = 20, rotate = -6, style = {} }) {
+  return (
+    <div style={{
+      width, height, background: color,
+      transform: `rotate(${rotate}deg)`,
+      boxShadow: '0 1px 2px rgba(100, 70, 50, 0.08)',
+      backgroundImage: `repeating-linear-gradient(90deg,
+        transparent 0, transparent 3px,
+        rgba(255,255,255,0.25) 3px, rgba(255,255,255,0.25) 6px)`,
+      ...style
+    }} />);
+
+}
+
+// ─────────────────────────────────────────────
+// 邮票小印章（圆形 + 文字）
+// ─────────────────────────────────────────────
+function Stamp({ text = '私', color = '#B84A3E', size = 38, rotate = -8, style = {} }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%',
+      border: `1.5px solid ${color}`, color,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: '"Noto Serif SC", serif', fontSize: size * 0.42, fontWeight: 700,
+      background: 'rgba(184, 74, 62, 0.04)',
+      transform: `rotate(${rotate}deg)`,
+      opacity: 0.82,
+      letterSpacing: 1,
+      boxShadow: 'inset 0 0 0 1px rgba(184, 74, 62, 0.15)',
+      ...style
+    }}>
+      <span style={{
+        textShadow: '0 0 2px rgba(255,251,244,0.4)',
+        filter: 'blur(0.15px)'
+      }}>{text}</span>
+    </div>);
+
+}
+
+// ─────────────────────────────────────────────
+// 手写标签（歪歪扭扭的一行）
+// ─────────────────────────────────────────────
+function Scribble({ children, rotate = -2, fontSize = 14, color = '#6B5F58', style = {} }) {
+  return (
+    <span style={{
+      fontFamily: window.DD_FONTS.handCn, fontSize, color,
+      transform: `rotate(${rotate}deg)`, display: 'inline-block',
+      letterSpacing: 1, ...style
+    }}>{children}</span>);
+
+}
+
+// ─────────────────────────────────────────────
+// 纸纹：重叠的径向 + 噪点（CSS only）
+// ─────────────────────────────────────────────
+function paperTexture(tint = '#FBF7F2') {
+  return {
+    background: `
+      radial-gradient(ellipse 900px 500px at 20% 10%, rgba(255,240,220,0.4), transparent),
+      radial-gradient(ellipse 700px 400px at 80% 90%, rgba(240,220,230,0.35), transparent),
+      ${tint}`
+  };
+}
+
+// ─────────────────────────────────────────────
+// 小 util
+// ─────────────────────────────────────────────
+function shade(hex, amt) {
+  // 简单亮度调整
+  const n = hex.replace('#', '');
+  const r = Math.max(0, Math.min(255, parseInt(n.slice(0, 2), 16) + amt));
+  const g = Math.max(0, Math.min(255, parseInt(n.slice(2, 4), 16) + amt));
+  const b = Math.max(0, Math.min(255, parseInt(n.slice(4, 6), 16) + amt));
+  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+Object.assign(window, { Ribbon, Tape, Stamp, Scribble, paperTexture, shade });
+
+
+// ===== components/perle-data.jsx =====
+// Perle — 相册 + 音乐
+
+const PERLE_CATS = [
+{ id: 'all', name: '全部', emoji: '', accent: '#C9A7BB' },
+{ id: 'ayan', name: '和阿延', emoji: '💗', accent: '#D28BA8' },
+{ id: 'scene', name: '风景', emoji: '🌸', accent: '#B493C4' },
+{ id: 'food', name: '美食', emoji: '🍞', accent: '#D2A477' },
+{ id: 'daily', name: '日常', emoji: '🧸', accent: '#B5A28A' },
+{ id: 'film', name: '胶片', emoji: '🎞️', accent: '#9A8CB0' }];
+
+
+// 图片用带尺寸信息的 unsplash url + 色块回退
+// 每张图自带主色调用于"未加载"时的纯色卡
+const PERLE_PHOTOS = [
+{ id: 'p1', cat: 'scene', tint: '#1C4A3E', ratio: 1.0, label: '极光', note: '去年冬天', src: 'https://images.unsplash.com/photo-1483347756197-71ef80e95f73?w=600' },
+{ id: 'p2', cat: 'scene', tint: '#7D8A94', ratio: 1.2, label: '灯塔', note: '', src: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=600' },
+{ id: 'p3', cat: 'scene', tint: '#A44F1E', ratio: 0.85, label: '长椅', note: '秋天', src: 'https://images.unsplash.com/photo-1507041957456-9c397ce39c97?w=600' },
+{ id: 'p4', cat: 'daily', tint: '#8B6048', ratio: 1.0, label: '木板', note: '', src: 'https://images.unsplash.com/photo-1530268729831-4b0b9e170218?w=600' },
+{ id: 'p5', cat: 'scene', tint: '#6A8AA0', ratio: 1.3, label: '缆车', note: '阿尔卑斯', src: 'https://images.unsplash.com/photo-1422393462206-207b0fbd8d6b?w=600' },
+{ id: 'p6', cat: 'scene', tint: '#6A7078', ratio: 0.8, label: '云海', note: '', src: 'https://images.unsplash.com/photo-1520262454473-a1a82276a574?w=600' },
+{ id: 'p7', cat: 'ayan', tint: '#8A5040', ratio: 1.15, label: '巷子', note: '和阿延', src: 'https://images.unsplash.com/photo-1449824913935-59a10b8d2000?w=600' },
+{ id: 'p8', cat: 'ayan', tint: '#A47A64', ratio: 0.95, label: '小街', note: '', src: 'https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?w=600' },
+{ id: 'p9', cat: 'daily', tint: '#C4A078', ratio: 1.05, label: '海象', note: '动物园', src: 'https://images.unsplash.com/photo-1459535653751-d571815e906b?w=600' },
+{ id: 'p10', cat: 'food', tint: '#C8895C', ratio: 0.9, label: '可颂', note: '', src: 'https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=600' },
+{ id: 'p11', cat: 'film', tint: '#846A82', ratio: 1.2, label: '黄昏', note: '胶片', src: 'https://images.unsplash.com/photo-1500964757637-c85e8a162699?w=600' },
+{ id: 'p12', cat: 'daily', tint: '#B8A186', ratio: 0.95, label: '窗台', note: '', src: 'https://images.unsplash.com/photo-1502920917128-1aa500764cbd?w=600' }];
+
+
+// 本地音乐（虚构 meta）
+const PERLE_TRACKS = [
+{
+  id: 't1', title: '白昼梦', titleEn: 'Daydream',
+  artist: 'yui', album: 'Perle 01', duration: 218,
+  mood: 'sunset', accent: '#D8A5BF'
+},
+{
+  id: 't2', title: '纸飞机', titleEn: 'Paper Plane',
+  artist: 'Y', album: 'letters', duration: 194,
+  mood: 'sky', accent: '#A8C1DB'
+},
+{
+  id: 't3', title: '小雨的午后', titleEn: 'Rainy Afternoon',
+  artist: '阿妍', album: '给你的信', duration: 243,
+  mood: 'rain', accent: '#B4C4B0'
+},
+{
+  id: 't4', title: '樱桃味的夏天', titleEn: 'Cherry Summer',
+  artist: '小樱', album: '四月', duration: 206,
+  mood: 'cherry', accent: '#E8A8B8'
+}];
+
+
+// 当前播放的一段"歌词"（自写的诗，避免版权）
+const PERLE_LYRICS = [
+{ t: 0, text: '把窗户推开一点点' },
+{ t: 12, text: '让黄昏自己挑路进来' },
+{ t: 24, text: '' },
+{ t: 28, text: '我把心事折成纸船', focus: true },
+{ t: 40, text: '放进你寄来的那杯茶' },
+{ t: 54, text: '' },
+{ t: 58, text: '你说白昼也会做梦' },
+{ t: 70, text: '梦里我们都还很年轻' },
+{ t: 82, text: '' },
+{ t: 86, text: '后来灯亮了' },
+{ t: 94, text: '纸船也就靠了岸' }];
+
+
+window.PERLE_CATS = PERLE_CATS;
+window.PERLE_PHOTOS = PERLE_PHOTOS;
+window.PERLE_TRACKS = PERLE_TRACKS;
+window.PERLE_LYRICS = PERLE_LYRICS;
+
+
+// ===== frames/phone-shell.jsx =====
+// 简化的手机壳：无 iOS 状态栏，只有圆角 + 底部 home indicator
+// 用于 Perle，风格更中性干净
+
+function PhoneShell({ children, width = 400, height = 820, bg = '#FBF6F4', tab }) {
+  return (
+    <div style={{
+      width, height, borderRadius: 44, overflow: 'hidden',
+      position: 'relative', background: bg,
+      boxShadow: '0 30px 60px rgba(120,80,100,0.12), 0 0 0 1px rgba(0,0,0,0.05)',
+      fontFamily: '"Noto Serif SC", "Source Han Serif CN", serif'
+    }}>
+      {/* 顶部留白 — 仅留安全区 */}
+      <div style={{ height: 28 }} />
+      <div style={{ height: `calc(100% - 28px - 24px)`, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+          {children}
+        </div>
+        {tab}
+      </div>
+      {/* home indicator */}
+      <div style={{
+        position: 'absolute', bottom: 8, left: '50%',
+        transform: 'translateX(-50%)',
+        width: 126, height: 4, borderRadius: 999,
+        background: 'rgba(0,0,0,0.22)'
+      }} />
+    </div>);
+
+}
+
+window.PhoneShell = PhoneShell;
+
+
+// ===== components/perle-gallery-a.jsx =====
+// Perle · 方向 A · 图库
+// 日杂手帐感：顶部 hero 大图（倾斜 + 胶带），分类是手写标签，图片做参差砖墙（1/2/1 行变）
+
+function PerleGalleryA({ onOpenTrack }) {
+  const { useState } = React;
+  const T = window.DD_TOKENS;
+  const F = window.DD_FONTS;
+  const cats = window.PERLE_CATS;
+  const photos = window.PERLE_PHOTOS;
+  const [active, setActive] = useState('all');
+
+  const visible = photos.filter((p) => active === 'all' || p.cat === active);
+
+  return (
+    <div style={{
+      width: '100%', height: '100%', position: 'relative',
+      background: '#F7F1EF',
+      backgroundImage: `radial-gradient(ellipse 700px 400px at 20% 0%, rgba(233,210,220,0.55), transparent),
+        radial-gradient(ellipse 600px 400px at 100% 70%, rgba(220,205,230,0.4), transparent)`,
+      overflow: 'auto'
+    }}>
+      {/* 顶部栏 */}
+      <TopBar />
+
+      {/* Hero: 倾斜照片拼贴 + 手写字 */}
+      <Hero />
+
+      {/* 分类 */}
+      <div style={{
+        padding: '22px 16px 14px', display: 'flex', gap: 8,
+        overflowX: 'auto', overflowY: 'hidden'
+      }}>
+        {cats.map((c) =>
+        <ChipTag key={c.id} cat={c} active={c.id === active} onClick={() => setActive(c.id)} />
+        )}
+      </div>
+
+      {/* 砖墙网格 */}
+      <BrickGrid photos={visible} />
+
+      <div style={{ height: 40 }} />
+    </div>);
+
+}
+
+// ─────────────────────────────────────────────
+function TopBar() {
+  const T = window.DD_TOKENS;
+  const F = window.DD_FONTS;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '10px 16px 4px'
+    }}>
+      {/* 细线返回 */}
+      <div style={{
+        width: 40, height: 40, display: 'flex',
+        alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+        marginLeft: -6
+      }}>
+        <svg width="11" height="18" viewBox="0 0 11 18" fill="none">
+          <path d="M9 2 L2 9 L9 16"
+          stroke="#2B2420" strokeWidth="1.3"
+          strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </div>
+
+      {/* 标题 */}
+      <div style={{ textAlign: 'center' }}>
+        <div style={{
+          fontFamily: F.serifEn, fontStyle: 'italic', fontSize: 22,
+          color: '#2B2420', letterSpacing: 0.5, lineHeight: 1
+        }}>Perle</div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 10, color: '#8B7E88',
+          letterSpacing: 4, marginTop: 2, paddingLeft: 4
+        }}>珍 珠 集</div>
+      </div>
+
+      {/* 加号 */}
+      <div style={{
+        width: 40, height: 40, display: 'flex',
+        alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+        marginRight: -6
+      }}>
+        <svg width="18" height="18" viewBox="0 0 18 18">
+          <path d="M9 2 V16 M2 9 H16"
+          stroke="#2B2420" strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+      </div>
+    </div>);
+
+}
+
+// ─────────────────────────────────────────────
+function Hero() {
+  const F = window.DD_FONTS;
+  const photos = window.PERLE_PHOTOS;
+  // 取两张最好看的
+  const main = photos[0];
+  const sub = photos[10];
+  return (
+    <div style={{
+      position: 'relative', height: 180, margin: '4px 16px 0'
+    }}>
+      {/* 主图：斜 -3deg */}
+      <div style={{
+        position: 'absolute', left: 6, top: 10,
+        width: 160, height: 160,
+        background: main.tint,
+        backgroundImage: `url(${main.src})`,
+        backgroundSize: 'cover', backgroundPosition: 'center',
+        transform: 'rotate(-3deg)',
+        boxShadow: 'inset 0 0 0 6px #FFFDF8'
+      }}>
+        {/* 胶带 */}
+        <div style={{
+          position: 'absolute', top: -8, left: 20,
+          width: 48, height: 14,
+          background: 'rgba(241, 228, 189, 0.72)',
+          transform: 'rotate(-6deg)',
+          backgroundImage: `repeating-linear-gradient(90deg, transparent 0, transparent 3px, rgba(255,255,255,0.35) 3px, rgba(255,255,255,0.35) 6px)`
+        }} />
+      </div>
+      {/* 副图：斜 +5deg，压在右上 */}
+      <div style={{
+        position: 'absolute', right: 4, top: 0,
+        width: 118, height: 118,
+        background: sub.tint,
+        backgroundImage: `url(${sub.src})`,
+        backgroundSize: 'cover', backgroundPosition: 'center',
+        transform: 'rotate(5deg)',
+        boxShadow: 'inset 0 0 0 5px #FFFDF8'
+      }} />
+      {/* 手写一行 */}
+      <div style={{
+        position: 'absolute', right: 8, bottom: -2,
+        fontFamily: F.handCn, fontSize: 16, color: '#8A6E82',
+        transform: 'rotate(-2deg)'
+      }}>四月 · 38 张</div>
+      {/* 小爱心 */}
+      <div style={{
+        position: 'absolute', left: 150, top: 130,
+        fontFamily: F.handEn, fontSize: 22, color: '#D28BA8',
+        transform: 'rotate(10deg)', lineHeight: 1
+      }}>♡</div>
+    </div>);
+
+}
+
+// ─────────────────────────────────────────────
+function ChipTag({ cat, active, onClick }) {
+  const F = window.DD_FONTS;
+  const bg = active ? '#fff' : 'rgba(255,255,255,0.55)';
+  const border = active ? cat.accent : 'rgba(150,120,130,0.25)';
+  return (
+    <div onClick={onClick} style={{
+      flexShrink: 0, padding: '5px 10px',
+      background: bg,
+      border: `0.8px solid ${border}`,
+      borderRadius: 999,
+      display: 'flex', alignItems: 'center', gap: 4,
+      cursor: 'pointer',
+      fontFamily: F.serifCn,
+      color: active ? '#2B2420' : '#6B5F68',
+      letterSpacing: 1, fontWeight: active ? 600 : 400,
+      transform: active ? 'rotate(-0.5deg)' : 'none', fontSize: 11
+    }}>
+      {cat.emoji && <span style={{ fontSize: 11 }}>{cat.emoji}</span>}
+      {cat.name}
+      {active &&
+      <div style={{
+        width: 4, height: 4, borderRadius: '50%',
+        background: cat.accent, marginLeft: 2
+      }} />
+      }
+    </div>);
+
+}
+
+// ─────────────────────────────────────────────
+// 砖墙网格：3 列，每行高度不同 + 偶尔一张横跨 2 列
+function BrickGrid({ photos }) {
+  // 分成几"段"：常规 3 张 + 大+小 两张 + 常规 3 张
+  const chunks = [];
+  let i = 0;
+  let flip = false;
+  while (i < photos.length) {
+    if (flip && i + 3 <= photos.length) {
+      chunks.push({ kind: 'wide', items: photos.slice(i, i + 3) });
+      i += 3;
+    } else {
+      chunks.push({ kind: 'tri', items: photos.slice(i, i + 3) });
+      i += 3;
+    }
+    flip = !flip;
+  }
+
+  return (
+    <div style={{ padding: '4px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {chunks.map((c, idx) =>
+      c.kind === 'tri' ?
+      <TriRow key={idx} items={c.items} offset={idx} /> :
+      <WideRow key={idx} items={c.items} offset={idx} />
+      )}
+    </div>);
+
+}
+
+function TriRow({ items, offset }) {
+  // 三格等宽，第一格比其它高一点制造不齐
+  const heights = offset % 2 === 0 ? [132, 112, 124] : [116, 128, 116];
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+      {items.map((p, i) => <PhotoCell key={p.id} p={p} h={heights[i]} />)}
+    </div>);
+
+}
+
+function WideRow({ items, offset }) {
+  // 第一张横跨 2 列 + 右边竖排两张小图
+  const [a, b, c] = items;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 8 }}>
+      <PhotoCell p={a} h={176} wide />
+      <div style={{ display: 'grid', gridTemplateRows: '1fr 1fr', gap: 8 }}>
+        {b && <PhotoCell p={b} h={84} />}
+        {c && <PhotoCell p={c} h={84} />}
+      </div>
+    </div>);
+
+}
+
+function PhotoCell({ p, h, wide }) {
+  const F = window.DD_FONTS;
+  return (
+    <div style={{
+      position: 'relative', height: h,
+      background: p.tint,
+      backgroundImage: `url(${p.src})`,
+      backgroundSize: 'cover', backgroundPosition: 'center',
+      borderRadius: 2,
+      overflow: 'hidden',
+      cursor: 'pointer'
+    }}>
+      {/* 白内描（像相纸边） */}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none',
+        boxShadow: 'inset 0 0 0 3px #FFFDF8, inset 0 0 0 4px rgba(0,0,0,0.06)'
+      }} />
+      {/* 标签仅 hero/wide 显示 */}
+      {wide && p.label &&
+      <div style={{
+        position: 'absolute', left: 10, bottom: 10,
+        padding: '3px 8px',
+        background: 'rgba(255,253,248,0.86)',
+        fontFamily: F.handCn, fontSize: 12, color: '#2B2420',
+        letterSpacing: 1
+      }}>{p.label}</div>
+      }
+    </div>);
+
+}
+
+window.PerleGalleryA = PerleGalleryA;
+
+
+// ===== components/perle-music-library.jsx =====
+// Perle · 音乐库（一级页）— 进 app 默认看到这里
+// 顶部导入入口 + 当前播放迷你条 + 全部歌曲列表
+
+function PerleMusicLibrary({ activeIdx = 0, playing = false, onPick, onOpenPlayer }) {
+  const { useState } = React;
+  const F = window.DD_FONTS;
+  const tracks = window.PERLE_TRACKS;
+  const [filter, setFilter] = useState('all');
+  // 简单分桶：心选 = 第 1、4 首；最近播放 = 0、2、3；本机导入 = 全部
+  const buckets = {
+    all: tracks.map((_, i) => i),
+    fav: [0, 3],
+    recent: [0, 2, 3],
+    imp: tracks.map((_, i) => i)
+  };
+  const visibleIdx = buckets[filter];
+  const visibleTracks = visibleIdx.map((i) => ({ tr: tracks[i], origIdx: i }));
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const active = tracks[activeIdx];
+
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      background: '#FBF6F4',
+      backgroundImage: `radial-gradient(ellipse 700px 400px at 90% 0%, rgba(230,210,225,0.5), transparent), radial-gradient(ellipse 600px 400px at 0% 90%, rgba(210,200,225,0.35), transparent)`,
+      overflow: 'auto', position: 'relative',
+      display: 'flex', flexDirection: 'column'
+    }}>
+      {/* 顶部 */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 16px 4px'
+      }}>
+        <div style={{
+          width: 40, height: 40, display: 'flex',
+          alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+          marginLeft: -6
+        }}>
+          <svg width="12" height="20" viewBox="0 0 12 20" fill="none">
+            <path d="M10 2 L2 10 L10 18"
+            stroke="#2B2420" strokeWidth="1.3"
+            strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div style={{
+          fontFamily: F.handEn, fontSize: 16, color: '#9E8894'
+        }}>music</div>
+        {/* 导入歌曲 */}
+        <div style={{
+          width: 40, height: 40, display: 'flex',
+          alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+          marginRight: -6
+        }}>
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M9 2 V12 M5 8 L9 12 L13 8 M3 15 H15"
+            stroke="#2B2420" strokeWidth="1.2"
+            strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+      </div>
+
+      {/* 大标题 */}
+      <div style={{ padding: '6px 24px 8px' }}>
+        <div style={{
+          fontFamily: F.serifEn, fontStyle: 'italic', fontSize: 16,
+          color: '#A48BA0', letterSpacing: 1
+        }}>my music</div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 32, fontWeight: 700,
+          letterSpacing: 4, marginTop: 4,
+          lineHeight: 1.1, color: "rgb(72, 45, 63)"
+        }}>拾 音 匣</div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 11, color: '#9E8894',
+          letterSpacing: 2, marginTop: 6
+        }}>{tracks.length} 首　·　{Math.round(tracks.reduce((a, t) => a + t.duration, 0) / 60)} 分钟</div>
+      </div>
+
+      {/* 子分类（横滚 chip） */}
+      <div style={{
+        padding: '14px 20px 6px', display: 'flex', gap: 18,
+        overflowX: 'auto'
+      }}>
+        {[
+        { id: 'all', name: '全部' },
+        { id: 'fav', name: '心选' },
+        { id: 'recent', name: '最近播放' },
+        { id: 'imp', name: '本机导入' }].
+        map((c) => {
+          const isOn = c.id === filter;
+          return (
+          <div key={c.id} onClick={() => setFilter(c.id)} style={{
+            flexShrink: 0, position: 'relative',
+            paddingBottom: 8, cursor: 'pointer'
+          }}>
+            <div style={{
+              fontFamily: F.serifCn, fontSize: 13,
+              fontWeight: isOn ? 600 : 400,
+              color: isOn ? '#2B2420' : '#9E8894',
+              letterSpacing: 1
+            }}>{c.name}　<span style={{ fontSize: 11, color: '#B5A4AB', fontFamily: F.serifEn, fontStyle: 'italic' }}>{buckets[c.id].length}</span></div>
+            {isOn &&
+            <div style={{
+              position: 'absolute', left: 0, right: 30, bottom: 0,
+              height: 2, background: '#D8A5BF'
+            }} />
+            }
+          </div>);
+        })}
+      </div>
+
+      {/* 列表 */}
+      <div style={{ flex: 1, padding: '6px 16px 100px' }}>
+        {visibleTracks.length === 0 &&
+        <div style={{
+          padding: '40px 12px', textAlign: 'center',
+          fontFamily: F.serifCn, fontSize: 12, color: '#B5A4AB',
+          letterSpacing: 2
+        }}>这里还是空的</div>
+        }
+        {visibleTracks.map(({ tr, origIdx }) => {
+          const i = origIdx;
+          const isActive = i === activeIdx;
+          return (
+            <div key={tr.id} onClick={() => onPick(i)} style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              padding: '8px 10px', cursor: 'pointer',
+              borderRadius: 8,
+              background: isActive ? `${tr.accent}22` : 'transparent'
+            }}>
+              <div style={{
+                width: 22, flexShrink: 0, textAlign: 'center',
+                fontFamily: F.serifEn, fontStyle: 'italic',
+                fontSize: 12, color: isActive ? tr.accent : '#B5A4AB'
+              }}>
+                {isActive ?
+                <span style={{
+                  display: 'inline-block', width: 6, height: 6,
+                  borderRadius: '50%', background: tr.accent
+                }} /> :
+                String(i + 1).padStart(2, '0')}
+              </div>
+              <div style={{
+                width: 38, height: 38, flexShrink: 0,
+                borderRadius: 6,
+                background: `linear-gradient(135deg, ${tr.accent}, ${tr.accent}80)`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: F.handEn, fontSize: 18, color: '#FFFDF8'
+              }}>♪</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontFamily: F.serifCn,
+                  fontWeight: isActive ? 700 : 500,
+                  color: '#2B2420', letterSpacing: 1,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14
+                }}>{tr.title}</div>
+                <div style={{
+                  fontFamily: F.serifCn, color: '#9E8894',
+                  letterSpacing: 1, marginTop: 1,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10
+                }}>{tr.artist}　·　{tr.album}</div>
+              </div>
+              <div style={{
+                fontFamily: F.serifEn, fontStyle: 'italic', fontSize: 12,
+                color: '#A89C93', flexShrink: 0
+              }}>{fmt(tr.duration)}</div>
+            </div>);
+
+        })}
+      </div>
+
+      {/* 底部 mini player（点击进入完整播放器） */}
+      {active &&
+      <div onClick={onOpenPlayer} style={{
+        position: 'sticky', bottom: 0, left: 0, right: 0,
+        margin: '0 12px 8px', padding: '10px 14px',
+        background: '#FFFDF8',
+        boxShadow: '0 -2px 14px rgba(120,80,100,0.08), inset 0 0 0 0.5px rgba(150,120,130,0.18)',
+        borderRadius: 14,
+        display: 'flex', alignItems: 'center', gap: 12,
+        cursor: 'pointer'
+      }}>
+          {/* 小光晕 */}
+          <div style={{
+          width: 36, height: 36, borderRadius: '50%',
+          background: `radial-gradient(circle at 30% 30%, #FFFDF8, ${active.accent})`,
+          flexShrink: 0,
+          boxShadow: `0 0 12px ${active.accent}66`
+        }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+            fontFamily: F.serifCn, fontSize: 13, fontWeight: 600,
+            color: '#2B2420', letterSpacing: 1,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+          }}>{active.title}</div>
+            <div style={{
+            fontFamily: F.serifCn, fontSize: 10, color: '#9E8894',
+            letterSpacing: 1, marginTop: 1,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+          }}>{playing ? '正在播放' : '已暂停'}　·　{active.artist}</div>
+          </div>
+          {/* 播放/暂停指示 */}
+          <div style={{
+          width: 30, height: 30, borderRadius: '50%',
+          background: active.accent,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0
+        }}>
+            {playing ?
+          <svg width="10" height="12" viewBox="0 0 10 12"><rect x="1" y="1" width="2.5" height="10" fill="#FFFDF8" /><rect x="6.5" y="1" width="2.5" height="10" fill="#FFFDF8" /></svg> :
+
+          <svg width="11" height="12" viewBox="0 0 11 12"><path d="M2 1 L10 6 L2 11 Z" fill="#FFFDF8" /></svg>
+          }
+          </div>
+          {/* 上箭头：暗示可展开 */}
+          <svg width="14" height="10" viewBox="0 0 14 10" style={{ flexShrink: 0, opacity: 0.5 }}>
+            <path d="M2 7 L7 3 L12 7" stroke="#9E8894" strokeWidth="1.2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+      }
+    </div>);
+
+}
+
+window.PerleMusicLibrary = PerleMusicLibrary;
+
+
+// ===== components/perle-music-b.jsx =====
+// Perle · 方向 B · 音乐
+// 大圆光晕（呼吸） + 歌词聚焦（一次只突出当前一行）
+// 比 A 更"氛围/情绪"向；没有波形，用一个会呼吸的色光圆 + 旋转碟片纹
+
+function PerleMusicB({ initialTrack = 0, onBack }) {
+  const { useState, useEffect } = React;
+  const F = window.DD_FONTS;
+  const tracks = window.PERLE_TRACKS;
+  const lyrics = window.PERLE_LYRICS;
+
+  const [trackIdx, setTrackIdx] = useState(initialTrack);
+  const [t, setT] = useState(28);
+  const [playing, setPlaying] = useState(true);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const track = tracks[trackIdx];
+
+  useEffect(() => {
+    if (!playing) return;
+    const id = setInterval(() => setT((s) => (s + 1) % track.duration), 1000);
+    return () => clearInterval(id);
+  }, [playing, track.duration]);
+
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const progress = t / track.duration;
+
+  const activeIdx = (() => {
+    let i = 0;
+    for (let k = 0; k < lyrics.length; k++) if (lyrics[k].t <= t) i = k;
+    return i;
+  })();
+
+  // 上下两行作为辅助
+  const lyricFocus = lyrics[activeIdx];
+  const lyricPrev = lyrics[activeIdx - 1];
+  const lyricNext = lyrics[activeIdx + 1];
+
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      background: '#F8F4F8',
+      backgroundImage: `radial-gradient(ellipse 800px 600px at 50% 30%, ${track.accent}40, transparent 60%), radial-gradient(ellipse 600px 400px at 50% 80%, rgba(170,150,200,0.22), transparent)`,
+      overflow: 'hidden', position: 'relative',
+      display: 'flex', flexDirection: 'column'
+    }}>
+      {/* 顶部 */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 16px 4px', flexShrink: 0
+      }}>
+        <div onClick={onBack} style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', marginLeft: -6 }}>
+          <svg width="12" height="20" viewBox="0 0 12 20" fill="none">
+            <path d="M10 2 L2 10 L10 18" stroke="#2B2420" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div style={{
+          fontFamily: F.handEn, fontSize: 16, color: '#9E8894'
+        }}>now playing</div>
+        <div onClick={() => setQueueOpen(true)} style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', marginRight: -6 }}>
+          {/* 歌单图标：三横线 */}
+          <svg width="20" height="14" viewBox="0 0 20 14" fill="none">
+            <path d="M2 2 H18 M2 7 H18 M2 12 H12" stroke="#2B2420" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+        </div>
+      </div>
+
+      {/* 呼吸圆 */}
+      <div style={{
+        padding: '20px 0 8px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0
+      }}>
+        <BreathOrb accent={track.accent} playing={playing} title={track.title} />
+      </div>
+
+      {/* 元信息 */}
+      <div style={{
+        padding: '4px 24px 0', textAlign: 'center', flexShrink: 0
+      }}>
+        <div style={{
+          fontFamily: F.serifEn, fontStyle: 'italic', fontSize: 14,
+          color: track.accent, letterSpacing: 1, marginBottom: 4
+        }}>{track.titleEn}</div>
+        <div style={{
+          fontFamily: F.serifCn, fontSize: 11, color: '#9E8894',
+          letterSpacing: 3
+        }}>{track.artist}　·　{track.album}</div>
+      </div>
+
+      {/* 歌词聚焦 */}
+      <div style={{
+        flex: 1, minHeight: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '0 28px', height: "1px"
+      }}>
+        <div style={{ textAlign: 'center', width: '100%' }}>
+          <div style={{
+            fontFamily: F.serifCn, fontSize: 13,
+            color: '#C2B5BC', letterSpacing: 1.5, lineHeight: 1.5,
+            minHeight: 22
+          }}>{lyricPrev?.text || ''}</div>
+          <div style={{
+            fontFamily: F.serifCn, fontSize: 22, fontWeight: 600,
+            color: '#2B2420', letterSpacing: 3, lineHeight: 1.4,
+            margin: '14px 0',
+            minHeight: 32
+          }}>{lyricFocus?.text || '⋯'}</div>
+          <div style={{
+            fontFamily: F.serifCn, fontSize: 13,
+            color: '#C2B5BC', letterSpacing: 1.5, lineHeight: 1.5,
+            minHeight: 22
+          }}>{lyricNext?.text || ''}</div>
+        </div>
+      </div>
+
+      {/* 进度条（细线） */}
+      <div style={{ padding: '8px 28px 6px', flexShrink: 0 }}>
+        <div style={{
+          height: 2, background: 'rgba(150,120,130,0.18)', position: 'relative'
+        }}>
+          <div style={{
+            position: 'absolute', left: 0, top: 0, bottom: 0,
+            width: `${progress * 100}%`, background: track.accent,
+            transition: 'width 0.5s linear'
+          }} />
+          <div style={{
+            position: 'absolute', top: -3, left: `${progress * 100}%`,
+            transform: 'translateX(-50%)',
+            width: 8, height: 8, borderRadius: '50%',
+            background: track.accent
+          }} />
+        </div>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', marginTop: 6,
+          fontFamily: F.serifEn, fontSize: 11, fontStyle: 'italic',
+          color: '#A89C93'
+        }}>
+          <span>{fmt(t)}</span>
+          <span>{fmt(track.duration)}</span>
+        </div>
+      </div>
+
+      {/* 控件 */}
+      <div style={{
+        padding: '8px 24px 28px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        gap: 32, flexShrink: 0
+      }}>
+        <CtrlIcon onClick={() => setTrackIdx((i) => (i - 1 + tracks.length) % tracks.length)}>
+          <svg width="22" height="22" viewBox="0 0 22 22"><path d="M16 4 L8 11 L16 18 M6 4 V18" stroke="#2B2420" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </CtrlIcon>
+        <div onClick={() => setPlaying((p) => !p)} style={{
+          width: 56, height: 56, borderRadius: '50%',
+          background: track.accent,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer'
+        }}>
+          {playing ?
+          <svg width="18" height="20" viewBox="0 0 18 20"><rect x="2" y="2" width="4.5" height="16" fill="#FFFDF8" /><rect x="11.5" y="2" width="4.5" height="16" fill="#FFFDF8" /></svg> :
+
+          <svg width="20" height="20" viewBox="0 0 20 20"><path d="M5 3 L17 10 L5 17 Z" fill="#FFFDF8" /></svg>
+          }
+        </div>
+        <CtrlIcon onClick={() => setTrackIdx((i) => (i + 1) % tracks.length)}>
+          <svg width="22" height="22" viewBox="0 0 22 22"><path d="M6 4 L14 11 L6 18 M16 4 V18" stroke="#2B2420" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </CtrlIcon>
+      </div>
+
+      {/* 歌单抽屉 */}
+      <QueueDrawer
+        open={queueOpen}
+        onClose={() => setQueueOpen(false)}
+        tracks={tracks}
+        activeIdx={trackIdx}
+        onPick={(i) => {setTrackIdx(i);setT(0);setQueueOpen(false);}} />
+      
+    </div>);
+
+}
+
+function QueueDrawer({ open, onClose, tracks, activeIdx, onPick }) {
+  const F = window.DD_FONTS;
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  return (
+    <>
+      {/* 遮罩 */}
+      <div onClick={onClose} style={{
+        position: 'absolute', inset: 0,
+        background: 'rgba(60,40,55,0.18)',
+        opacity: open ? 1 : 0,
+        pointerEvents: open ? 'auto' : 'none',
+        transition: 'opacity 0.3s', zIndex: 20
+      }} />
+      {/* 抽屉 */}
+      <div style={{
+        position: 'absolute', left: 0, right: 0, bottom: 0,
+        background: '#FFFDF8',
+        height: '72%',
+        transform: open ? 'translateY(0)' : 'translateY(100%)',
+        transition: 'transform 0.35s cubic-bezier(0.2, 0.9, 0.3, 1)',
+        zIndex: 21, borderRadius: '20px 20px 0 0',
+        display: 'flex', flexDirection: 'column',
+        boxShadow: '0 -10px 30px rgba(80,50,70,0.12)'
+      }}>
+        {/* 抓手 */}
+        <div onClick={onClose} style={{
+          padding: '10px 0 6px', display: 'flex', justifyContent: 'center',
+          cursor: 'pointer'
+        }}>
+          <div style={{ width: 38, height: 4, borderRadius: 999, background: 'rgba(150,120,130,0.28)' }} />
+        </div>
+        {/* 标题 */}
+        <div style={{
+          padding: '6px 24px 14px', display: 'flex', alignItems: 'baseline',
+          justifyContent: 'space-between',
+          borderBottom: '0.5px solid rgba(150,120,130,0.15)'
+        }}>
+          <div>
+            <div style={{
+              fontFamily: F.serifCn, fontSize: 18, fontWeight: 700,
+              color: '#2B2420', letterSpacing: 3
+            }}>歌 单</div>
+            <div style={{
+              fontFamily: F.handEn, fontSize: 13, color: '#9E8894', marginTop: 2
+            }}>{tracks.length} tracks ♪</div>
+          </div>
+          <div style={{
+            fontFamily: F.serifEn, fontStyle: 'italic', fontSize: 12,
+            color: '#9E8894', cursor: 'pointer'
+          }} onClick={onClose}>close</div>
+        </div>
+        {/* 列表 */}
+        <div style={{ flex: 1, overflow: 'auto', padding: '8px 16px 24px' }}>
+          {tracks.map((tr, i) => {
+            const active = i === activeIdx;
+            return (
+              <div key={tr.id} onClick={() => onPick(i)} style={{
+                display: 'flex', alignItems: 'center', gap: 14,
+                padding: '12px 10px', cursor: 'pointer',
+                borderRadius: 8,
+                background: active ? `${tr.accent}22` : 'transparent'
+              }}>
+                {/* 序号或正在播放圆点 */}
+                <div style={{
+                  width: 28, flexShrink: 0, textAlign: 'center',
+                  fontFamily: F.serifEn, fontStyle: 'italic',
+                  fontSize: 14, color: active ? tr.accent : '#B5A4AB'
+                }}>
+                  {active ?
+                  <span style={{
+                    display: 'inline-block', width: 8, height: 8,
+                    borderRadius: '50%', background: tr.accent
+                  }} /> :
+                  String(i + 1).padStart(2, '0')}
+                </div>
+                {/* 色块（代替封面） */}
+                <div style={{
+                  width: 40, height: 40, flexShrink: 0,
+                  borderRadius: 6,
+                  background: `linear-gradient(135deg, ${tr.accent}, ${tr.accent}80)`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontFamily: F.handEn, fontSize: 18, color: '#FFFDF8'
+                }}>♪</div>
+                {/* 标题 + 艺人 */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontFamily: F.serifCn, fontSize: 15,
+                    fontWeight: active ? 700 : 500,
+                    color: '#2B2420', letterSpacing: 1,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                  }}>{tr.title}</div>
+                  <div style={{
+                    fontFamily: F.serifCn, fontSize: 11, color: '#9E8894',
+                    letterSpacing: 1, marginTop: 2,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                  }}>{tr.artist}　·　{tr.album}</div>
+                </div>
+                {/* 时长 */}
+                <div style={{
+                  fontFamily: F.serifEn, fontStyle: 'italic', fontSize: 12,
+                  color: '#A89C93', flexShrink: 0
+                }}>{fmt(tr.duration)}</div>
+              </div>);
+
+          })}
+        </div>
+      </div>
+    </>);
+
+}
+
+function CtrlIcon({ children, onClick }) {
+  return (
+    <div onClick={onClick} style={{
+      width: 44, height: 44, display: 'flex',
+      alignItems: 'center', justifyContent: 'center', cursor: 'pointer'
+    }}>{children}</div>);
+
+}
+
+function BreathOrb({ accent, playing, title }) {
+  const F = window.DD_FONTS;
+  return (
+    <div style={{
+      width: 240, height: 240, position: 'relative'
+    }}>
+      <style>{`
+        @keyframes perleBreath { 0%,100% { transform: scale(1); opacity: 0.7; } 50% { transform: scale(1.08); opacity: 1; } }
+        @keyframes perleSpin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+      `}</style>
+      {/* 外层光晕 */}
+      <div style={{
+        position: 'absolute', inset: -10,
+        borderRadius: '50%',
+        background: `radial-gradient(circle at 50% 50%, ${accent}, ${accent}00 70%)`,
+        animation: playing ? 'perleBreath 3.5s ease-in-out infinite' : 'none',
+        opacity: 0.65
+      }} />
+      {/* 中层 */}
+      <div style={{
+        position: 'absolute', inset: 24,
+        borderRadius: '50%',
+        background: `radial-gradient(circle at 30% 30%, #FFFDF8, ${accent} 100%)`,
+        boxShadow: `inset 0 0 30px ${accent}80`
+      }} />
+      {/* 旋转纹（碟片感） */}
+      <div style={{
+        position: 'absolute', inset: 36,
+        borderRadius: '50%',
+        background: `repeating-radial-gradient(circle at 50% 50%, transparent 0, transparent 4px, rgba(255,255,255,0.18) 4px, rgba(255,255,255,0.18) 5px)`,
+        animation: playing ? 'perleSpin 18s linear infinite' : 'none'
+      }} />
+      {/* 中心点 */}
+      <div style={{
+        position: 'absolute', inset: '46%',
+        borderRadius: '50%',
+        background: '#FFFDF8'
+      }} />
+      {/* 标题字（环形上方） */}
+      <div style={{
+        position: 'absolute', left: 0, right: 0, bottom: -6,
+        textAlign: 'center',
+        fontFamily: F.handEn, fontSize: 18, color: accent,
+        letterSpacing: 1, borderStyle: "solid", borderWidth: "0px", padding: "0px", margin: "5px 0px 0px"
+      }}>♪ {title}</div>
+    </div>);
+
+}
+
+window.PerleMusicB = PerleMusicB;
+
+
+
+function MusicApp() {
+  const { useState, useEffect } = React;
+  const [screen, setScreen] = useState('library'); // library | player
+  const [trackIdx, setTrackIdx] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [mounted, setMounted] = useState(false); // 控制 player DOM 是否在
+  const [shown, setShown] = useState(false);     // 控制 player 是否滑到位
+
+  const openPlayer = (i) => {
+    if (i !== undefined) {setTrackIdx(i);setPlaying(true);}
+    setScreen('player');
+    setMounted(true);
+    // 下一帧再触发动画（让 transform 从 100% → 0）
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setShown(true));
+    });
+  };
+  const closePlayer = () => {
+    setShown(false);
+    setScreen('library');
+    setTimeout(() => setMounted(false), 480);
+  };
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        <PerleMusicLibrary
+        activeIdx={trackIdx}
+        playing={playing}
+        onPick={openPlayer}
+        onOpenPlayer={() => openPlayer()} />
+      
+        {mounted &&
+      <div style={{
+        position: 'absolute', inset: 0, zIndex: 10,
+        transform: shown ? 'translateY(0) scale(1)' : 'translateY(100%) scale(0.94)',
+        opacity: shown ? 1 : 0.4,
+        transformOrigin: 'center bottom',
+        transition: 'transform 0.55s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.4s ease',
+        boxShadow: shown ? '0 -20px 60px rgba(80,50,80,0.18)' : 'none',
+        background: 'inherit'
+      }}>
+            <PerleMusicB
+          initialTrack={trackIdx}
+          onBack={closePlayer} />
+        
+          </div>
+      }
+      </div>);
+
+}
+
+function App() {
+  return (
+    <>
+        <div className="topbar">
+          <h1>Perle</h1>
+          <div className="sub">G A L L E R Y　·　M U S I C</div>
+        </div>
+
+        <div className="pair">
+          <div>
+            <PhoneShell width={380} height={780}><PerleGalleryA /></PhoneShell>
+            <small>♡ gallery</small>
+            <div className="desc">砖墙参差网格 + 胶带分类标签</div>
+          </div>
+          <div>
+            <PhoneShell width={380} height={780}><MusicApp /></PhoneShell>
+            <small>♪ pickup box · 拾音匣</small>
+            <div className="desc">默认进入拾音匣 · 点歌曲滑出播放器<br />右上 SVG 按钮导入歌曲</div>
+          </div>
+        </div>
+      </>);
+
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
