@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Pyro-AI Companion</title>
+    <meta name="theme-color" content="#f5e8ef">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Pyro">
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.svg">
+    <link rel="icon" type="image/svg+xml" href="assets/icons/icon-192.svg">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- 跟随系统主题的CSS -->
+    <link rel="stylesheet" href="style.css">
+    <!-- 引入 marked.js 解析 markdown -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" />
+    <!-- Feather Icons for lightweight UI icons -->
+    <script src="https://unpkg.com/feather-icons"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- 侧边栏挂载点 -->
+        <nav id="sidebar-container"></nav>
+        
+        <!-- 主内容区 -->
+        <main id="main-content">
+            <!-- 页面内容将通过 JS 动态注入这里 -->
+        </main>
+    </div>
+
+    <!-- 顶层遮罩/通知等 -->
+    <div id="toast-container"></div>
+
+    <!-- 模块化引入 js -->
+    <script type="module" src="app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+    <script>
+        // 初始化 Feather 图标
+        feather.replace();
+    </script>
+</body>
+</html>

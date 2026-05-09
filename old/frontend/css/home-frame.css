@@ -1,0 +1,452 @@
+/* AI 小手机 · 主屏幕框架 — 奶油白 + 淡粉灰，全屏无边框感 */
+
+:root {
+  --bg: #faf6f3;
+  --bg2: #f3ece8;
+  --ink: #2a2624;
+  --muted: #8a817c;
+  --line: rgba(42, 38, 36, 0.08);
+  --pill: rgba(255, 255, 255, 0.72);
+  --pill-border: rgba(255, 255, 255, 0.85);
+  --shadow: 0 8px 28px rgba(42, 38, 36, 0.06);
+  --shadow-sm: 0 2px 12px rgba(42, 38, 36, 0.05);
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 999px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-x: env(safe-area-inset-left, 0px);
+  --font: "DM Sans", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.phone-root {
+  min-height: 100dvh;
+  min-height: 100vh;
+  padding: calc(10px + var(--safe-top)) calc(14px + var(--safe-x))
+    calc(18px + var(--safe-bottom));
+  max-width: 520px;
+  margin: 0 auto;
+  background: linear-gradient(180deg, var(--bg) 0%, var(--bg2) 55%, #efe8e4 100%);
+}
+
+/* ---------- 通用胶囊 ---------- */
+
+.capsule {
+  display: flex;
+  align-items: center;
+  background: var(--pill);
+  border: 1px solid var(--pill-border);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.capsule--xs {
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  gap: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.capsule--xs .vbar {
+  width: 1px;
+  height: 12px;
+  background: var(--line);
+}
+
+.capsule--xs .clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  min-width: 5.8em;
+}
+
+/* ---------- ① 顶栏 ---------- */
+
+.top-status {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+/* ---------- ② 大胶囊 ---------- */
+
+.hero-row {
+  margin-bottom: 14px;
+}
+
+.capsule--lg {
+  border-radius: var(--radius-lg);
+  padding: 10px 12px 10px 10px;
+  gap: 10px;
+  align-items: stretch;
+  min-height: 76px;
+  box-shadow: var(--shadow);
+}
+
+.hero-orb {
+  flex: 0 0 auto;
+  align-self: stretch;
+  aspect-ratio: 1;
+  width: auto;
+  min-width: 56px;
+  min-height: 56px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(42, 38, 36, 0.04);
+  background: #fff;
+}
+
+.hero-orb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.hero-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.hero-line-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+  outline: none;
+}
+
+.hero-line-input::placeholder {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.capsule--date {
+  align-self: flex-start;
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.hero-lock {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+  min-width: 48px;
+}
+
+/* 空心心形 + 气温叠在中心（锁意象用 ♡ 轮廓） */
+.heart-lock-wrap {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.heart-outline {
+  font-size: 2.5rem;
+  line-height: 1;
+  color: var(--ink);
+  opacity: 0.38;
+  font-weight: 200;
+  user-select: none;
+}
+
+.hero-temp {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  transform: translate(-50%, -50%);
+  font-size: 0.62rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  pointer-events: none;
+}
+
+/* ---------- ③ 四宫格 + 头像 ---------- */
+
+.grid-row {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.grid-row--apps-avatar {
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+}
+
+.apps--four {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.app-tile {
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--pill-border);
+  background: var(--pill);
+  box-shadow: var(--shadow-sm);
+  display: block;
+  text-decoration: none;
+}
+
+.app-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.avatar-stack {
+  display: flex;
+  justify-content: center;
+}
+
+.avatar-wrap {
+  position: relative;
+  width: min(100%, 168px);
+}
+
+.avatar-ring {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid #fff;
+  box-shadow: var(--shadow);
+  display: block;
+}
+
+.float-bubble {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  width: min(58%, 120px);
+  padding: 8px 8px 6px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--pill-border);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.float-bubble textarea {
+  width: 100%;
+  border: none;
+  resize: none;
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--ink);
+  background: transparent;
+  outline: none;
+  min-height: 2.6em;
+}
+
+.float-bubble textarea::placeholder {
+  color: var(--muted);
+}
+
+.btn-save {
+  align-self: flex-end;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #c9a4bc, #a67fa8);
+  cursor: pointer;
+}
+
+.btn-save:active {
+  transform: scale(0.98);
+}
+
+/* ---------- ④ 宽卡片 + 内胶囊 ---------- */
+
+.card-wide {
+  border-radius: var(--radius-lg);
+  padding: 12px 12px 10px;
+  background: var(--pill);
+  border: 1px solid var(--pill-border);
+  box-shadow: var(--shadow);
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card-wide-main {
+  width: 100%;
+  border: none;
+  resize: vertical;
+  min-height: 4.5rem;
+  font: inherit;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--ink);
+  background: transparent;
+  outline: none;
+}
+
+.card-wide-main::placeholder {
+  color: var(--muted);
+}
+
+.capsule--inner {
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  gap: 8px;
+  align-self: stretch;
+}
+
+.icon-wand {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #a67fa8;
+}
+
+.inner-pill-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.82rem;
+  outline: none;
+  color: var(--ink);
+}
+
+.inner-pill-input::placeholder {
+  color: var(--muted);
+}
+
+/* ---------- ⑤ 方卡片 + 四 App ---------- */
+
+.grid-row--photo-apps {
+  grid-template-columns: 1fr 1fr;
+  align-items: stretch;
+}
+
+.card-square {
+  border-radius: var(--radius-lg);
+  padding: 10px;
+  background: var(--pill);
+  border: 1px solid var(--pill-border);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.img-slot {
+  position: relative;
+  display: block;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px dashed rgba(42, 38, 36, 0.12);
+  aspect-ratio: 1;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.img-slot:active {
+  opacity: 0.95;
+}
+
+.img-preview {
+  position: absolute;
+  inset: 8px;
+  width: calc(100% - 16px);
+  height: calc(100% - 16px);
+  object-fit: cover;
+  border-radius: 12px;
+}
+
+.img-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 8px;
+}
+
+.square-caption {
+  width: 100%;
+  border: none;
+  resize: vertical;
+  min-height: 2.8rem;
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--ink);
+  background: transparent;
+  outline: none;
+}
+
+.square-caption::placeholder {
+  color: var(--muted);
+}
+
+/* 小屏：两列保持，过窄时仍可滚动 */
+@media (max-width: 340px) {
+  .grid-row--apps-avatar,
+  .grid-row--photo-apps {
+    gap: 8px;
+  }
+}
