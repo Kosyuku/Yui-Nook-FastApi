@@ -315,6 +315,7 @@ class MediaItemCreatePayload(BaseModel):
 
 
 class MediaItemUpdatePayload(BaseModel):
+    agent_id: Optional[str] = None
     title: Optional[str] = None
     artist: Optional[str] = None
     album: Optional[str] = None
@@ -564,8 +565,23 @@ async def get_media_item(item_id: str):
 @extra_api.patch("/media/items/{item_id}")
 async def patch_media_item(item_id: str, body: MediaItemUpdatePayload):
     try:
-        item = await db.update_media_item(item_id, **body.model_dump(exclude_unset=True))
+        payload = body.model_dump(exclude_unset=True)
+        raw_agent = payload.pop("agent_id", None)
+        requested_agent = db.normalize_agent_id_value(raw_agent) if raw_agent else ""
+        current = await db.get_media_item(item_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="media item not found")
+        item_agent = db.normalize_agent_id_value(current.get("agent_id")) if current.get("agent_id") else ""
+        meta = current.get("metadata") if isinstance(current.get("metadata"), dict) else {}
+        meta_agent = db.normalize_agent_id_value(meta.get("agent_id")) if meta.get("agent_id") else ""
+        if requested_agent and item_agent and requested_agent != item_agent:
+            raise HTTPException(status_code=403, detail="agent_id does not match media item")
+        if requested_agent and meta_agent and requested_agent != meta_agent:
+            raise HTTPException(status_code=403, detail="agent_id does not match media item metadata")
+        item = await db.update_media_item(item_id, **payload)
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise exc
         raise _media_http_error(exc)
     if not item:
         raise HTTPException(status_code=404, detail="media item not found")
@@ -834,6 +850,18 @@ async def get_agent_profile(agent_id: str):
             {"avatar", "name", "bio", "theme", "settings", "roomBackground", "chatTheme", "bubbleTheme", "quickActions"},
         )
     return {"ok": True, "agent_id": safe_agent, "profile": profile, "updated_at": updated_at, "storage": "supabase"}
+
+
+@extra_api.get("/murmur/messages")
+async def list_murmur_messages(agent_id: str, limit: int = Query(200, ge=1, le=1000)):
+    safe_agent = db.normalize_agent_id_value(agent_id)
+    if not safe_agent:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    try:
+        messages = await db.list_messages_for_agent(safe_agent, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to load Murmur history: {exc}")
+    return {"agent_id": safe_agent, "messages": messages}
 
 
 @extra_api.put("/agents/{agent_id}/profile")
