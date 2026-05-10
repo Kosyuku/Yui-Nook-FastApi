@@ -314,6 +314,22 @@ class MediaItemCreatePayload(BaseModel):
     metadata: dict[str, Any] | str | None = None
 
 
+class MediaItemUpdatePayload(BaseModel):
+    title: Optional[str] = None
+    artist: Optional[str] = None
+    album: Optional[str] = None
+    author: Optional[str] = None
+    cover_key: Optional[str] = None
+    metadata: dict[str, Any] | str | None = None
+
+
+class MediaItemLyricsPayload(BaseModel):
+    agent_id: str
+    lyrics: str = ""
+    lyrics_type: str = "text"
+    lyrics_filename: str = ""
+
+
 class AgentResolvePayload(BaseModel):
     agent_id: Optional[str] = None
     session_id: Optional[str] = None
@@ -447,6 +463,56 @@ async def get_media_item(item_id: str):
     if not item:
         raise HTTPException(status_code=404, detail="media item not found")
     return {"item": item}
+
+
+@extra_api.patch("/media/items/{item_id}")
+async def patch_media_item(item_id: str, body: MediaItemUpdatePayload):
+    try:
+        item = await db.update_media_item(item_id, **body.model_dump(exclude_unset=True))
+    except Exception as exc:
+        raise _media_http_error(exc)
+    if not item:
+        raise HTTPException(status_code=404, detail="media item not found")
+    return {"ok": True, "item": item}
+
+
+@extra_api.patch("/media/items/{item_id}/lyrics")
+async def patch_media_item_lyrics(item_id: str, body: MediaItemLyricsPayload):
+    item = await db.get_media_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="media item not found")
+    if item.get("type") != "music":
+        raise HTTPException(status_code=400, detail="lyrics can only be attached to music items")
+    owner_type = str(item.get("owner_type") or "user").lower()
+    requested_agent = db.normalize_agent_id(body.agent_id)
+    item_agent = db.normalize_agent_id_value(item.get("agent_id")) if item.get("agent_id") else ""
+    if owner_type == "agent" and not body.agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    if item_agent and item_agent != requested_agent:
+        raise HTTPException(status_code=403, detail="agent_id does not match media item")
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    next_metadata = {**metadata}
+    lyrics = str(body.lyrics or "")
+    if lyrics.strip():
+        lyrics_type = str(body.lyrics_type or "text").lower()
+        if lyrics_type not in {"lrc", "text"}:
+            raise HTTPException(status_code=400, detail="lyrics_type must be lrc or text")
+        next_metadata.update({
+            "lyrics": lyrics,
+            "lyrics_type": lyrics_type,
+            "lyrics_filename": str(body.lyrics_filename or ""),
+            "lyrics_updated_at": db._now(),
+        })
+    else:
+        for key in ("lyrics", "lyrics_type", "lyrics_filename", "lyrics_updated_at"):
+            next_metadata.pop(key, None)
+    try:
+        updated = await db.update_media_item(item_id, metadata=next_metadata)
+    except Exception as exc:
+        raise _media_http_error(exc)
+    if not updated:
+        raise HTTPException(status_code=404, detail="media item not found")
+    return {"ok": True, "item": updated}
 
 
 @extra_api.get("/media/items/{item_id}/url")
@@ -1815,6 +1881,33 @@ class PerleTrack(BaseModel):
     duration: int = 0
     accent: str = "#C9A7BB"
     url: str
+    favorite: bool = False
+
+
+class PerleTrackUpdate(BaseModel):
+    title: Optional[str] = None
+    title_en: Optional[str] = None
+    artist: Optional[str] = None
+    album: Optional[str] = None
+    duration: Optional[int] = None
+    accent: Optional[str] = None
+    favorite: Optional[bool] = None
+
+
+def _perle_track_lyrics_key(track_id: str) -> str:
+    return f"perle_track_lyrics:{track_id}"
+
+
+async def _read_perle_track_lyrics(track_id: str) -> dict[str, Any]:
+    row = await db.get_setting(_perle_track_lyrics_key(track_id))
+    if not row or not row.get("value"):
+        return {}
+    try:
+        payload = json.loads(row["value"])
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
 
 @extra_api.post("/perle/tracks")
 async def add_perle_track(track: PerleTrack):
@@ -1827,6 +1920,7 @@ async def add_perle_track(track: PerleTrack):
         "duration": track.duration,
         "accent": track.accent,
         "url": track.url,
+        "favorite": track.favorite,
         "created_at": db._now()
     }
     await db._supabase_insert("perle_tracks", payload)
@@ -1835,7 +1929,37 @@ async def add_perle_track(track: PerleTrack):
 @extra_api.get("/perle/tracks")
 async def get_perle_tracks():
     rows = await db._supabase_select("perle_tracks", order="created_at.desc", limit=500)
+    for row in rows:
+        lyrics_payload = await _read_perle_track_lyrics(str(row.get("id") or ""))
+        if lyrics_payload:
+            row.update(lyrics_payload)
     return {"tracks": rows}
+
+@extra_api.patch("/perle/tracks/{track_id}")
+async def update_perle_track(track_id: str, payload: PerleTrackUpdate):
+    updates = {k: v for k, v in payload.dict().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    await db._supabase_update("perle_tracks", {"id": f"eq.{track_id}"}, updates)
+    return {"ok": True}
+
+@extra_api.patch("/perle/tracks/{track_id}/lyrics")
+async def update_perle_track_lyrics(track_id: str, payload: MediaItemLyricsPayload):
+    lyrics = str(payload.lyrics or "")
+    if lyrics.strip():
+        lyrics_type = str(payload.lyrics_type or "text").lower()
+        if lyrics_type not in {"lrc", "text"}:
+            raise HTTPException(status_code=400, detail="lyrics_type must be lrc or text")
+        await db.set_setting(_perle_track_lyrics_key(track_id), json.dumps({
+            "lyrics": lyrics,
+            "lyrics_type": lyrics_type,
+            "lyrics_filename": str(payload.lyrics_filename or ""),
+            "lyrics_updated_at": db._now(),
+            "agent_id": db.normalize_agent_id(payload.agent_id),
+        }, ensure_ascii=False))
+    else:
+        await db.delete_setting(_perle_track_lyrics_key(track_id))
+    return {"ok": True}
 
 
 # ══════════ 统一收件箱 / Extracted Items ══════════
