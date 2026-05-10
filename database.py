@@ -3996,6 +3996,78 @@ async def get_messages(session_id: str, limit: int = 50) -> list[dict[str, Any]]
     return [dict(row) for row in rows]
 
 
+async def list_messages_for_agent(agent_id: str | None, limit: int = 200) -> list[dict[str, Any]]:
+    normalized = normalize_agent_id_value(agent_id)
+    if not normalized:
+        return []
+    safe_limit = max(1, min(int(limit or 200), 1000))
+    aliases = {normalized}
+    if normalized.startswith("orphan_"):
+        aliases.add(normalized.removeprefix("orphan_"))
+    else:
+        aliases.add(f"orphan_{normalized}")
+
+    by_id: dict[str, dict[str, Any]] = {}
+
+    def add_rows(rows: list[dict[str, Any]]) -> None:
+        for row in rows or []:
+            message_id = str(row.get("id") or "").strip()
+            fallback_id = "|".join([
+                str(row.get("agent_id") or ""),
+                str(row.get("session_id") or ""),
+                str(row.get("role") or ""),
+                str(row.get("created_at") or ""),
+                str(row.get("content") or ""),
+            ])
+            by_id[message_id or fallback_id] = dict(row)
+
+    if _use_supabase_data():
+        for alias in aliases:
+            add_rows(await _supabase_select(
+                settings.supabase_messages_table,
+                filters={"agent_id": f"eq.{alias}"},
+                order="created_at.asc",
+                limit=safe_limit,
+            ))
+            sessions = await _supabase_select(
+                settings.supabase_sessions_table,
+                filters={"agent_id": f"eq.{alias}"},
+                order="updated_at.desc",
+                limit=safe_limit,
+            )
+            for session in sessions:
+                session_id = str(session.get("id") or "").strip()
+                if not session_id:
+                    continue
+                add_rows(await _supabase_select(
+                    settings.supabase_messages_table,
+                    filters={"session_id": f"eq.{session_id}"},
+                    order="created_at.asc",
+                    limit=safe_limit,
+                ))
+    else:
+        db = await get_db()
+        for alias in aliases:
+            cursor = await db.execute(
+                "SELECT * FROM messages WHERE agent_id = ? ORDER BY created_at ASC LIMIT ?",
+                (alias, safe_limit),
+            )
+            add_rows([dict(row) for row in await cursor.fetchall()])
+            cursor = await db.execute(
+                "SELECT id FROM sessions WHERE agent_id = ? ORDER BY updated_at DESC LIMIT ?",
+                (alias, safe_limit),
+            )
+            for session in await cursor.fetchall():
+                cursor2 = await db.execute(
+                    "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?",
+                    (session["id"], safe_limit),
+                )
+                add_rows([dict(row) for row in await cursor2.fetchall()])
+
+    messages = sorted(by_id.values(), key=lambda row: str(row.get("created_at") or ""))
+    return messages[-safe_limit:]
+
+
 async def get_recent_messages(session_id: str, limit: int = 12) -> list[dict[str, str]]:
     """Get top N messages in OpenAI format"""
     if _use_supabase_data():
