@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   getMediaItemUrl,
   listMediaItems,
+  mediaAgentId,
   mediaUploadProvider,
   uploadMediaFile,
+  updateMediaItem,
+  updateMediaItemLyrics,
   withMediaUrls,
 } from "./mediaApi.js";
 import { apiUrl } from "./apiBase.js";
@@ -50,14 +53,54 @@ export const PERLE_CATS = [
   { id: 'fav', name: '收藏', emoji: '💗', accent: '#D28BA8' },
 ];
 
+function isUuidLike(value = "") {
+  const text = String(value || "").trim();
+  return /^[0-9a-f]{32}$/i.test(text) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text);
+}
+
+function shortId(value = "") {
+  const text = String(value || "").trim();
+  return text ? text.slice(0, 8) : "photo";
+}
+
+function stripExtension(value = "") {
+  return String(value || "").replace(/\.[^.]+$/, "").trim();
+}
+
+function originalNameFromStorageKey(storageKey = "") {
+  const file = String(storageKey || "").split("/").pop() || "";
+  return stripExtension(file.replace(/^[0-9a-f]{32}_/i, ""));
+}
+
+function normalizePhotoTags(meta = {}, cat = "all") {
+  const source = Array.isArray(meta.tags) ? meta.tags : String(meta.tags || "").split(",");
+  const tags = source.map((tag) => String(tag || "").trim()).filter(Boolean);
+  if (cat && cat !== "all" && !tags.includes(cat)) tags.unshift(cat);
+  return Array.from(new Set(tags));
+}
+
+function displayPhotoName({ id = "", title = "", label = "", originalName = "" }) {
+  const custom = [title, label].map((item) => stripExtension(item)).find((item) => item && !isUuidLike(item));
+  if (custom) return custom;
+  const original = stripExtension(originalName);
+  if (original && !isUuidLike(original)) return original;
+  return shortId(id);
+}
+
 function mediaPhotoToPerlePhoto(item) {
   const meta = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const originalName = meta.original_filename || meta.filename || originalNameFromStorageKey(item.storage_key);
+  const cat = meta.cat || "all";
+  const label = displayPhotoName({ id: item.id, title: item.title || meta.title || meta.name, label: meta.label, originalName });
   return {
     id: item.id,
-    cat: meta.cat || "all",
+    cat,
     tint: meta.tint || "#e2d5d8",
     url: item.url || "",
-    label: item.title || meta.label || "",
+    label,
+    title: item.title || "",
+    originalName,
+    tags: normalizePhotoTags(meta, cat),
     storage_key: item.storage_key,
     media_item: item,
   };
@@ -65,6 +108,8 @@ function mediaPhotoToPerlePhoto(item) {
 
 function mediaTrackToPerleTrack(item) {
   const meta = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const favorite = Boolean(meta.favorite || meta.liked || meta.pinned || meta.heart);
+  const lyrics = String(meta.lyrics || item.lyrics || "");
   return {
     id: item.id,
     title: item.title || meta.title || "Unknown Title",
@@ -72,11 +117,64 @@ function mediaTrackToPerleTrack(item) {
     artist: item.artist || meta.artist || "Local Track",
     album: item.album || meta.album || "Imported",
     duration: Number(item.duration_seconds || meta.duration || 0),
+    favorite,
+    lyrics,
+    lyricsType: String(meta.lyrics_type || item.lyrics_type || (lyrics ? "text" : "")),
+    lyricsFilename: String(meta.lyrics_filename || item.lyrics_filename || ""),
+    lyricsUpdatedAt: String(meta.lyrics_updated_at || item.lyrics_updated_at || ""),
     accent: meta.accent || "#C9A7BB",
     url: item.url || "",
     storage_key: item.storage_key,
     media_item: item,
   };
+}
+
+function validSeconds(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+}
+
+function formatDuration(value) {
+  const seconds = Math.round(validSeconds(value));
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+
+function isFavoriteTrack(track) {
+  return Boolean(track?.favorite || track?.liked || track?.pinned || track?.heart);
+}
+
+function detectLyricsType(text = "") {
+  return /^\s*\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]/m.test(String(text || "")) ? "lrc" : "text";
+}
+
+function parseLrc(text = "") {
+  const rows = [];
+  const stampPattern = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
+  String(text || "").split(/\r?\n/).forEach((line) => {
+    stampPattern.lastIndex = 0;
+    const stamps = [...line.matchAll(stampPattern)];
+    if (!stamps.length) return;
+    const lyric = line.replace(stampPattern, "").trim();
+    stamps.forEach((match) => {
+      const minutes = Number(match[1]);
+      const seconds = Number(match[2]);
+      const fraction = match[3] ? Number(`0.${match[3]}`) : 0;
+      const time = minutes * 60 + seconds + fraction;
+      if (Number.isFinite(time)) rows.push({ time, text: lyric || " " });
+    });
+  });
+  return rows.sort((a, b) => a.time - b.time);
+}
+
+function currentLrcIndex(rows, currentTime) {
+  const time = validSeconds(currentTime);
+  let index = -1;
+  rows.forEach((row, rowIndex) => {
+    if (row.time <= time) index = rowIndex;
+  });
+  return index;
 }
 
 export function Tape({ color = 'rgba(246, 220, 196, 0.75)', width = 64, height = 20, rotate = -6, style = {} }) {
@@ -92,13 +190,52 @@ export function Tape({ color = 'rgba(246, 220, 196, 0.75)', width = 64, height =
 }
 
 // ===== Photo Viewer (fullscreen black) =====
-function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, globalTags }) {
+function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalTags }) {
   const [idx, setIdx] = useState(startIdx);
   const [tagInput, setTagInput] = useState('');
+  const [tagError, setTagError] = useState('');
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameError, setRenameError] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  const [savingTag, setSavingTag] = useState(false);
+  const [savingName, setSavingName] = useState(false);
   const touchStartX = useRef(0);
   const photo = photos[idx];
   if (!photo) return null;
   const go = (dir) => setIdx(i => Math.max(0, Math.min(photos.length - 1, i + dir)));
+  const submitTag = async (tag) => {
+    const nextTag = String(tag || "").trim();
+    if (!nextTag || savingTag) return;
+    setSavingTag(true);
+    setTagError('');
+    try {
+      await onTagUpdate(photo.id, nextTag, idx);
+      setTagInput('');
+    } catch (error) {
+      setTagError(error?.message || "Tag save failed.");
+    } finally {
+      setSavingTag(false);
+    }
+  };
+  const startRename = () => {
+    setRenameDraft(photo.label || "");
+    setRenameError('');
+    setRenaming(true);
+  };
+  const submitRename = async () => {
+    const nextName = renameDraft.trim();
+    if (!nextName || savingName) return;
+    setSavingName(true);
+    setRenameError('');
+    try {
+      await onRename(photo.id, nextName);
+      setRenaming(false);
+    } catch (error) {
+      setRenameError(error?.message || "Rename failed.");
+    } finally {
+      setSavingName(false);
+    }
+  };
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#0a0a0a', zIndex: 500, display: 'flex', flexDirection: 'column', touchAction: 'pan-y' }}>
@@ -127,13 +264,29 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, globalTags }) {
         )}
       </div>
 
-      <div style={{ flexShrink: 0, background: 'rgba(0,0,0,0.75)', padding: '12px 18px 28px', backdropFilter: 'blur(12px)' }}>
-        {photo.label && <div style={{ fontFamily: DD_FONTS.handCn, fontSize: 15, color: 'rgba(255,255,255,0.75)', marginBottom: 10, letterSpacing: 1 }}>{photo.label}</div>}
+      <div style={{ flexShrink: 0, background: 'rgba(0,0,0,0.75)', padding: '12px 18px calc(28px + env(safe-area-inset-bottom, 0px))', backdropFilter: 'blur(12px)' }}>
+        <div style={{ marginBottom: 10 }}>
+          {renaming ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} style={{ flex: 1, minWidth: 0, background: 'rgba(255,255,255,0.1)', border: '0.5px solid rgba(255,255,255,0.22)', color: '#fff', padding: '7px 10px', outline: 'none', fontFamily: DD_FONTS.serifCn, fontSize: 13, letterSpacing: 1 }} />
+              <button type="button" onClick={submitRename} disabled={savingName} style={{ border: 0, background: '#D8A5BF', color: '#fff', padding: '7px 10px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: savingName ? 'default' : 'pointer', opacity: savingName ? 0.65 : 1 }}>保存</button>
+              <button type="button" onClick={() => setRenaming(false)} style={{ border: '0.5px solid rgba(255,255,255,0.22)', background: 'transparent', color: 'rgba(255,255,255,0.72)', padding: '7px 10px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: 'pointer' }}>取消</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontFamily: DD_FONTS.handCn, fontSize: 15, color: 'rgba(255,255,255,0.75)', letterSpacing: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{photo.label}</div>
+              <button type="button" onClick={startRename} aria-label="重命名" style={{ width: 28, height: 28, border: '0.5px solid rgba(255,255,255,0.18)', borderRadius: '50%', background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+                <svg width="13" height="13" viewBox="0 0 18 18" fill="none"><path d="M2.5 15.5h3.1L14.7 6.4 11.6 3.3 2.5 12.4v3.1Z" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round" /><path d="M10.8 4.1 13.9 7.2" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" /></svg>
+              </button>
+            </div>
+          )}
+          {renameError && <div role="alert" style={{ color: '#F0A3A3', fontFamily: DD_FONTS.serifEn, fontSize: 11, marginTop: 6 }}>{renameError}</div>}
+        </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 10 }}>
           {globalTags.map(tag => {
-            const active = photo.cat === tag;
+            const active = (photo.tags || []).includes(tag) || photo.cat === tag;
             return (
-              <div key={tag} onClick={() => onTagUpdate(photos[idx].id, tag, idx)}
+              <div key={tag} onClick={() => submitTag(tag)}
                 style={{ padding: '4px 13px', borderRadius: 999, cursor: 'pointer', fontFamily: DD_FONTS.serifCn, fontSize: 12, letterSpacing: 1,
                   background: active ? '#D8A5BF' : 'rgba(255,255,255,0.12)',
                   color: active ? '#fff' : 'rgba(255,255,255,0.65)',
@@ -145,11 +298,12 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, globalTags }) {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input value={tagInput} onChange={e => setTagInput(e.target.value)} placeholder="+ 新标签"
             style={{ flex: 1, background: 'rgba(255,255,255,0.1)', border: '0.5px solid rgba(255,255,255,0.22)', color: '#fff', padding: '7px 14px', borderRadius: 999, outline: 'none', fontFamily: DD_FONTS.serifCn, fontSize: 12, letterSpacing: 1 }}
-            onKeyDown={e => { if (e.key === 'Enter' && tagInput.trim()) { onTagUpdate(photos[idx].id, tagInput.trim(), idx); setTagInput(''); } }}
+            onKeyDown={e => { if (e.key === 'Enter') submitTag(tagInput); }}
           />
-          <div onClick={() => { if (tagInput.trim()) { onTagUpdate(photos[idx].id, tagInput.trim(), idx); setTagInput(''); } }}
-            style={{ padding: '7px 16px', borderRadius: 999, background: '#D8A5BF', color: '#fff', fontSize: 12, fontFamily: DD_FONTS.serifCn, cursor: 'pointer', letterSpacing: 1, flexShrink: 0 }}>添加</div>
+          <button type="button" disabled={savingTag} onClick={() => submitTag(tagInput)}
+            style={{ border: 0, padding: '7px 16px', borderRadius: 999, background: '#D8A5BF', color: '#fff', fontSize: 12, fontFamily: DD_FONTS.serifCn, cursor: savingTag ? 'default' : 'pointer', letterSpacing: 1, flexShrink: 0, opacity: savingTag ? 0.65 : 1 }}>添加</button>
         </div>
+        {tagError && <div role="alert" style={{ color: '#F0A3A3', fontFamily: DD_FONTS.serifEn, fontSize: 11, marginTop: 7 }}>{tagError}</div>}
       </div>
     </div>
   );
@@ -157,21 +311,21 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, globalTags }) {
 
 // ===== Perle Gallery =====
 
-function PerleGalleryA({ photos, onAddPhotos, onHome, onTagUpdate }) {
+function PerleGalleryA({ photos, onAddPhotos, onHome, onTagUpdate, onRename }) {
   const [active, setActive] = useState('all');
   const [viewerIdx, setViewerIdx] = useState(null);
 
   // Dynamic cats: always "全部" + all unique non-'all' tags used by photos
-  const tagSet = Array.from(new Set(photos.map(p => p.cat).filter(c => c && c !== 'all')));
+  const tagSet = Array.from(new Set(photos.flatMap(p => (p.tags && p.tags.length ? p.tags : [p.cat]).filter(c => c && c !== 'all'))));
   const dynamicCats = [
     { id: 'all', name: '全部', accent: '#C9A7BB' },
     ...tagSet.map(tag => ({ id: tag, name: tag, accent: '#D28BA8' }))
   ];
   const globalTags = tagSet;
-  const visible = photos.filter(p => active === 'all' || p.cat === active);
+  const visible = photos.filter(p => active === 'all' || p.cat === active || (p.tags || []).includes(active));
 
-  const handleTagUpdate = (photoId, tag, viewerPos) => {
-    onTagUpdate(photoId, tag);
+  const handleTagUpdate = async (photoId, tag) => {
+    await onTagUpdate(photoId, tag);
   };
 
   return (
@@ -182,6 +336,7 @@ function PerleGalleryA({ photos, onAddPhotos, onHome, onTagUpdate }) {
           startIdx={viewerIdx}
           onClose={() => setViewerIdx(null)}
           onTagUpdate={handleTagUpdate}
+          onRename={onRename}
           globalTags={globalTags}
         />
       )}
@@ -189,7 +344,7 @@ function PerleGalleryA({ photos, onAddPhotos, onHome, onTagUpdate }) {
         width: '100%', height: '100%', position: 'relative',
         backgroundColor: '#F7F1EF',
         backgroundImage: `radial-gradient(ellipse 700px 400px at 20% 0%, rgba(233,210,220,0.55), transparent), radial-gradient(ellipse 600px 400px at 100% 70%, rgba(220,205,230,0.4), transparent)`,
-        overflow: 'auto', display: 'flex', flexDirection: 'column'
+        overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px 4px', flexShrink: 0 }}>
           <div onClick={onHome} style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', marginLeft: -6 }}>
@@ -212,26 +367,28 @@ function PerleGalleryA({ photos, onAddPhotos, onHome, onTagUpdate }) {
           ))}
         </div>
 
-        {visible.length > 0 ? (
-          <BrickGrid photos={visible} onPhotoClick={(i) => setViewerIdx(i)} />
-        ) : (
-          <div style={{ padding: '40px 12px', textAlign: 'center', fontFamily: DD_FONTS.serifCn, fontSize: 12, color: '#B5A4AB', letterSpacing: 2 }}>这里还是空的，点右上角添加图片。</div>
-        )}
-        <div style={{ height: 60 }} />
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 'calc(104px + env(safe-area-inset-bottom, 0px))' }}>
+          {visible.length > 0 ? (
+            <BrickGrid photos={visible} onPhotoClick={(i) => setViewerIdx(i)} />
+          ) : (
+            <div style={{ padding: '40px 12px', textAlign: 'center', fontFamily: DD_FONTS.serifCn, fontSize: 12, color: '#B5A4AB', letterSpacing: 2 }}>这里还是空的，点右上角添加图片。</div>
+          )}
+        </div>
       </div>
     </>
   );
 }
 
 function Hero({ photos }) {
-  const main = photos[0] || { tint: '#D28BA822', src: '' };
-  const sub = photos[1] || photos[0] || { tint: '#C9A7BB22', src: '' };
+  const hasPhotos = photos.length > 0;
+  const main = photos[0] || { tint: '#D28BA822', url: '' };
+  const sub = photos[1] || photos[0] || { tint: '#C9A7BB22', url: '' };
   
   return (
-    <div style={{ position: 'relative', height: 180, margin: '4px 16px 0' }}>
+    <div aria-hidden={!hasPhotos} style={{ position: 'relative', height: 180, margin: '4px 16px 0', opacity: hasPhotos ? 1 : 0.45 }}>
       <div style={{
         position: 'absolute', left: 6, top: 10, width: 160, height: 160,
-        backgroundColor: main.tint, backgroundImage: main.src ? `url(${main.src})` : 'none',
+        backgroundColor: main.tint, backgroundImage: main.url ? `url(${main.url})` : 'none',
         backgroundSize: 'cover', backgroundPosition: 'center',
         transform: 'rotate(-3deg)', boxShadow: 'inset 0 0 0 6px #FFFDF8'
       }}>
@@ -239,7 +396,7 @@ function Hero({ photos }) {
       </div>
       <div style={{
         position: 'absolute', right: 4, top: 0, width: 118, height: 118,
-        backgroundColor: sub.tint, backgroundImage: sub.src ? `url(${sub.src})` : 'none',
+        backgroundColor: sub.tint, backgroundImage: sub.url ? `url(${sub.url})` : 'none',
         backgroundSize: 'cover', backgroundPosition: 'center',
         transform: 'rotate(5deg)', boxShadow: 'inset 0 0 0 5px #FFFDF8'
       }} />
@@ -337,18 +494,20 @@ function PhotoCell({ p, h, wide, onClick }) {
 
 
 // ===== Perle Music =====
-function PerleMusicLibrary({ tracks, activeIdx, playing, playerOpen, onPick, onOpenPlayer, onNext, onAddMusic, onHome }) {
+function PerleMusicLibrary({ tracks, activeIdx, playing, playerOpen, onPick, onOpenPlayer, onNext, onAddMusic, onHome, onToggleFavorite }) {
   const [filter, setFilter] = useState('all');
   const [miniExpanded, setMiniExpanded] = useState(false);
   const buckets = {
     all: tracks.map((_, i) => i),
-    fav: tracks.map((_, i) => i), // Mock
+    fav: tracks.map((track, i) => isFavoriteTrack(track) ? i : -1).filter((i) => i >= 0),
     recent: tracks.map((_, i) => i),
     imp: tracks.map((_, i) => i)
   };
   const visibleIdx = buckets[filter] || [];
   const visibleTracks = visibleIdx.map((i) => ({ tr: tracks[i], origIdx: i }));
-  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const totalDuration = tracks.reduce((sum, track) => sum + validSeconds(track.duration), 0);
+  const totalMinutes = Math.round(totalDuration / 60);
+  const statsText = totalDuration > 0 ? `${tracks.length} 首　·　${Math.max(1, totalMinutes)} 分钟` : `${tracks.length} 首`;
   const active = tracks[activeIdx];
 
   return (
@@ -370,7 +529,7 @@ function PerleMusicLibrary({ tracks, activeIdx, playing, playerOpen, onPick, onO
       <div style={{ padding: '6px 24px 8px' }}>
         <div style={{ fontFamily: DD_FONTS.serifEn, fontStyle: 'italic', fontSize: 16, color: '#A48BA0', letterSpacing: 1 }}>my music</div>
         <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 32, fontWeight: 700, letterSpacing: 4, marginTop: 4, lineHeight: 1.1, color: "rgb(72, 45, 63)" }}>拾 音 匣</div>
-        <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 11, color: '#9E8894', letterSpacing: 2, marginTop: 6 }}>{tracks.length} 首　·　{Math.round(tracks.reduce((a, t) => a + (t.duration || 0), 0) / 60)} 分钟</div>
+        <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 11, color: '#9E8894', letterSpacing: 2, marginTop: 6 }}>{statsText}</div>
       </div>
 
       <div style={{ padding: '14px 20px 6px', display: 'flex', gap: 18, overflowX: 'auto' }}>
@@ -402,7 +561,8 @@ function PerleMusicLibrary({ tracks, activeIdx, playing, playerOpen, onPick, onO
                 <div style={{ fontFamily: DD_FONTS.serifCn, fontWeight: isActive ? 700 : 500, color: '#2B2420', letterSpacing: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14 }}>{tr.title}</div>
                 <div style={{ fontFamily: DD_FONTS.serifCn, color: '#9E8894', letterSpacing: 1, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10 }}>{tr.artist}　·　{tr.album}</div>
               </div>
-              <div style={{ fontFamily: DD_FONTS.serifEn, fontStyle: 'italic', fontSize: 12, color: '#A89C93', flexShrink: 0 }}>{fmt(tr.duration || 0)}</div>
+              <button type="button" onClick={(event) => { event.stopPropagation(); onToggleFavorite?.(tr.id); }} aria-label={isFavoriteTrack(tr) ? "取消心选" : "加入心选"} style={{ width: 30, height: 30, border: 0, background: 'transparent', color: isFavoriteTrack(tr) ? '#D28BA8' : '#B5A4AB', cursor: 'pointer', flexShrink: 0, fontSize: 16, lineHeight: 1 }}>{isFavoriteTrack(tr) ? '♥' : '♡'}</button>
+              <div style={{ fontFamily: DD_FONTS.serifEn, fontStyle: 'italic', fontSize: 12, color: '#A89C93', flexShrink: 0 }}>{formatDuration(tr.duration)}</div>
             </div>
           );
         })}
@@ -452,9 +612,91 @@ function BreathOrb({ accent, playing, title }) {
   );
 }
 
-function PerleMusicB({ tracks, initialTrack, playing, togglePlay, setTrackIdx, progress, duration, onBack, setQueueOpen }) {
+function LyricsDisplay({ track, currentTime }) {
+  const activeLineRef = useRef(null);
+  const parsed = useMemo(() => parseLrc(track?.lyrics || ""), [track?.lyrics]);
+  const useLrc = track?.lyrics && track?.lyricsType === "lrc" && parsed.length > 0;
+  const activeIndex = useLrc ? currentLrcIndex(parsed, currentTime) : -1;
+
+  useEffect(() => {
+    activeLineRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  }, [activeIndex]);
+
+  if (!track) {
+    return <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 13, color: '#C2B5BC', letterSpacing: 1.5, lineHeight: 1.5 }}>暂无音乐</div>;
+  }
+  if (!track.lyrics) {
+    return <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 13, color: '#C2B5BC', letterSpacing: 1.5, lineHeight: 1.5 }}>暂无歌词</div>;
+  }
+  if (!useLrc) {
+    return <div style={{ maxHeight: 118, overflowY: 'auto', WebkitOverflowScrolling: 'touch', whiteSpace: 'pre-wrap', fontFamily: DD_FONTS.serifCn, fontSize: 13, color: '#8F7F88', letterSpacing: 1.2, lineHeight: 1.75, textAlign: 'left' }}>{track.lyrics}</div>;
+  }
+  return (
+    <div style={{ maxHeight: 132, overflowY: 'auto', WebkitOverflowScrolling: 'touch', textAlign: 'center', padding: '2px 0' }}>
+      {parsed.map((line, index) => {
+        const active = index === activeIndex;
+        return (
+          <div key={`${line.time}-${index}`} ref={active ? activeLineRef : null} style={{ padding: '4px 0', fontFamily: DD_FONTS.serifCn, fontSize: active ? 15 : 12, color: active ? '#2B2420' : '#B9ABB3', fontWeight: active ? 700 : 400, letterSpacing: 1.2, lineHeight: 1.45, transition: 'color .2s ease, font-size .2s ease' }}>
+            {line.text}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function LyricsEditorPanel({ track, open, saving, error, onClose, onSave, onDelete }) {
+  const [draft, setDraft] = useState("");
+  const [filename, setFilename] = useState("");
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setDraft(track?.lyrics || "");
+    setFilename(track?.lyricsFilename || "");
+  }, [open, track?.id, track?.lyrics, track?.lyricsFilename]);
+
+  if (!open || !track) return null;
+  const type = detectLyricsType(draft);
+  const readFile = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    setDraft(text);
+    setFilename(file.name);
+    event.target.value = "";
+  };
+
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(43,36,42,0.32)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+      <div style={{ width: '100%', maxHeight: '78%', background: '#FFFDF8', borderRadius: '18px 18px 0 0', boxShadow: '0 -18px 42px rgba(80,50,70,0.18)', padding: '16px 18px calc(18px + env(safe-area-inset-bottom, 0px))', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 16, fontWeight: 700, color: '#2B2420', letterSpacing: 2 }}>歌词</div>
+            <div style={{ fontFamily: DD_FONTS.serifEn, fontStyle: 'italic', fontSize: 11, color: '#9E8894', marginTop: 2 }}>{type}</div>
+          </div>
+          <button type="button" onClick={onClose} style={{ border: 0, background: 'transparent', color: '#7B6874', fontFamily: DD_FONTS.serifCn, fontSize: 13, cursor: 'pointer' }}>取消</button>
+        </div>
+        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="粘贴歌词，或上传 .lrc / .txt" style={{ width: '100%', minHeight: 170, maxHeight: 260, resize: 'vertical', boxSizing: 'border-box', border: '0.5px solid rgba(150,120,130,0.24)', background: 'rgba(251,247,242,0.72)', color: '#2B2420', outline: 'none', padding: 12, fontFamily: DD_FONTS.serifCn, fontSize: 13, lineHeight: 1.65, letterSpacing: 1 }} />
+        {filename && <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 11, color: '#9E8894', letterSpacing: 1 }}>{filename}</div>}
+        {error && <div role="alert" style={{ fontFamily: DD_FONTS.serifCn, fontSize: 12, color: DD_TOKENS.stamp, letterSpacing: 1 }}>{error}</div>}
+        <input ref={fileInputRef} type="file" accept=".lrc,.txt,text/plain" hidden onChange={readFile} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button type="button" onClick={() => fileInputRef.current?.click()} style={{ border: '0.5px solid rgba(150,120,130,0.22)', background: 'rgba(255,255,255,0.72)', color: '#6E5264', padding: '8px 12px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: 'pointer' }}>上传文件</button>
+          <button type="button" onClick={() => onDelete(track)} disabled={saving || !track.lyrics} style={{ border: '0.5px solid rgba(184,74,62,0.24)', background: 'rgba(184,74,62,0.06)', color: DD_TOKENS.stamp, padding: '8px 12px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: saving || !track.lyrics ? 'default' : 'pointer', opacity: saving || !track.lyrics ? 0.48 : 1 }}>删除歌词</button>
+          <div style={{ flex: 1 }} />
+          <button type="button" onClick={() => onSave(track, draft, filename)} disabled={saving} style={{ border: 0, background: '#D8A5BF', color: '#fff', padding: '8px 16px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.65 : 1 }}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PerleMusicB({ tracks, initialTrack, playing, togglePlay, setTrackIdx, progress, duration, onBack, setQueueOpen, onSaveLyrics, onDeleteLyrics, lyricsSaving, lyricsError }) {
   const track = tracks[initialTrack];
-  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const safeDuration = validSeconds(duration);
+  const progressPercent = safeDuration > 0 ? Math.min(100, Math.max(0, (validSeconds(progress) / safeDuration) * 100)) : 0;
+  const [lyricsOpen, setLyricsOpen] = useState(false);
 
   return (
     <div style={{
@@ -477,27 +719,25 @@ function PerleMusicB({ tracks, initialTrack, playing, togglePlay, setTrackIdx, p
       </div>
 
       <div style={{ padding: '4px 24px 0', textAlign: 'center', flexShrink: 0 }}>
-        <div style={{ fontFamily: DD_FONTS.serifEn, fontStyle: 'italic', fontSize: 14, color: track?.accent || '#aaa', letterSpacing: 1, marginBottom: 4 }}>{track?.titleEn || 'No Music'}</div>
+        <div style={{ fontFamily: DD_FONTS.serifEn, fontStyle: 'italic', fontSize: 14, color: track?.accent || '#aaa', letterSpacing: 1, marginBottom: 4 }}>{track?.titleEn || ""}</div>
         <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 11, color: '#9E8894', letterSpacing: 3 }}>{track?.artist || 'Unknown'}　·　{track?.album || 'Unknown'}</div>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 28px' }}>
+      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px 28px 10px' }}>
         <div style={{ textAlign: 'center', width: '100%' }}>
-           {/* Lyrics omitted since we don't have real lyrics data */}
-          <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 13, color: '#C2B5BC', letterSpacing: 1.5, lineHeight: 1.5, minHeight: 22 }} />
-          <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 22, fontWeight: 600, color: '#2B2420', letterSpacing: 3, lineHeight: 1.4, margin: '14px 0', minHeight: 32 }}>⋯</div>
-          <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 13, color: '#C2B5BC', letterSpacing: 1.5, lineHeight: 1.5, minHeight: 22 }} />
+          <LyricsDisplay track={track} currentTime={progress} />
+          {track && <button type="button" onClick={() => setLyricsOpen(true)} style={{ marginTop: 10, border: '0.5px solid rgba(150,120,130,0.22)', background: 'rgba(255,255,255,0.56)', color: '#7B6874', padding: '6px 12px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: 'pointer' }}>歌词</button>}
         </div>
       </div>
 
       <div style={{ padding: '8px 28px 6px', flexShrink: 0 }}>
         <div style={{ height: 2, background: 'rgba(150,120,130,0.18)', position: 'relative' }}>
-          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${(progress / Math.max(duration, 1)) * 100}%`, background: track?.accent || '#aaa', transition: 'width 0.2s linear' }} />
-          <div style={{ position: 'absolute', top: -3, left: `${(progress / Math.max(duration, 1)) * 100}%`, transform: 'translateX(-50%)', width: 8, height: 8, borderRadius: '50%', background: track?.accent || '#aaa' }} />
+          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${progressPercent}%`, background: track?.accent || '#aaa', transition: 'width 0.2s linear' }} />
+          <div style={{ position: 'absolute', top: -3, left: `${progressPercent}%`, transform: 'translateX(-50%)', width: 8, height: 8, borderRadius: '50%', background: track?.accent || '#aaa' }} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontFamily: DD_FONTS.serifEn, fontSize: 11, fontStyle: 'italic', color: '#A89C93' }}>
-          <span>{fmt(progress)}</span>
-          <span>{fmt(duration)}</span>
+          <span>{formatDuration(progress)}</span>
+          <span>{formatDuration(duration)}</span>
         </div>
       </div>
 
@@ -512,12 +752,12 @@ function PerleMusicB({ tracks, initialTrack, playing, togglePlay, setTrackIdx, p
           <svg width="22" height="22" viewBox="0 0 22 22"><path d="M6 4 L14 11 L6 18 M16 4 V18" stroke="#2B2420" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </div>
       </div>
+      <LyricsEditorPanel track={track} open={lyricsOpen} saving={lyricsSaving} error={lyricsError} onClose={() => setLyricsOpen(false)} onSave={async (...args) => { await onSaveLyrics?.(...args); setLyricsOpen(false); }} onDelete={async (...args) => { await onDeleteLyrics?.(...args); setLyricsOpen(false); }} />
     </div>
   );
 }
 
 function QueueDrawer({ open, onClose, tracks, activeIdx, onPick }) {
-  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   return (
     <>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(60,40,55,0.18)', opacity: open ? 1 : 0, pointerEvents: open ? 'auto' : 'none', transition: 'opacity 0.3s', zIndex: 20 }} />
@@ -545,7 +785,7 @@ function QueueDrawer({ open, onClose, tracks, activeIdx, onPick }) {
                   <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 15, fontWeight: active ? 700 : 500, color: '#2B2420', letterSpacing: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tr.title}</div>
                   <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 11, color: '#9E8894', letterSpacing: 1, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tr.artist}　·　{tr.album}</div>
                 </div>
-                <div style={{ fontFamily: DD_FONTS.serifEn, fontStyle: 'italic', fontSize: 12, color: '#A89C93', flexShrink: 0 }}>{fmt(tr.duration || 0)}</div>
+                <div style={{ fontFamily: DD_FONTS.serifEn, fontStyle: 'italic', fontSize: 12, color: '#A89C93', flexShrink: 0 }}>{formatDuration(tr.duration)}</div>
               </div>
             );
           })}
@@ -568,6 +808,8 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
   const [mounted, setMounted] = useState(false);
   const [shown, setShown] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [lyricsSaving, setLyricsSaving] = useState(false);
+  const [lyricsError, setLyricsError] = useState("");
 
   const audioRef = useRef(null);
 
@@ -609,7 +851,11 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
     
     const handleTimeUpdate = () => setProgress(audio.currentTime);
     const handleLoadedMetadata = () => {
-      setDuration(audio.duration);
+      const nextDuration = validSeconds(audio.duration);
+      setDuration(nextDuration);
+      if (nextDuration > 0) {
+        setTracks((prev) => prev.map((track, index) => index === trackIdx && !validSeconds(track.duration) ? { ...track, duration: nextDuration } : track));
+      }
       if (playing) audio.play().catch(() => setPlaying(false));
     };
     const handleEnded = () => {
@@ -699,7 +945,7 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
           const item = await uploadMediaFile(file, {
             type: "image",
             title: file.name.replace(/\.[^.]+$/, "").trim(),
-            metadata: { cat: "all", tint: "#e2d5d8", label: file.name.replace(/\.[^.]+$/, "").trim() },
+            metadata: { cat: "all", tags: [], tint: "#e2d5d8", label: file.name.replace(/\.[^.]+$/, "").trim(), original_filename: file.name, agent_id: mediaAgentId },
           });
           const url = await getMediaItemUrl(item.id);
           setPhotos(prev => [mediaPhotoToPerlePhoto({ ...item, url }), ...prev]);
@@ -755,7 +1001,7 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
             title: formatTitle(file.name),
             artist: "Local Track",
             album: "Imported",
-            metadata: { accent: "#C9A7BB", title_en: "" },
+            metadata: { accent: "#C9A7BB", title_en: "", favorite: false, agent_id: mediaAgentId },
           });
           const url = await getMediaItemUrl(item.id);
           setTracks(prev => {
@@ -813,17 +1059,135 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
     event.target.value = "";
   };
 
-  const handleTagUpdate = async (photoId, tag) => {
-    setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, cat: tag } : p));
-    if (mediaUploadProvider === "r2") return;
+  const handleToggleFavoriteTrack = async (trackId) => {
+    const track = tracks.find((item) => item.id === trackId);
+    if (!track) return;
+    const nextFavorite = !isFavoriteTrack(track);
+    const prevTracks = tracks;
+    setTracks(prev => prev.map(item => item.id === trackId ? { ...item, favorite: nextFavorite } : item));
     try {
-      await fetch(apiUrl(`/api/perle/photos/${photoId}`), {
+      if (mediaUploadProvider === "r2") {
+        const currentMeta = track.media_item?.metadata && typeof track.media_item.metadata === "object" ? track.media_item.metadata : {};
+        const item = await updateMediaItem(trackId, {
+          metadata: { ...currentMeta, favorite: nextFavorite, liked: nextFavorite, heart: nextFavorite, agent_id: currentMeta.agent_id || mediaAgentId },
+        });
+        setTracks(prev => prev.map(itemTrack => itemTrack.id === trackId ? mediaTrackToPerleTrack({ ...item, url: itemTrack.url }) : itemTrack));
+        return;
+      }
+      const response = await fetch(apiUrl(`/api/perle/tracks/${trackId}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cat: tag })
+        body: JSON.stringify({ favorite: nextFavorite })
       });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      setTracks(prevTracks);
+      console.error('Favorite update failed:', error);
+      window.alert?.("心选保存失败");
+    }
+  };
+
+  const patchTrackLyricsState = (trackId, patch) => {
+    setTracks(prev => prev.map(track => track.id === trackId ? { ...track, ...patch } : track));
+  };
+
+  const saveTrackLyrics = async (track, lyrics, filename = "") => {
+    if (!track?.id) return;
+    const cleanLyrics = String(lyrics || "");
+    const lyricsType = detectLyricsType(cleanLyrics);
+    const prevTracks = tracks;
+    setLyricsSaving(true);
+    setLyricsError("");
+    patchTrackLyricsState(track.id, { lyrics: cleanLyrics, lyricsType, lyricsFilename: filename });
+    try {
+      if (mediaUploadProvider === "r2") {
+        const item = await updateMediaItemLyrics(track.id, {
+          agent_id: mediaAgentId,
+          lyrics: cleanLyrics,
+          lyrics_type: lyricsType,
+          lyrics_filename: filename,
+        });
+        setTracks(prev => prev.map(itemTrack => itemTrack.id === track.id ? mediaTrackToPerleTrack({ ...item, url: itemTrack.url }) : itemTrack));
+        return;
+      }
+      const response = await fetch(apiUrl(`/api/perle/tracks/${encodeURIComponent(track.id)}/lyrics`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: mediaAgentId, lyrics: cleanLyrics, lyrics_type: lyricsType, lyrics_filename: filename }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      setTracks(prevTracks);
+      setLyricsError(error?.message || "歌词保存失败");
+      throw error;
+    } finally {
+      setLyricsSaving(false);
+    }
+  };
+
+  const deleteTrackLyrics = async (track) => {
+    if (!track?.id) return;
+    await saveTrackLyrics(track, "", "");
+  };
+
+  const handleTagUpdate = async (photoId, tag) => {
+    const photo = photos.find((p) => p.id === photoId);
+    if (!photo) throw new Error("Photo not found.");
+    const nextTag = String(tag || "").trim();
+    if (!nextTag) return;
+    const prevPhotos = photos;
+    const nextTags = Array.from(new Set([...(photo.tags || []), nextTag]));
+    const nextPhoto = { ...photo, cat: nextTag, tags: nextTags };
+    setPhotos(prev => prev.map(p => p.id === photoId ? nextPhoto : p));
+    try {
+      if (mediaUploadProvider === "r2") {
+        const currentMeta = photo.media_item?.metadata && typeof photo.media_item.metadata === "object" ? photo.media_item.metadata : {};
+        const item = await updateMediaItem(photoId, {
+          metadata: { ...currentMeta, cat: nextTag, tags: nextTags, label: photo.label, original_filename: photo.originalName || currentMeta.original_filename || "", agent_id: currentMeta.agent_id || mediaAgentId },
+        });
+        setPhotos(prev => prev.map(p => p.id === photoId ? mediaPhotoToPerlePhoto({ ...item, url: p.url }) : p));
+        return;
+      }
+      const response = await fetch(apiUrl(`/api/perle/photos/${photoId}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cat: nextTag, agent_id: "" })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
     } catch (err) {
+      setPhotos(prevPhotos);
       console.error('Tag update failed:', err);
+      throw err;
+    }
+  };
+
+  const handlePhotoRename = async (photoId, name) => {
+    const photo = photos.find((p) => p.id === photoId);
+    if (!photo) throw new Error("Photo not found.");
+    const nextName = String(name || "").trim();
+    if (!nextName) return;
+    const prevPhotos = photos;
+    setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, title: nextName, label: nextName } : p));
+    try {
+      if (mediaUploadProvider === "r2") {
+        const currentMeta = photo.media_item?.metadata && typeof photo.media_item.metadata === "object" ? photo.media_item.metadata : {};
+        const item = await updateMediaItem(photoId, {
+          title: nextName,
+          metadata: { ...currentMeta, title: nextName, label: nextName, name: nextName, tags: photo.tags || [], cat: photo.cat || "all", original_filename: photo.originalName || currentMeta.original_filename || "", agent_id: currentMeta.agent_id || mediaAgentId },
+        });
+        setPhotos(prev => prev.map(p => p.id === photoId ? mediaPhotoToPerlePhoto({ ...item, url: p.url }) : p));
+        return;
+      }
+      const response = await fetch(apiUrl(`/api/perle/photos/${photoId}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: nextName, agent_id: "" })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (err) {
+      setPhotos(prevPhotos);
+      console.error('Photo rename failed:', err);
+      throw err;
     }
   };
 
@@ -868,6 +1232,7 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
             onAddPhotos={() => document.getElementById("photo-input")?.click()}
             onHome={onHome}
             onTagUpdate={handleTagUpdate}
+            onRename={handlePhotoRename}
           />
         ) : (
           <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -881,12 +1246,13 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
               onNext={() => setTrackIdx((current) => tracks.length ? (current + 1) % tracks.length : current)}
               onAddMusic={() => document.getElementById("music-input")?.click()}
               onHome={onHome}
+              onToggleFavorite={handleToggleFavoriteTrack}
             />
           </div>
         )}
       </div>
 
-      <div className="media-page-tabbar">
+      <div className="media-page-tabbar" style={{ position: 'relative', bottom: 'auto', flexShrink: 0, margin: '0 16px calc(12px + env(safe-area-inset-bottom, 0px))' }}>
         <button className={`media-page-tab ${initialPage === 'photos' ? 'active' : ''}`} type="button" onClick={() => setPage('photos')}>
           <svg viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
         </button>
@@ -913,6 +1279,10 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
             duration={duration}
             onBack={closePlayer}
             setQueueOpen={setQueueOpen}
+            onSaveLyrics={saveTrackLyrics}
+            onDeleteLyrics={deleteTrackLyrics}
+            lyricsSaving={lyricsSaving}
+            lyricsError={lyricsError}
           />
           <QueueDrawer
             open={queueOpen}

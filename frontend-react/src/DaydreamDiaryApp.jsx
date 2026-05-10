@@ -42,6 +42,7 @@ const MEMORY_CATEGORY_LABELS = {
 };
 const MEMORY_AGENT_LABELS = {};
 const AGENT_BOOK_PROFILES = {};
+const ENTRY_DRAFT_STORAGE_KEY = "daydream-entry-draft-v1";
 
 const DEMO_ENTRIES = {
   yui: [
@@ -148,6 +149,41 @@ function entryFromApi(row) {
   };
 }
 
+function draftStorageKey(bookId) {
+  return `${ENTRY_DRAFT_STORAGE_KEY}:${bookId || "default"}`;
+}
+
+function readEntryDraftSnapshot(bookId) {
+  try {
+    const raw = window.localStorage.getItem(draftStorageKey(bookId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const draft = parsed?.draft || {};
+    return { title: String(draft.title || ""), content: String(draft.content || "") };
+  } catch {
+    return null;
+  }
+}
+
+function writeEntryDraftSnapshot(bookId, draft) {
+  const title = String(draft?.title || "");
+  const content = String(draft?.content || "");
+  if (!title.trim() && !content.trim()) return;
+  try {
+    window.localStorage.setItem(draftStorageKey(bookId), JSON.stringify({ draft: { title, content }, updatedAt: new Date().toISOString() }));
+  } catch {
+    // Best-effort local safety net only.
+  }
+}
+
+function clearEntryDraftSnapshot(bookId) {
+  try {
+    window.localStorage.removeItem(draftStorageKey(bookId));
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 export default function DaydreamDiaryApp({ apiBase = "" }) {
   const [tab, setTab] = useState("diary");
   const [view, setView] = useState("board");
@@ -157,6 +193,8 @@ export default function DaydreamDiaryApp({ apiBase = "" }) {
   const [currentBookId, setCurrentBookId] = useState("");
   const [currentEntryId, setCurrentEntryId] = useState("");
   const [entryDraft, setEntryDraft] = useState({ title: "", content: "" });
+  const [entryDraftError, setEntryDraftError] = useState("");
+  const [entryDraftSaving, setEntryDraftSaving] = useState(false);
   const [memories, setMemories] = useState([]);
   const [modal, setModal] = useState(null);
   const [commentsByEntry, setCommentsByEntry] = useState({});
@@ -166,7 +204,7 @@ export default function DaydreamDiaryApp({ apiBase = "" }) {
   const currentBook = useMemo(() => books.find((book) => book.id === currentBookId) || books[0], [books, currentBookId]);
   const currentEntries = entriesByBook[currentBook?.id] || [];
   const currentEntry = currentEntries.find((entry) => entry.id === currentEntryId) || currentEntries[0] || DEMO_ENTRIES.yui[0];
-  const pageKey = tab === "diary" ? `${tab}-${view}-${currentBook?.id || "none"}-${currentEntry?.id || "none"}` : tab;
+  const pageKey = tab === "diary" ? `${tab}-${view}-${currentBook?.id || "none"}` : tab;
 
   async function api(path, options = {}) {
     const response = await fetch(`${apiBase}${path}`, {
@@ -248,6 +286,11 @@ export default function DaydreamDiaryApp({ apiBase = "" }) {
 
   useEffect(() => { loadBooks(); }, []);
 
+  useEffect(() => {
+    if (view !== "compose") return;
+    writeEntryDraftSnapshot(currentBook?.sourceId || currentBook?.id, entryDraft);
+  }, [currentBook?.id, currentBook?.sourceId, entryDraft, view]);
+
   async function loadComments(entry) {
     if (!entry?.id) return;
     try {
@@ -285,8 +328,14 @@ export default function DaydreamDiaryApp({ apiBase = "" }) {
 
   function createEntry() {
     if (!currentBook?.canCreateEntry) return;
-    setEntryDraft({ title: "", content: "" });
+    setEntryDraft(readEntryDraftSnapshot(currentBook.sourceId || currentBook.id) || { title: "", content: "" });
+    setEntryDraftError("");
     setView("compose");
+  }
+
+  function updateEntryDraft(updater) {
+    setEntryDraft(updater);
+    if (entryDraftError) setEntryDraftError("");
   }
 
   function renameBook() {
@@ -309,13 +358,41 @@ export default function DaydreamDiaryApp({ apiBase = "" }) {
   }
 
   async function saveEntryDraft() {
+    if (entryDraftSaving) return;
     const title = String(entryDraft.title || "").trim();
     const content = String(entryDraft.content || "").trim();
-    if (!content) return;
-    await api(`/api/diary/notebooks/${encodeURIComponent(currentBook.sourceId)}/entries`, { method: "POST", body: JSON.stringify({ title, content, tags: "" }) });
-    await loadEntries(currentBook);
-    setEntryDraft({ title: "", content: "" });
-    setView("list");
+    const notebookId = currentBook?.sourceId || currentBook?.id;
+    if (!content) {
+      setEntryDraftError("Write something before saving.");
+      return;
+    }
+    if (!notebookId) {
+      setEntryDraftError("Save failed: missing notebook.");
+      return;
+    }
+    setEntryDraftSaving(true);
+    setEntryDraftError("");
+    try {
+      const data = await api(`/api/diary/notebooks/${encodeURIComponent(notebookId)}/entries`, { method: "POST", body: JSON.stringify({ title, content, tags: "" }) });
+      const created = data?.entry ? entryFromApi(data.entry) : null;
+      if (created) {
+        setEntriesByBook((current) => {
+          const entries = current[currentBook.id] || [];
+          const withoutDuplicate = entries.filter((entry) => entry.id !== created.id);
+          return { ...current, [currentBook.id]: [created, ...withoutDuplicate] };
+        });
+        setCurrentEntryId(created.id);
+      }
+      clearEntryDraftSnapshot(notebookId);
+      setEntryDraft({ title: "", content: "" });
+      await loadEntries(currentBook);
+      setView("list");
+    } catch (error) {
+      writeEntryDraftSnapshot(notebookId, { title, content });
+      setEntryDraftError(`Save failed: ${error?.message || "unknown error"}. Draft kept.`);
+    } finally {
+      setEntryDraftSaving(false);
+    }
   }
 
   function captureSelection(node, entry) {
@@ -402,7 +479,7 @@ export default function DaydreamDiaryApp({ apiBase = "" }) {
       <div key={pageKey} style={{ width: "100%", flex: "1 1 auto", minHeight: 0, overflow: "hidden", animation: "daydreamPageIn 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both", willChange: "opacity, transform" }}>
         {tab === "diary" && view === "board" && <HomeStack books={books} onOpenBook={openBook} />}
         {tab === "diary" && view === "list" && <EntriesList book={currentBook} entries={currentEntries} onBack={() => setView("board")} onOpenEntry={openEntry} onCreate={createEntry} onRename={renameBook} />}
-        {tab === "diary" && view === "compose" && <EntryComposer book={currentBook} draft={entryDraft} onChange={setEntryDraft} onBack={() => setView("list")} onSubmit={saveEntryDraft} />}
+        {tab === "diary" && view === "compose" && <EntryComposer book={currentBook} draft={entryDraft} error={entryDraftError} saving={entryDraftSaving} onChange={updateEntryDraft} onBack={() => setView("list")} onSubmit={saveEntryDraft} />}
         {tab === "diary" && view === "detail" && <EntryDetail book={currentBook} entry={currentEntry} comments={commentsByEntry[currentEntry.id] || []} highlights={highlightsByEntry[currentEntry.id] || []} selectionDraft={selectionDraft} onSelectText={captureSelection} onHighlight={addHighlight} onComment={() => commentEntry(currentEntry)} onBack={() => setView("list")} onEdit={() => editEntry(currentEntry)} onDelete={() => deleteEntry(currentEntry)} />}
         {tab === "memory" && <MemoryPanel memories={memories} books={books} apiBase={apiBase} agentNames={agentNames} onLoad={loadMemories} />}
       </div>
@@ -539,7 +616,7 @@ function EntriesList({ book, entries, onOpenEntry, onBack, onCreate, onRename })
   );
 }
 
-function EntryComposer({ book, draft, onChange, onBack, onSubmit }) {
+function EntryComposer({ book, draft, error = "", saving = false, onChange, onBack, onSubmit }) {
   const setValue = (key, value) => onChange((current) => ({ ...current, [key]: value }));
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 0, ...paperTexture(T.cream), overflowY: "auto", WebkitOverflowScrolling: "touch", position: "relative", paddingBottom: "calc(96px + env(safe-area-inset-bottom, 0px))" }}>
@@ -547,7 +624,7 @@ function EntryComposer({ book, draft, onChange, onBack, onSubmit }) {
         <button onClick={onBack} aria-label="返回" style={{ width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", marginLeft: -10, border: `0.5px solid ${T.rule}`, background: "rgba(255,251,244,0.38)", color: T.ink }}>
           <BackIcon />
         </button>
-        <button onClick={onSubmit} style={{ border: `0.5px solid ${book.accent || T.gold}`, background: "rgba(255,251,244,0.58)", color: book.accent || T.gold, fontFamily: F.serifCn, fontSize: 12, letterSpacing: 2, padding: "7px 14px", cursor: "pointer" }}>落笔</button>
+        <button onClick={onSubmit} disabled={saving} style={{ border: `0.5px solid ${book.accent || T.gold}`, background: "rgba(255,251,244,0.58)", color: book.accent || T.gold, fontFamily: F.serifCn, fontSize: 12, letterSpacing: 2, padding: "7px 14px", cursor: saving ? "default" : "pointer", opacity: saving ? 0.62 : 1 }}>{saving ? "Saving" : "落笔"}</button>
       </div>
       <div style={{ padding: "28px 24px 0" }}>
         <div style={{ fontFamily: F.serifEn, fontSize: 13, fontStyle: "italic", color: book.accent || T.gold, letterSpacing: 0.5 }}>{book.nameEn}</div>
@@ -560,14 +637,15 @@ function EntryComposer({ book, draft, onChange, onBack, onSubmit }) {
           onChange={(event) => setValue("title", event.target.value)}
           autoFocus
           placeholder="标题"
-          style={{ width: "100%", boxSizing: "border-box", border: 0, borderBottom: `0.5px solid ${T.rule}`, background: "transparent", color: T.ink, fontFamily: F.serifCn, fontSize: 21, lineHeight: 1.35, letterSpacing: 2, outline: "none", padding: "16px 18px" }}
+          style={{ width: "100%", boxSizing: "border-box", border: 0, borderBottom: `0.5px solid ${T.rule}`, background: "transparent", color: T.ink, fontFamily: F.serifCn, fontSize: 21, lineHeight: 1.35, letterSpacing: 2, outline: "none", padding: "16px 18px", caretColor: "#5f4a57", userSelect: "text", WebkitUserSelect: "text" }}
         />
         <textarea
           value={draft.content}
           onChange={(event) => setValue("content", event.target.value)}
           placeholder="内容"
-          style={{ width: "100%", minHeight: "52vh", boxSizing: "border-box", border: 0, background: "transparent", color: T.ink, fontFamily: F.serifCn, fontSize: 15, lineHeight: 1.9, letterSpacing: 1, outline: "none", padding: "18px", resize: "none" }}
+          style={{ width: "100%", minHeight: "52vh", boxSizing: "border-box", border: 0, background: "transparent", color: T.ink, fontFamily: F.serifCn, fontSize: 16, lineHeight: 1.9, letterSpacing: 1, outline: "none", padding: "18px", resize: "none", caretColor: "#5f4a57", userSelect: "text", WebkitUserSelect: "text" }}
         />
+        {error && <div role="alert" style={{ borderTop: `0.5px solid ${T.rule}`, color: T.stamp, fontFamily: F.serifEn, fontSize: 12, lineHeight: 1.5, padding: "10px 18px 12px" }}>{error}</div>}
       </div>
     </div>
   );

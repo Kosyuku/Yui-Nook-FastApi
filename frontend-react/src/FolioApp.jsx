@@ -195,22 +195,36 @@ function loadData() {
   catch { return { books: [] }; }
 }
 function saveData(d) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); } catch {} }
+function clearBrowserSelection() {
+  try { window.getSelection()?.removeAllRanges?.(); } catch { }
+}
 
 // ── HighlightPanel ────────────────────────────────────────
 function HighlightPanel({ highlight, activeActor, agents, onAddThought, onAddComment, onClose }) {
   const [thoughtDraft, setThoughtDraft] = useState("");
   const [commentDraft, setCommentDraft] = useState("");
   const [replyingTo, setReplyingTo] = useState(null);
+  const [panelError, setPanelError] = useState("");
 
   function handleAddThought() {
     if (!thoughtDraft.trim()) return;
-    onAddThought(thoughtDraft.trim());
-    setThoughtDraft("");
+    try {
+      onAddThought(thoughtDraft.trim());
+      setThoughtDraft("");
+      setPanelError("");
+    } catch (error) {
+      setPanelError(error?.message || "发布失败，内容先留着。");
+    }
   }
   function handleAddComment(thoughtId) {
     if (!commentDraft.trim()) return;
-    onAddComment(thoughtId, commentDraft.trim());
-    setCommentDraft(""); setReplyingTo(null);
+    try {
+      onAddComment(thoughtId, commentDraft.trim());
+      setCommentDraft(""); setReplyingTo(null);
+      setPanelError("");
+    } catch (error) {
+      setPanelError(error?.message || "回复失败，内容先留着。");
+    }
   }
 
   return (
@@ -246,6 +260,7 @@ function HighlightPanel({ highlight, activeActor, agents, onAddThought, onAddCom
           </div>
         ))}
       </div>
+      {panelError && <div className="folio-panel-error">{panelError}</div>}
       <div className="folio-thought-form">
         <textarea value={thoughtDraft} onChange={e => setThoughtDraft(e.target.value)} placeholder="写下你的感想…" rows={2} />
         <button className="folio-send-thought" onClick={handleAddThought}>发布</button>
@@ -258,7 +273,13 @@ function HighlightPanel({ highlight, activeActor, agents, onAddThought, onAddCom
 function ReadingContent({ content, highlights, onHighlightClick, contentRef, onMouseUp }) {
   const segments = useMemo(() => buildSegments(content, highlights), [content, highlights]);
   return (
-    <div ref={contentRef} className="folio-content" onMouseUp={onMouseUp} onTouchEnd={onMouseUp}>
+    <div
+      ref={contentRef}
+      className="folio-content"
+      onMouseUp={onMouseUp}
+      onTouchEnd={onMouseUp}
+      onContextMenu={(event) => event.preventDefault()}
+    >
       {segments.map(seg =>
         seg.type === "text"
           ? <span key={seg.key}>{seg.content}</span>
@@ -292,6 +313,33 @@ export default function FolioApp({ onClose, agents = [] }) {
   const bodyRef = useRef(null);
   const pageInnerRef = useRef(null);
   const readingPointerRef = useRef(null);
+
+  const clearReaderTransientState = useCallback(() => {
+    setSelectionInfo(null);
+    setActiveHighlight(null);
+    readingPointerRef.current = null;
+    clearBrowserSelection();
+  }, []);
+
+  const openSidebar = useCallback(() => {
+    clearReaderTransientState();
+    setReadingSettingsOpen(false);
+    setSidebarOpen(true);
+  }, [clearReaderTransientState]);
+
+  const openReadingSettings = useCallback(() => {
+    clearReaderTransientState();
+    setSidebarOpen(false);
+    setReadingSettingsOpen(true);
+  }, [clearReaderTransientState]);
+
+  const openHighlightPanel = useCallback((highlight) => {
+    setSidebarOpen(false);
+    setReadingSettingsOpen(false);
+    setSelectionInfo(null);
+    clearBrowserSelection();
+    setActiveHighlight(highlight);
+  }, []);
 
   // Categories: "全部" + deduplicated tags from actual books (dynamic)
   const categories = useMemo(() => {
@@ -337,6 +385,11 @@ export default function FolioApp({ onClose, agents = [] }) {
 
   // animated view transition
   function goToView(nextView) {
+    if (nextView !== "reading") {
+      clearReaderTransientState();
+      setSidebarOpen(false);
+      setReadingSettingsOpen(false);
+    }
     setEntering(true);
     setView(nextView);
     requestAnimationFrame(() => requestAnimationFrame(() => setEntering(false)));
@@ -352,9 +405,8 @@ export default function FolioApp({ onClose, agents = [] }) {
   useEffect(() => {
     setReadingPageTop(0);
     bodyRef.current?.scrollTo({ top: 0, behavior: "auto" });
-    setSelectionInfo(null);
-    setActiveHighlight(null);
-  }, [currentChapterIndex]);
+    clearReaderTransientState();
+  }, [currentChapterIndex, clearReaderTransientState]);
 
   const updateData = useCallback((updater) => {
     setData(prev => { const next = typeof updater === "function" ? updater(prev) : updater; saveData(next); return next; });
@@ -436,7 +488,7 @@ export default function FolioApp({ onClose, agents = [] }) {
     e.target.value = "";
   }
 
-  function handleMouseUp() {
+  function handleMouseUp(event) {
     if (!contentRef.current) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) { setSelectionInfo(null); return; }
@@ -449,7 +501,12 @@ export default function FolioApp({ onClose, agents = [] }) {
     const end = start + range.toString().length;
     if (end <= start) { setSelectionInfo(null); return; }
     const rect = range.getBoundingClientRect();
+    setSidebarOpen(false);
+    setReadingSettingsOpen(false);
+    setActiveHighlight(null);
     setSelectionInfo({ text: range.toString(), start, end, rect });
+    if (event?.type === "touchend") event.preventDefault();
+    window.setTimeout(clearBrowserSelection, 0);
   }
 
   function createHighlight() {
@@ -457,7 +514,7 @@ export default function FolioApp({ onClose, agents = [] }) {
     const highlight = { id: genId(), chapterIndex: currentChapterIndex, startOffset: selectionInfo.start, endOffset: selectionInfo.end, text: selectionInfo.text, thoughts: [], createdAt: new Date().toISOString() };
     updateData(prev => ({ ...prev, books: prev.books.map(b => b.id !== currentBookId ? b : { ...b, highlights: [...(b.highlights || []), highlight] }) }));
     setSelectionInfo(null);
-    window.getSelection()?.removeAllRanges();
+    clearBrowserSelection();
     setActiveHighlight(highlight);
   }
 
@@ -526,7 +583,7 @@ export default function FolioApp({ onClose, agents = [] }) {
     if (!start) return;
     if (isReaderInteractiveTarget(event)) return;
     if (window.getSelection()?.toString()) return;
-    if (activeHighlight || sidebarOpen) return;
+    if (activeHighlight || sidebarOpen || readingSettingsOpen || selectionInfo) return;
 
     const dx = event.clientX - start.x;
     const dy = event.clientY - start.y;
@@ -554,17 +611,56 @@ export default function FolioApp({ onClose, agents = [] }) {
   }
 
   function addThought(content) {
-    if (!activeHighlight) return;
+    if (!activeHighlight || !currentBookId || !currentBook) throw new Error("划线状态丢了，重新点一下划线。");
+    const sourceHighlight = currentBook.highlights?.find(h => h.id === activeHighlight.id);
+    if (!sourceHighlight) throw new Error("没找到这条划线，发布失败。");
     const agentObj = agents.find(a => a.agent_id === activeActor);
     const thought = { id: genId(), authorType: activeActor === "user" ? "user" : "agent", authorId: activeActor === "user" ? "user" : activeActor, authorName: activeActor === "user" ? "我" : (agentObj?.display_name || activeActor), content, createdAt: new Date().toISOString(), comments: [] };
-    updateData(prev => ({ ...prev, books: prev.books.map(b => b.id !== currentBookId ? b : { ...b, highlights: b.highlights.map(h => h.id !== activeHighlight.id ? h : { ...h, thoughts: [...h.thoughts, thought] }) }) }));
+    const nextHighlight = { ...sourceHighlight, thoughts: [...(sourceHighlight.thoughts || []), thought] };
+    updateData(prev => ({
+      ...prev,
+      books: (prev.books || []).map(b => {
+        if (b.id !== currentBookId) return b;
+        return {
+          ...b,
+          highlights: (b.highlights || []).map(h => {
+            if (h.id !== activeHighlight.id) return h;
+            return nextHighlight;
+          })
+        };
+      })
+    }));
+    setActiveHighlight(nextHighlight);
   }
 
   function addComment(thoughtId, content) {
-    if (!activeHighlight) return;
+    if (!activeHighlight || !currentBookId || !currentBook) throw new Error("划线状态丢了，重新点一下划线。");
+    const sourceHighlight = currentBook.highlights?.find(h => h.id === activeHighlight.id);
+    if (!sourceHighlight) throw new Error("没找到这条划线，回复失败。");
+    const hasThought = (sourceHighlight.thoughts || []).some(t => t.id === thoughtId);
+    if (!hasThought) throw new Error("没找到这条感想，回复失败。");
     const agentObj = agents.find(a => a.agent_id === activeActor);
     const comment = { id: genId(), authorType: activeActor === "user" ? "user" : "agent", authorName: activeActor === "user" ? "我" : (agentObj?.display_name || activeActor), content, createdAt: new Date().toISOString() };
-    updateData(prev => ({ ...prev, books: prev.books.map(b => b.id !== currentBookId ? b : { ...b, highlights: b.highlights.map(h => h.id !== activeHighlight.id ? h : { ...h, thoughts: h.thoughts.map(t => t.id !== thoughtId ? t : { ...t, comments: [...t.comments, comment] }) }) }) }));
+    const nextHighlight = {
+      ...sourceHighlight,
+      thoughts: (sourceHighlight.thoughts || []).map(t => (
+        t.id !== thoughtId ? t : { ...t, comments: [...(t.comments || []), comment] }
+      ))
+    };
+    updateData(prev => ({
+      ...prev,
+      books: (prev.books || []).map(b => {
+        if (b.id !== currentBookId) return b;
+        return {
+          ...b,
+          highlights: (b.highlights || []).map(h => {
+            if (h.id !== activeHighlight.id) return h;
+            return nextHighlight;
+          })
+        };
+      })
+    }));
+    setActiveHighlight(nextHighlight);
   }
 
   // ── Shelf ─────────────────────────────────────────────────
@@ -746,7 +842,7 @@ export default function FolioApp({ onClose, agents = [] }) {
               const hasHighlights = currentBook.highlights?.some(h => h.chapterIndex === i);
               return (
                 <button key={i} className={`folio-sidebar-item ${i === currentChapterIndex ? "active" : ""}`}
-                  onClick={() => { setCurrentChapterIndex(i); setSidebarOpen(false); }}>
+                  onClick={() => { clearReaderTransientState(); setCurrentChapterIndex(i); setSidebarOpen(false); }}>
                   <span className="folio-sidebar-title">{ch.title}</span>
                   {hasHighlights && <span className="folio-chapter-dot" />}
                 </button>
@@ -756,9 +852,9 @@ export default function FolioApp({ onClose, agents = [] }) {
         </div>
 
         <header className="folio-reading-header">
-          <button className="folio-sidebar-toggle" onClick={() => setSidebarOpen(true)} aria-label="章节目录">≡</button>
+          <button className="folio-sidebar-toggle" onClick={openSidebar} aria-label="章节目录">≡</button>
           <span className="folio-reading-title">{currentBook.title}</span>
-          <button className="folio-sidebar-toggle" onClick={() => setReadingSettingsOpen(true)} aria-label="阅读设置">Aa</button>
+          <button className="folio-sidebar-toggle" onClick={openReadingSettings} aria-label="阅读设置">Aa</button>
           <button className="folio-back-btn" onClick={() => { goToView("cover"); }}>✕</button>
         </header>
 
@@ -785,7 +881,7 @@ export default function FolioApp({ onClose, agents = [] }) {
             <ReadingContent
               content={currentChapter.content}
               highlights={currentHighlights}
-              onHighlightClick={setActiveHighlight}
+              onHighlightClick={openHighlightPanel}
               contentRef={contentRef}
               onMouseUp={handleMouseUp}
             />
