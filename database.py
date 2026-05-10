@@ -3153,6 +3153,8 @@ def _normalize_media_item(row: dict[str, Any] | None) -> dict[str, Any] | None:
             item["metadata"] = json.loads(item["metadata"])
         except Exception:
             item["metadata"] = {}
+    if not item["agent_id"] and isinstance(item["metadata"], dict) and item["metadata"].get("agent_id"):
+        item["agent_id"] = normalize_agent_id_value(item["metadata"].get("agent_id"))
     item["created_at"] = str(item.get("created_at") or "")
     item["updated_at"] = str(item.get("updated_at") or "")
     return item
