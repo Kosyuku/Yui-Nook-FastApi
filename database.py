@@ -4068,6 +4068,46 @@ async def list_messages_for_agent(agent_id: str | None, limit: int = 200) -> lis
     return messages[-safe_limit:]
 
 
+async def list_message_agents(limit: int = 1000) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 1000), 5000))
+    rows: list[dict[str, Any]] = []
+    if _use_supabase_data():
+        rows = await _supabase_select(
+            settings.supabase_messages_table,
+            select="id,session_id,agent_id,role,content,created_at",
+            order="created_at.desc",
+            limit=safe_limit,
+        )
+    else:
+        db = await get_db()
+        cursor = await db.execute(
+            "SELECT id, session_id, agent_id, role, content, created_at FROM messages ORDER BY created_at DESC LIMIT ?",
+            (safe_limit,),
+        )
+        rows = [dict(row) for row in await cursor.fetchall()]
+
+    agents: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        try:
+            agent_id = normalize_agent_id_value(row.get("agent_id")) if row.get("agent_id") else ""
+        except AgentResolutionError:
+            agent_id = ""
+        if not agent_id:
+            continue
+        current = agents.get(agent_id)
+        if current:
+            current["message_count"] += 1
+            continue
+        agents[agent_id] = {
+            "agent_id": agent_id,
+            "last_message": str(row.get("content") or ""),
+            "last_message_at": str(row.get("created_at") or ""),
+            "message_count": 1,
+            "session_id": str(row.get("session_id") or ""),
+        }
+    return sorted(agents.values(), key=lambda item: str(item.get("last_message_at") or ""), reverse=True)
+
+
 async def get_recent_messages(session_id: str, limit: int = 12) -> list[dict[str, str]]:
     """Get top N messages in OpenAI format"""
     if _use_supabase_data():

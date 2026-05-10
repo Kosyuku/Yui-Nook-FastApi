@@ -864,6 +864,15 @@ async def list_murmur_messages(agent_id: str, limit: int = Query(200, ge=1, le=1
     return {"agent_id": safe_agent, "messages": messages}
 
 
+@extra_api.get("/murmur/message-agents")
+async def list_murmur_message_agents(limit: int = Query(1000, ge=1, le=5000)):
+    try:
+        agents = await db.list_message_agents(limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to load Murmur message agents: {exc}")
+    return {"agents": agents}
+
+
 @extra_api.put("/agents/{agent_id}/profile")
 async def save_agent_profile(agent_id: str, body: AgentProfilePayload):
     try:
