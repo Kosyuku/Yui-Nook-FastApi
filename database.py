@@ -3232,6 +3232,51 @@ async def get_media_item(item_id: str) -> dict[str, Any] | None:
     return _normalize_media_item(dict(row) if row else None)
 
 
+async def update_media_item(
+    item_id: str,
+    *,
+    title: str | None = None,
+    artist: str | None = None,
+    album: str | None = None,
+    author: str | None = None,
+    cover_key: str | None = None,
+    metadata: Any = None,
+) -> dict[str, Any] | None:
+    media_id = str(item_id or "").strip()
+    if not media_id:
+        return None
+    current = await get_media_item(media_id)
+    if not current:
+        return None
+    supabase = _use_supabase_data()
+    updates: dict[str, Any] = {}
+    if title is not None:
+        updates["title"] = str(title or "").strip()
+    if artist is not None:
+        updates["artist"] = str(artist or "").strip()
+    if album is not None:
+        updates["album"] = str(album or "").strip()
+    if author is not None:
+        updates["author"] = str(author or "").strip()
+    if cover_key is not None:
+        updates["cover_key"] = str(cover_key or "").strip().lstrip("/")
+    if metadata is not None:
+        updates["metadata"] = _media_metadata_for_storage(metadata, supabase=supabase)
+    if not updates:
+        return current
+    updates["updated_at"] = _now()
+    if supabase:
+        row = await _supabase_update_verified(settings.supabase_media_items_table, {"id": f"eq.{media_id}"}, updates)
+        if row:
+            return _normalize_media_item(row)
+        return await get_media_item(media_id)
+    db = await get_db()
+    columns = ", ".join(f"{key} = ?" for key in updates)
+    await db.execute(f"UPDATE media_items SET {columns} WHERE id = ?", (*updates.values(), media_id))
+    await db.commit()
+    return await get_media_item(media_id)
+
+
 async def delete_media_item(item_id: str) -> dict[str, Any] | None:
     item = await get_media_item(item_id)
     if not item:
