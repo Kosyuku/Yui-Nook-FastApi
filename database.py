@@ -2618,13 +2618,42 @@ def _agent_metadata_value(metadata: Any) -> str:
         return "{}"
 
 
+def _looks_mojibake(value: str) -> bool:
+    return any(
+        "\u0080" <= ch <= "\u00ff" or ch in {"Ã", "Â", "å", "ç", "é", "è", "æ", "闃"}
+        for ch in value
+    )
+
+
+def _contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in value)
+
+
+def repair_mojibake_text(value: Any) -> str:
+    text = str(value or "")
+    if not text or not _looks_mojibake(text):
+        return text
+    candidates: list[str] = []
+    for codec in ("latin-1", "gbk", "cp936"):
+        try:
+            candidate = text.encode(codec).decode("utf-8")
+        except Exception:
+            continue
+        if candidate and candidate != text:
+            candidates.append(candidate)
+    for candidate in candidates:
+        if _contains_cjk(candidate):
+            return candidate
+    return candidates[0] if candidates else text
+
+
 def _normalize_agent_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return None
     item = dict(row)
     item["agent_id"] = normalize_agent_id_value(item.get("agent_id"))
     item["display_handle"] = f"@{item['agent_id']}"
-    item["display_name"] = str(item.get("display_name") or item["agent_id"])
+    item["display_name"] = repair_mojibake_text(item.get("display_name") or item["agent_id"])
     item["avatar"] = str(item.get("avatar") or "")
     item["description"] = str(item.get("description") or "")
     item["persona"] = str(item.get("persona") or "")
@@ -2728,6 +2757,39 @@ async def list_agents(*, include_inactive: bool = False) -> list[dict[str, Any]]
     return [item for item in (_normalize_agent_row(dict(row)) for row in rows) if item]
 
 
+async def repair_agent_display_name_mojibake() -> list[dict[str, Any]]:
+    await ensure_default_agents()
+    repaired: list[dict[str, Any]] = []
+    if _use_supabase_data():
+        rows = await _supabase_select(AGENTS_TABLE, select="agent_id,display_name", order="updated_at.desc")
+        for row in rows:
+            agent_id = normalize_agent_id_value(row.get("agent_id"))
+            current = str(row.get("display_name") or "")
+            fixed = repair_mojibake_text(current).strip()
+            if agent_id and fixed and fixed != current:
+                updated = await update_agent(agent_id, display_name=fixed)
+                if updated:
+                    repaired.append(updated)
+        return repaired
+    db = await get_db()
+    cursor = await db.execute("SELECT agent_id, display_name FROM agents")
+    rows = await cursor.fetchall()
+    for row in rows:
+        item = dict(row)
+        agent_id = normalize_agent_id_value(item.get("agent_id"))
+        current = str(item.get("display_name") or "")
+        fixed = repair_mojibake_text(current).strip()
+        if agent_id and fixed and fixed != current:
+            await db.execute(
+                "UPDATE agents SET display_name = ?, updated_at = ? WHERE agent_id = ?",
+                (fixed, _now(), agent_id),
+            )
+            repaired.append({"agent_id": agent_id, "display_name": fixed})
+    if repaired:
+        await db.commit()
+    return repaired
+
+
 async def create_agent(
     *,
     agent_id: str,
@@ -2742,7 +2804,7 @@ async def create_agent(
     now = _now()
     payload = {
         "agent_id": normalized,
-        "display_name": str(display_name or "").strip() or normalized,
+        "display_name": repair_mojibake_text(display_name).strip() or normalized,
         "avatar": str(avatar or ""),
         "description": str(description or ""),
         "persona": str(persona or ""),
@@ -2781,6 +2843,8 @@ async def update_agent(agent_id: str, **updates: Any) -> dict[str, Any] | None:
     normalized = await require_agent(agent_id)
     allowed = {"display_name", "avatar", "description", "persona", "source", "metadata", "is_active"}
     payload = {k: v for k, v in updates.items() if k in allowed and v is not None}
+    if "display_name" in payload:
+        payload["display_name"] = repair_mojibake_text(payload["display_name"]).strip()
     if "metadata" in payload:
         payload["metadata"] = _agent_metadata_value(payload["metadata"])
     if not payload:
@@ -3057,6 +3121,20 @@ def _media_metadata_for_storage(metadata: Any, *, supabase: bool) -> Any:
         return {} if supabase else "{}"
 
 
+def _media_metadata_dict(metadata: Any) -> dict[str, Any]:
+    if metadata in (None, ""):
+        return {}
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    if isinstance(metadata, str):
+        try:
+            data = json.loads(metadata)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _normalize_media_item(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return None
@@ -3261,7 +3339,11 @@ async def update_media_item(
     if cover_key is not None:
         updates["cover_key"] = str(cover_key or "").strip().lstrip("/")
     if metadata is not None:
-        updates["metadata"] = _media_metadata_for_storage(metadata, supabase=supabase)
+        next_metadata = {
+            **_media_metadata_dict(current.get("metadata")),
+            **_media_metadata_dict(metadata),
+        }
+        updates["metadata"] = _media_metadata_for_storage(next_metadata, supabase=supabase)
     if not updates:
         return current
     updates["updated_at"] = _now()
