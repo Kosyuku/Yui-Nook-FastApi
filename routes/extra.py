@@ -358,6 +358,24 @@ AI_SETTINGS_KEY = "ai_settings"
 HEALTH_LATEST_KEY = "health_latest"
 SYNC_GLOBAL_KEY = "sync_global_state"
 CHAT_PROFILE_KEY = "chat_profile"
+DEFAULT_MURMUR_MOCK_IDS = {"ayan", "azheng", "xiaoying"}
+DEFAULT_MURMUR_MOCK_MARKERS = {
+    "ayan": {
+        "avatar": "photo-1517841905240-472988babdf9",
+        "topics": {"t1", "t2", "t3"},
+        "messages": {"m1", "m2", "m3"},
+    },
+    "azheng": {
+        "avatar": "photo-1500530855697-b586d89ba3ee",
+        "topics": {"t4", "t5"},
+        "messages": {"m4"},
+    },
+    "xiaoying": {
+        "avatar": "photo-1507525428034-b723cf961d3e",
+        "topics": {"t6"},
+        "messages": {"m5"},
+    },
+}
 
 
 def _safe_profile_payload(data: Any) -> dict[str, Any]:
@@ -378,6 +396,84 @@ async def _load_setting_dict(key: str) -> tuple[dict[str, Any], Optional[str]]:
 async def _load_legacy_sync_payload() -> dict[str, Any]:
     data, _ = await _load_setting_dict(SYNC_GLOBAL_KEY)
     return _safe_profile_payload(data.get("payload"))
+
+
+def _murmur_contact_id(contact: Any) -> str:
+    if not isinstance(contact, dict):
+        return ""
+    return str(contact.get("id") or contact.get("agent_id") or "").strip().lower()
+
+
+def _murmur_contact_child_ids(contact: dict[str, Any], key: str) -> set[str]:
+    value = contact.get(key)
+    if not isinstance(value, list):
+        return set()
+    return {str(item.get("id") or "").strip() for item in value if isinstance(item, dict)}
+
+
+def _is_default_murmur_mock_contact(contact: Any) -> bool:
+    if not isinstance(contact, dict):
+        return False
+    contact_id = _murmur_contact_id(contact)
+    markers = DEFAULT_MURMUR_MOCK_MARKERS.get(contact_id)
+    if not markers:
+        return False
+    avatar = str(contact.get("avatar") or "")
+    if markers["avatar"] and markers["avatar"] in avatar:
+        return True
+    if _murmur_contact_child_ids(contact, "topics") & markers["topics"]:
+        return True
+    if _murmur_contact_child_ids(contact, "messages") & markers["messages"]:
+        return True
+    return False
+
+
+def _split_default_murmur_mock_contacts(contacts: Any) -> tuple[list[dict[str, Any]], int, bool]:
+    if not isinstance(contacts, list):
+        return [], 0, False
+    real_contacts: list[dict[str, Any]] = []
+    removed = 0
+    for contact in contacts:
+        if _is_default_murmur_mock_contact(contact):
+            removed += 1
+        elif isinstance(contact, dict):
+            real_contacts.append(contact)
+    only_default_mock = bool(contacts) and removed == len(contacts)
+    return real_contacts, removed, only_default_mock
+
+
+def _sanitize_murmur_sync_payload(payload: Any) -> tuple[dict[str, Any], int, bool]:
+    safe_payload = payload.copy() if isinstance(payload, dict) else {}
+    if not isinstance(safe_payload.get("contacts"), list):
+        return safe_payload, 0, False
+    real_contacts, removed, only_default_mock = _split_default_murmur_mock_contacts(safe_payload.get("contacts"))
+    if removed:
+        safe_payload["contacts"] = real_contacts
+    return safe_payload, removed, only_default_mock
+
+
+async def _cleanup_default_murmur_mock_sync_contacts(existing: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    data = existing
+    if data is None:
+        data, _ = await _load_setting_dict(SYNC_GLOBAL_KEY)
+    if not isinstance(data, dict) or not isinstance(data.get("payload"), dict):
+        return {"cleaned": False, "removed_default_mock_contacts": 0}
+    payload, removed, only_default_mock = _sanitize_murmur_sync_payload(data.get("payload"))
+    if not removed:
+        return {"cleaned": False, "removed_default_mock_contacts": 0, "ignored_default_mock": False}
+    now = datetime.now(timezone.utc).isoformat()
+    next_data = {
+        **data,
+        "server_updated_at": now,
+        "payload": payload,
+    }
+    row = await db.set_setting(SYNC_GLOBAL_KEY, json.dumps(next_data, ensure_ascii=False))
+    return {
+        "cleaned": True,
+        "ignored_default_mock": only_default_mock,
+        "removed_default_mock_contacts": removed,
+        "server_updated_at": row.get("updated_at") or now,
+    }
 
 
 def _agent_profile_key(agent_id: str) -> str:
@@ -1332,17 +1428,32 @@ async def sync_push(body: SyncPushPayload):
         raise HTTPException(status_code=400, detail="device_id is required")
     if not isinstance(body.payload, dict):
         raise HTTPException(status_code=400, detail="payload must be an object")
+    payload, removed_default_mock_contacts, only_default_mock = _sanitize_murmur_sync_payload(body.payload)
+
+    if only_default_mock:
+        cleanup = await _cleanup_default_murmur_mock_sync_contacts()
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "default_mock_guard",
+            "removed_default_mock_contacts": removed_default_mock_contacts,
+            "cleanup": cleanup,
+        }
 
     now = datetime.now(timezone.utc).isoformat()
     data = {
         "device_id": device_id,
         "client_updated_at": body.client_updated_at,
         "server_updated_at": now,
-        "payload": body.payload,
+        "payload": payload,
     }
     try:
         row = await db.set_setting(SYNC_GLOBAL_KEY, json.dumps(data, ensure_ascii=False))
-        return {"ok": True, "server_updated_at": row.get("updated_at") or now}
+        return {
+            "ok": True,
+            "server_updated_at": row.get("updated_at") or now,
+            "removed_default_mock_contacts": removed_default_mock_contacts,
+        }
     except Exception as exc:
         logger.exception("sync push failed")
         raise HTTPException(status_code=502, detail=f"Database sync failed: {exc}")
@@ -1359,6 +1470,16 @@ async def sync_pull(device_id: str, since: Optional[str] = None):
     except Exception:
         return {"has_update": False, "server_updated_at": None}
 
+    payload, removed_default_mock_contacts, only_default_mock = _sanitize_murmur_sync_payload(data.get("payload") or {})
+    ignored_default_mock = bool(removed_default_mock_contacts)
+    if removed_default_mock_contacts:
+        cleanup = await _cleanup_default_murmur_mock_sync_contacts(data)
+        data = {
+            **data,
+            "payload": payload,
+            "server_updated_at": cleanup.get("server_updated_at") or datetime.now(timezone.utc).isoformat(),
+        }
+
     server_updated_at = str(data.get("server_updated_at") or row.get("updated_at") or "")
     if since and server_updated_at and server_updated_at <= since:
         return {"has_update": False, "server_updated_at": server_updated_at}
@@ -1367,9 +1488,18 @@ async def sync_pull(device_id: str, since: Optional[str] = None):
         "has_update": True,
         "server_updated_at": server_updated_at,
         "source_device_id": data.get("device_id") or "",
-        "payload": data.get("payload") or {},
+        "payload": payload,
         "is_self": (data.get("device_id") or "") == (device_id or ""),
+        "ignored_default_mock": ignored_default_mock,
+        "default_mock_contacts_removed": removed_default_mock_contacts,
+        "default_mock_contacts_only": only_default_mock,
     }
+
+
+@extra_api.post("/sync/cleanup-default-mock")
+async def sync_cleanup_default_mock():
+    cleanup = await _cleanup_default_murmur_mock_sync_contacts()
+    return {"ok": True, **cleanup}
 
 
 # ══════════ 待办 ══════════
