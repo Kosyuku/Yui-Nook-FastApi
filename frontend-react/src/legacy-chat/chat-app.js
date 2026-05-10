@@ -223,6 +223,12 @@
             signature: '\u7ba1\u7406\u4e2a\u4eba\u8d44\u6599\u4e0e\u57fa\u7840\u504f\u597d',
         },
         newContactAvatar: '',
+        newContactDraft: {
+            name: '',
+            agentId: '',
+            bio: '',
+            avatar: '',
+        },
         showAttach: false,
         contactQuickActionEditorId: '',
         contactQuickMcpMenuOpen: false,
@@ -1543,6 +1549,97 @@
         return state.rpRooms.find((item) => item.room_id === state.currentRpRoomId) || null;
     }
 
+    function createNewContactDraft() {
+        return { name: '', agentId: '', bio: '', avatar: '' };
+    }
+
+    function normalizeNewContactAgentId(value) {
+        return String(value || '').trim().replace(/^@+/, '').toLowerCase();
+    }
+
+    function contactDefaults(contact = {}) {
+        const id = String(contact.id || '').trim() || `c${Date.now()}`;
+        const chatTheme = getContactChatThemeKey(contact);
+        return {
+            id,
+            name: String(contact.name || id),
+            bio: String(contact.bio || '\u8fd9\u662f\u65b0\u6765\u7684\u8054\u7cfb\u4eba'),
+            status: String(contact.status || '\u5728\u7ebf'),
+            handle: String(contact.handle || `@${id}`),
+            roleTag: String(contact.roleTag || ''),
+            theme: bubbleThemeToRoomTheme(chatTheme),
+            chatTheme,
+            bubbleTheme: getChatThemeLabel(chatTheme),
+            unread: Number(contact.unread || 0),
+            pinned: !!contact.pinned,
+            lastMessage: String(contact.lastMessage || ''),
+            lastTime: String(contact.lastTime || ''),
+            avatar: String(contact.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=300&q=80'),
+            topics: Array.isArray(contact.topics) ? contact.topics : [],
+            messages: Array.isArray(contact.messages) ? contact.messages : [],
+            settings: {
+                model: 'gpt-5.4',
+                modelProviderId: getSlot('chat')?.providerId || 'openai',
+                temperature: 0.7,
+                topP: 0.9,
+                contextCount: 32,
+                thinkBudget: 24,
+                streamOutput: true,
+                reasoning_visibility: false,
+                proactiveEnabled: false,
+                proactiveFrequency: 30,
+                memoryEnabled: true,
+                ...(contact.settings || {}),
+            },
+        };
+    }
+
+    function mergeContact(contact) {
+        const normalized = contactDefaults(contact);
+        const idx = state.contacts.findIndex((item) => String(item.id || '').toLowerCase() === normalized.id.toLowerCase());
+        if (idx >= 0) {
+            state.contacts[idx] = { ...state.contacts[idx], ...normalized };
+        } else {
+            state.contacts.unshift(normalized);
+        }
+        return normalized;
+    }
+
+    async function registerAgentForContact(contact) {
+        try {
+            const resp = await fetch(`${API_BASE}/api/agents`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    agent_id: contact.id,
+                    display_name: contact.name,
+                    avatar: contact.avatar || '',
+                    description: contact.bio || '',
+                    source: 'murmur',
+                    metadata: { from: 'murmur_contact' },
+                }),
+            });
+            if (resp.ok) return true;
+            if (resp.status === 409 || resp.status === 500) {
+                await fetch(`${API_BASE}/api/agents/${encodeURIComponent(contact.id)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        display_name: contact.name,
+                        avatar: contact.avatar || '',
+                        description: contact.bio || '',
+                        source: 'murmur',
+                        is_active: true,
+                    }),
+                }).catch(() => {});
+            }
+            return false;
+        } catch (error) {
+            console.warn('[agents] register contact failed', error);
+            return false;
+        }
+    }
+
     function formatRpTime(value) {
         return formatDisplayTime(value, { fallback: '' });
     }
@@ -1805,9 +1902,7 @@
     }
 
     function renderMoments() {
-        const moments = Array.isArray(state.moments) && state.moments.length > 0
-            ? state.moments
-            : structuredClone(MOMENTS);
+        const moments = Array.isArray(state.moments) ? state.moments : [];
         const currentAgent = byId(state.currentContactId) || state.contacts[0];
         return `
       <section class="moments-page white-canvas">
@@ -2603,7 +2698,8 @@
     }
 
     function renderNewContact() {
-        const avatar = state.newContactAvatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=300&q=80';
+        const draft = state.newContactDraft || {};
+        const avatar = draft.avatar || state.newContactAvatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=300&q=80';
         return `
       <section class="new-contact-page page-block">
         <div class="settings-group glass-frost ai-panel new-contact-card">
@@ -2617,15 +2713,15 @@
           </div>
           <div class="new-contact-field">
             <label for="nc-name">\u6635\u79f0</label>
-            <input id="nc-name" class="ai-input" placeholder="\u65b0\u8054\u7cfb\u4eba\u79f0\u547c" />
+            <input id="nc-name" class="ai-input" placeholder="\u65b0\u8054\u7cfb\u4eba\u79f0\u547c" value="${escapeHtml(draft.name || '')}" />
           </div>
           <div class="new-contact-field">
             <label for="nc-agent-id">Agent ID</label>
-            <input id="nc-agent-id" class="ai-input" placeholder="ayan" inputmode="latin" autocomplete="off" />
+            <input id="nc-agent-id" class="ai-input" placeholder="ayan" inputmode="latin" autocomplete="off" value="${escapeHtml(draft.agentId || '')}" />
           </div>
           <div class="new-contact-field">
             <label for="nc-bio">\u8054\u7cfb\u4eba\u7b80\u4ecb</label>
-            <input id="nc-bio" class="ai-input" placeholder="\u4e00\u53e5\u7b80\u77ed\u7684\u63cf\u8ff0" />
+            <input id="nc-bio" class="ai-input" placeholder="\u4e00\u53e5\u7b80\u77ed\u7684\u63cf\u8ff0" value="${escapeHtml(draft.bio || '')}" />
           </div>
           <button class="bottom-tab active new-contact-submit" data-action="save-new-contact">\u4fdd\u5b58\u5e76\u6dfb\u52a0\u8054\u7cfb\u4eba</button>
         </div>
@@ -3611,6 +3707,7 @@
         }
 
         if (action === 'new-contact') {
+            state.newContactDraft = createNewContactDraft();
             state.newContactAvatar = '';
             state.currentView = 'newContact';
             render();
@@ -3623,11 +3720,16 @@
         }
 
         if (action === 'save-new-contact') {
-            const name = document.getElementById('nc-name')?.value?.trim();
-            const rawAgentId = document.getElementById('nc-agent-id')?.value?.trim();
-            const normalizedAgentId = String(rawAgentId || '').replace(/^@+/, '').toLowerCase();
-            const bio = document.getElementById('nc-bio')?.value?.trim();
-            const avatar = state.newContactAvatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=300&q=80';
+            state.newContactDraft = {
+                ...(state.newContactDraft || {}),
+                name: document.getElementById('nc-name')?.value?.trim() || state.newContactDraft?.name || '',
+                agentId: document.getElementById('nc-agent-id')?.value?.trim() || state.newContactDraft?.agentId || '',
+                bio: document.getElementById('nc-bio')?.value?.trim() || state.newContactDraft?.bio || '',
+            };
+            const name = String(state.newContactDraft.name || '').trim();
+            const normalizedAgentId = normalizeNewContactAgentId(state.newContactDraft.agentId);
+            const bio = String(state.newContactDraft.bio || '').trim();
+            const avatar = state.newContactDraft.avatar || state.newContactAvatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=300&q=80';
 
             if (!name) {
                 state.toast = '\u8bf7\u586b\u5199\u8054\u7cfb\u4eba\u6635\u79f0';
@@ -3651,7 +3753,7 @@
             }
 
             const id = normalizedAgentId || ('c' + Date.now());
-            state.contacts.unshift({
+            const contact = mergeContact({
                 id, name, bio: bio || '\u8fd9\u662f\u65b0\u6765\u7684\u8054\u7cfb\u4eba',
                 status: '\u5728\u7ebf', handle: '@' + id,
                 theme: 'rose', unread: 0,
@@ -3662,10 +3764,15 @@
                 },
                 topics: [], messages: []
             });
-            state.toast = '\u5df2\u6dfb\u52a0\u8054\u7cfb\u4eba';
+            const registered = await registerAgentForContact(contact);
+            persistLocalSnapshot();
+            scheduleSyncPush(100);
+            state.newContactDraft = createNewContactDraft();
+            state.newContactAvatar = '';
+            state.toast = registered ? '\u5df2\u6dfb\u52a0\u8054\u7cfb\u4eba' : '\u5df2\u672c\u5730\u6dfb\u52a0\uff0c\u540e\u7aef\u767b\u8bb0\u5931\u8d25';
             state.currentView = 'list';
             render();
-            window.setTimeout(() => { state.toast = ''; render(); }, 1200);
+            window.setTimeout(() => { state.toast = ''; render(); }, registered ? 1200 : 1800);
         }
 
         if (action === 'open-contact-avatar') {
@@ -3916,6 +4023,14 @@
 
     function handleInput(event) {
         const target = event.target;
+        if (target?.id === 'nc-name' || target?.id === 'nc-agent-id' || target?.id === 'nc-bio') {
+            state.newContactDraft = {
+                ...(state.newContactDraft || {}),
+                ...(target.id === 'nc-name' ? { name: target.value || '' } : {}),
+                ...(target.id === 'nc-agent-id' ? { agentId: target.value || '' } : {}),
+                ...(target.id === 'nc-bio' ? { bio: target.value || '' } : {}),
+            };
+        }
         if (target.dataset.action === 'slide-contact') {
             const c = byId(state.currentContactId);
             const key = target.dataset.key;
@@ -3943,12 +4058,16 @@
     const LOCAL_STATE_KEY = 'murmur_local_state_v1';
     const SYNC_META_KEY = 'murmur_sync_meta_v1';
     const DEVICE_ID_KEY = 'murmur_device_id_v1';
+    const DEFAULT_CONTACT_IDS = new Set(CONTACTS.map((item) => item.id));
+    const DEFAULT_MOMENT_IDS = new Set(MOMENTS.map((item) => item.id));
 
     let syncPushTimer = null;
     let localPersistTimer = null;
     let syncInFlight = false;
     let syncApplyingRemote = false;
     let lastLocalSnapshotHash = '';
+    let defaultContactHashes = null;
+    let defaultMomentHashes = null;
 
     function getDeviceId() {
         try {
@@ -4018,39 +4137,72 @@
         }
     }
 
-    function applyLocalPayload(payload) {
-        if (!payload || typeof payload !== 'object') return;
-        if (Array.isArray(payload.contacts)) state.contacts = payload.contacts;
-        state.contacts = (state.contacts || []).map((contact) => {
-            const chatTheme = getContactChatThemeKey(contact);
-            return {
-                ...contact,
-                chatTheme,
-                bubbleTheme: getChatThemeLabel(chatTheme),
-                theme: bubbleThemeToRoomTheme(chatTheme),
-                settings: {
-                    model: 'gpt-5.4',
-                    modelProviderId: getSlot('chat')?.providerId || 'openai',
-                    temperature: 0.7,
-                    topP: 0.9,
-                    contextCount: 32,
-                    thinkBudget: 24,
-                    streamOutput: true,
-                    reasoning_visibility: false,
-                    proactiveEnabled: false,
-                    proactiveFrequency: 30,
-                    memoryEnabled: true,
-                    ...(contact?.settings || {}),
-                },
-            };
+    function getDefaultContactHashes() {
+        if (!defaultContactHashes) {
+            defaultContactHashes = new Map(CONTACTS.map((item) => {
+                const normalized = contactDefaults(item);
+                return [normalized.id, snapshotHash(normalized)];
+            }));
+        }
+        return defaultContactHashes;
+    }
+
+    function getDefaultMomentHashes() {
+        if (!defaultMomentHashes) {
+            defaultMomentHashes = new Map(MOMENTS.map((item) => {
+                const normalized = normalizeMoment(item);
+                return [normalized.id, snapshotHash(normalized)];
+            }));
+        }
+        return defaultMomentHashes;
+    }
+
+    function contactsHaveRealData(contacts) {
+        if (!Array.isArray(contacts)) return false;
+        const defaults = getDefaultContactHashes();
+        return contacts.some((item) => {
+            const normalized = contactDefaults(item);
+            return !DEFAULT_CONTACT_IDS.has(normalized.id) || defaults.get(normalized.id) !== snapshotHash(normalized);
         });
-        if (Array.isArray(payload.moments)) state.moments = payload.moments;
+    }
+
+    function momentsHaveRealData(moments) {
+        if (!Array.isArray(moments)) return false;
+        const defaults = getDefaultMomentHashes();
+        return moments.some((item) => {
+            const normalized = normalizeMoment(item);
+            return !DEFAULT_MOMENT_IDS.has(normalized.id) || defaults.get(normalized.id) !== snapshotHash(normalized);
+        });
+    }
+
+    function applyLocalPayload(payload, { source = 'local' } = {}) {
+        if (!payload || typeof payload !== 'object') return;
+        if (Array.isArray(payload.contacts)) {
+            const nextContacts = payload.contacts.map((contact) => contactDefaults(contact));
+            if (contactsHaveRealData(nextContacts) || !contactsHaveRealData(state.contacts)) {
+                state.contacts = nextContacts;
+            } else {
+                console.warn(`[sync] ignored ${source} default contacts over existing real contacts`);
+            }
+        } else if (!Array.isArray(state.contacts) || !state.contacts.length) {
+            state.contacts = structuredClone(CONTACTS).map((contact) => contactDefaults(contact));
+        } else {
+            state.contacts = state.contacts.map((contact) => contactDefaults(contact));
+        }
+        if (Array.isArray(payload.moments)) {
+            const nextMoments = payload.moments.map(normalizeMoment);
+            if (momentsHaveRealData(nextMoments) || !momentsHaveRealData(state.moments)) {
+                state.moments = nextMoments;
+            } else {
+                console.warn(`[sync] ignored ${source} default moments over existing real moments`);
+            }
+        }
         if (Array.isArray(payload.actions)) state.actions = payload.actions;
         if (payload.globalSettings && typeof payload.globalSettings === 'object') {
-            state.globalSettings = payload.globalSettings;
+            state.globalSettings = { ...state.globalSettings, ...payload.globalSettings };
         }
         if (payload.accountProfile && typeof payload.accountProfile === 'object') {
-            state.accountProfile = payload.accountProfile;
+            state.accountProfile = { ...state.accountProfile, ...payload.accountProfile };
         }
         ensureAiSettings();
         syncLegacyAiSettings();
@@ -4062,7 +4214,7 @@
             if (!raw) return;
             const parsed = JSON.parse(raw);
             if (!parsed?.payload) return;
-            applyLocalPayload(parsed.payload);
+            applyLocalPayload(parsed.payload, { source: 'local' });
             lastLocalSnapshotHash = snapshotHash(parsed.payload);
         } catch { }
     }
@@ -4119,6 +4271,10 @@
     async function pullRemoteSnapshot() {
         if (syncInFlight) return;
         const meta = readSyncMeta();
+        if (meta.pending) {
+            await flushSyncPush();
+            if (readSyncMeta().pending) return;
+        }
         const params = new URLSearchParams({ device_id: getDeviceId() });
         if (meta.last_server_updated_at) params.set('since', meta.last_server_updated_at);
 
@@ -4134,7 +4290,7 @@
             }
 
             syncApplyingRemote = true;
-            applyLocalPayload(data.payload);
+            applyLocalPayload(data.payload, { source: 'remote' });
             persistLocalSnapshot();
             writeSyncMeta({
                 last_server_updated_at: data.server_updated_at || meta.last_server_updated_at || '',
@@ -5622,9 +5778,6 @@
 
     async function loadMoments({ silent = true } = {}) {
         try {
-            if (!Array.isArray(state.moments) || state.moments.length === 0) {
-                state.moments = structuredClone(MOMENTS);
-            }
             const qs = new URLSearchParams({
                 viewer_type: 'user',
                 viewer_id: 'me',
@@ -6963,9 +7116,20 @@
         if (target?.id === 'nc-avatar-file') {
             const file = target.files?.[0];
             if (!file) return;
+            state.newContactDraft = {
+                ...(state.newContactDraft || createNewContactDraft()),
+                name: document.getElementById('nc-name')?.value || state.newContactDraft?.name || '',
+                agentId: document.getElementById('nc-agent-id')?.value || state.newContactDraft?.agentId || '',
+                bio: document.getElementById('nc-bio')?.value || state.newContactDraft?.bio || '',
+            };
             const reader = new FileReader();
             reader.onload = () => {
-                state.newContactAvatar = typeof reader.result === 'string' ? reader.result : '';
+                const nextAvatar = typeof reader.result === 'string' ? reader.result : '';
+                state.newContactDraft = {
+                    ...(state.newContactDraft || createNewContactDraft()),
+                    avatar: nextAvatar,
+                };
+                state.newContactAvatar = nextAvatar;
                 render();
             };
             reader.readAsDataURL(file);

@@ -5318,7 +5318,6 @@ button.model-choice-item {
 .chat-shell .icon-circle,
 .chat-shell .ghost-circle,
 .chat-shell .soft-mini,
-.chat-shell .send-round,
 .chat-shell .bubble-mini-btn,
 .chat-shell .cot-log-tool-btn,
 .chat-shell .filter-btn,
@@ -5336,9 +5335,7 @@ button.model-choice-item {
 .chat-shell .ai-chip,
 .chat-shell .model-chip,
 .chat-shell .qae-select-trigger,
-.chat-shell .qae-select-option,
-.chat-shell .moment-menu-horizontal .icon-btn,
-.chat-shell .moment-action-menu-wrap .tiny-icon {
+.chat-shell .qae-select-option {
   background:
     linear-gradient(180deg, rgba(255,255,255,0.58), rgba(255,255,255,0.34));
   border: 1px solid rgba(232, 222, 228, 0.72);
@@ -5352,7 +5349,6 @@ button.model-choice-item {
 .chat-shell .icon-circle::before,
 .chat-shell .ghost-circle::before,
 .chat-shell .soft-mini::before,
-.chat-shell .send-round::before,
 .chat-shell .cot-log-tool-btn::before {
   display: none;
 }
@@ -5379,7 +5375,6 @@ button.model-choice-item {
 .chat-shell .icon-circle:active,
 .chat-shell .ghost-circle:active,
 .chat-shell .soft-mini:active,
-.chat-shell .send-round:active,
 .chat-shell .bubble-mini-btn:active,
 .chat-shell .ghost-action:active,
 .chat-shell .bottom-tab:active,
@@ -5406,6 +5401,46 @@ button.model-choice-item {
     0 8px 22px rgba(86, 68, 80, 0.07);
   -webkit-backdrop-filter: blur(18px) saturate(1.14);
   backdrop-filter: blur(18px) saturate(1.14);
+}
+
+.chat-shell .icon-btn svg,
+.chat-shell .moment-menu-horizontal .icon-btn,
+.chat-shell .moment-action-menu-wrap .tiny-icon {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.chat-shell .send-round,
+.chat-shell .mini-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-shell .composer-card .send-round {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  flex: 0 0 34px;
+}
+
+.chat-shell .mini-send {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  flex: 0 0 20px;
+}
+
+.chat-shell input::placeholder,
+.chat-shell textarea::placeholder {
+  background: transparent;
+  box-shadow: none;
 }
 
 #chat-app-root {

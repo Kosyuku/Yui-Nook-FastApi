@@ -95,6 +95,22 @@ export async function getMediaItemUrl(id, target = "file") {
   return data.url || "";
 }
 
+export async function updateMediaItem(id, payload) {
+  const data = await jsonRequest(`/api/media/items/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data.item;
+}
+
+export async function updateMediaItemLyrics(id, payload) {
+  const data = await jsonRequest(`/api/media/items/${encodeURIComponent(id)}/lyrics`, {
+    method: "PATCH",
+    body: JSON.stringify(payload || {}),
+  });
+  return data.item;
+}
+
 export async function withMediaUrls(items, target = "file") {
   return Promise.all(
     (items || []).map(async (item) => {
