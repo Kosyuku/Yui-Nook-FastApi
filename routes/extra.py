@@ -143,6 +143,16 @@ class PhoneStatePayload(BaseModel):
     data: dict[str, Any]
 
 
+class LoveWidgetDailyLinesPayload(BaseModel):
+    aiId: str = "yui"
+    aiName: str = "Yui"
+    aiTagline: str = ""
+    partnerName: str = ""
+    userName: str = ""
+    currentMessage: str = ""
+    date: str = ""
+
+
 class ActivityEventPayload(BaseModel):
     eventType: str
     eventValue: str = ""
@@ -934,6 +944,119 @@ async def save_phone_state(key: str, body: PhoneStatePayload):
         raise HTTPException(status_code=400, detail="key is required")
     row = await db.set_setting(f"phone_state_{safe_key}", json.dumps(body.data, ensure_ascii=False))
     return {"ok": True, "key": safe_key, "data": body.data, "updated_at": row.get("updated_at")}
+
+
+def _fallback_love_widget_lines(body: LoveWidgetDailyLinesPayload) -> list[str]:
+    name = (body.aiName or "ta").strip()
+    partner = (body.partnerName or "你").strip()
+    tone = (body.aiTagline or "").strip()
+    if "俏皮" in tone:
+        return [
+            f"{partner}，今天也欠我一个笑。",
+            "路过一天，顺手把想你也带上。",
+            "别装没看见，我在等你点头。",
+            "今天的好运，先押在你身上。",
+            "想见你这事，暂时不讲道理。",
+        ]
+    if "清冷" in tone:
+        return [
+            "风很轻，我想起你时也是。",
+            f"{partner}，今天适合慢慢靠近。",
+            "有些话不急，留到你抬眼。",
+            "我把安静留给你，也把想念留给你。",
+            "今日无事，只是心里有你。",
+        ]
+    if "元气" in tone:
+        return [
+            "今天也要精神一点，我在你这边。",
+            f"{partner}，把手伸来，好运分你一半。",
+            "出门前记得带上我准备的喜欢。",
+            "今天要亮一点，别输给天气。",
+            "想你这件事，我已经完成满分。",
+        ]
+    return [
+        f"{partner}，今天也想见你呢。",
+        "醒来第一件小事，是把你放进心里。",
+        "今天的温柔，先替你收好。",
+        "不用说很多，我一直都在。",
+        f"{name} 给你留了一点甜。",
+    ]
+
+
+def _parse_love_widget_lines(text: str) -> list[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    start = raw.find("[")
+    end = raw.rfind("]")
+    candidates: list[Any] = []
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(raw[start : end + 1])
+            if isinstance(parsed, list):
+                candidates = parsed
+        except Exception:
+            candidates = []
+    if not candidates:
+        candidates = [line.strip(" -•\t\r\n\"'") for line in raw.splitlines()]
+    lines: list[str] = []
+    for item in candidates:
+        line = str(item or "").strip()
+        if not line:
+            continue
+        if len(line) > 36:
+            line = line[:36].rstrip("，。,. ") + "…"
+        if line not in lines:
+            lines.append(line)
+        if len(lines) >= 5:
+            break
+    return lines
+
+
+@extra_api.post("/love-widget/daily-lines")
+async def love_widget_daily_lines(body: LoveWidgetDailyLinesPayload):
+    today = (body.date or datetime.now(timezone.utc).date().isoformat()).strip()
+    agent = None
+    try:
+        if body.aiId:
+            agent = await db.get_agent(body.aiId, include_inactive=False)
+    except Exception as exc:
+        logger.warning("love_widget_daily_lines: agent lookup failed: %s", exc)
+    ai_name = (agent or {}).get("display_name") or (body.aiName or body.aiId or "Yui").strip()
+    ai_tagline = (agent or {}).get("description") or (body.aiTagline or "").strip()
+    ai_persona = (agent or {}).get("persona") or ""
+    partner = (body.partnerName or "你").strip()
+    user_name = (body.userName or "我").strip()
+    prompt = (
+        "你是手机恋爱组件里的 AI 伴侣。请为今天准备 5 句短句。\n"
+        "要求：中文为主，每句 8 到 22 个字；亲近、自然、像当天主动准备的小纸条；不要编号；不要解释；"
+        "只返回 JSON 字符串数组。\n\n"
+        f"日期：{today}\n"
+        f"AI 名字：{ai_name}\n"
+        f"AI 气质：{ai_tagline}\n"
+        f"AI 人设：{ai_persona}\n"
+        f"用户名字：{user_name}\n"
+        f"伴侣名字：{partner}\n"
+        f"当前句子：{body.currentMessage or ''}\n"
+    )
+    messages = [
+        {"role": "system", "content": "Return valid JSON only. No markdown."},
+        {"role": "user", "content": prompt},
+    ]
+    text, model_info = await _collect_slot_text("chat", messages, temperature=0.85)
+    lines = [] if _looks_like_model_failure(text) else _parse_love_widget_lines(text)
+    source = "model"
+    if len(lines) < 3:
+        lines = _fallback_love_widget_lines(body)
+        source = "fallback"
+    return {
+        "ok": True,
+        "date": today,
+        "aiId": body.aiId,
+        "lines": lines[:5],
+        "source": source,
+        "model": model_info,
+    }
 
 
 ACTIVITY_EVENT_SHORTCUT_EXAMPLES: list[dict[str, Any]] = [
