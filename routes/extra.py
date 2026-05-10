@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 import httpx
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, HTTPException, Response, UploadFile, File, Form, Query
 from pydantic import BaseModel
 
 import ai_runtime
@@ -656,16 +656,49 @@ async def delete_media_item(item_id: str, delete_object: bool = False):
 
 @extra_api.get("/agents")
 async def list_agents(include_inactive: bool = False):
-    return {"agents": await db.list_agents(include_inactive=include_inactive)}
+    return Response(
+        content=json.dumps({"agents": await db.list_agents(include_inactive=include_inactive)}, ensure_ascii=False),
+        media_type="application/json",
+        headers={"content-type": "application/json; charset=utf-8"},
+    )
 
 
 @extra_api.post("/agents")
 async def create_agent(body: AgentCreatePayload):
+    payload = body.model_dump()
+    existing = await db.get_agent(payload.get("agent_id"), include_inactive=True)
+    if existing:
+        agent = await db.update_agent(
+            payload["agent_id"],
+            display_name=payload.get("display_name"),
+            avatar=payload.get("avatar"),
+            description=payload.get("description"),
+            persona=payload.get("persona"),
+            source=payload.get("source"),
+            metadata=payload.get("metadata"),
+            is_active=True,
+        )
+        return {"agent": agent or existing, "existed": True}
     try:
-        agent = await db.create_agent(**body.model_dump())
+        agent = await db.create_agent(**payload)
     except Exception as exc:
+        detail = str(exc)
+        if any(token in detail.lower() for token in ("already exists", "duplicate", "23505", "unique")):
+            existing = await db.get_agent(payload.get("agent_id"), include_inactive=True)
+            if existing:
+                agent = await db.update_agent(
+                    payload["agent_id"],
+                    display_name=payload.get("display_name"),
+                    avatar=payload.get("avatar"),
+                    description=payload.get("description"),
+                    persona=payload.get("persona"),
+                    source=payload.get("source"),
+                    metadata=payload.get("metadata"),
+                    is_active=True,
+                )
+                return {"agent": agent or existing, "existed": True}
         raise _agent_http_error(exc)
-    return {"agent": agent}
+    return {"agent": agent, "existed": False}
 
 
 @extra_api.post("/agents/resolve")
