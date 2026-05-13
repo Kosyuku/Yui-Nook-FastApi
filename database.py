@@ -7146,28 +7146,34 @@ async def create_extracted_item(
                     return rows[0]
             except Exception:
                 pass
-            message = str(exc).lower()
-            can_retry_plain_insert = (
-                "on conflict" in message
-                or "on_conflict" in message
-                or "42p10" in message
-                or "unique or exclusion constraint" in message
-            )
-            if can_retry_plain_insert:
+            fallback_payloads = []
+            plain_payload = dict(payload)
+            fallback_payloads.append(plain_payload)
+            compat_payload = dict(payload)
+            compat_payload.pop("dedupe_key", None)
+            compat_payload.pop("handled_at", None)
+            fallback_payloads.append(compat_payload)
+            minimal_payload = {
+                "id": item_id,
+                "type": type,
+                "title": title,
+                "content": content,
+                "target_module": target_module,
+                "status": status,
+                "created_at": now,
+                "updated_at": now,
+            }
+            fallback_payloads.append(minimal_payload)
+            last_error = exc
+            for fallback_payload in fallback_payloads:
                 try:
                     return await _supabase_insert_verified(
                         settings.supabase_extracted_items_table,
-                        payload,
+                        fallback_payload,
                     )
-                except Exception:
-                    compat_payload = dict(payload)
-                    compat_payload.pop("dedupe_key", None)
-                    compat_payload.pop("handled_at", None)
-                    return await _supabase_insert_verified(
-                        settings.supabase_extracted_items_table,
-                        compat_payload,
-                    )
-            raise
+                except Exception as retry_exc:
+                    last_error = retry_exc
+            raise last_error
 
     db = await get_db()
     try:
