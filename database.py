@@ -7134,15 +7134,18 @@ async def create_extracted_item(
                 payload,
                 on_conflict="dedupe_key",
             )
-        except Exception:
+        except Exception as exc:
             # dedupe conflict — fetch existing
-            rows = await _supabase_select(
-                settings.supabase_extracted_items_table,
-                filters={"dedupe_key": f"eq.{dk}"},
-                limit=1,
-            )
-            if rows:
-                return rows[0]
+            try:
+                rows = await _supabase_select(
+                    settings.supabase_extracted_items_table,
+                    filters={"dedupe_key": f"eq.{dk}"},
+                    limit=1,
+                )
+                if rows:
+                    return rows[0]
+            except Exception:
+                pass
             message = str(exc).lower()
             can_retry_plain_insert = (
                 "on conflict" in message
@@ -7151,10 +7154,19 @@ async def create_extracted_item(
                 or "unique or exclusion constraint" in message
             )
             if can_retry_plain_insert:
-                return await _supabase_insert_verified(
-                    settings.supabase_extracted_items_table,
-                    payload,
-                )
+                try:
+                    return await _supabase_insert_verified(
+                        settings.supabase_extracted_items_table,
+                        payload,
+                    )
+                except Exception:
+                    compat_payload = dict(payload)
+                    compat_payload.pop("dedupe_key", None)
+                    compat_payload.pop("handled_at", None)
+                    return await _supabase_insert_verified(
+                        settings.supabase_extracted_items_table,
+                        compat_payload,
+                    )
             raise
 
     db = await get_db()
