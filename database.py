@@ -7143,6 +7143,18 @@ async def create_extracted_item(
             )
             if rows:
                 return rows[0]
+            message = str(exc).lower()
+            can_retry_plain_insert = (
+                "on conflict" in message
+                or "on_conflict" in message
+                or "42p10" in message
+                or "unique or exclusion constraint" in message
+            )
+            if can_retry_plain_insert:
+                return await _supabase_insert_verified(
+                    settings.supabase_extracted_items_table,
+                    payload,
+                )
             raise
 
     db = await get_db()
