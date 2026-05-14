@@ -151,6 +151,24 @@ function StageAtelierScreen({ onClose } = {}) {
   const [realAis, setRealAis] = use4(fallbackAis);
   const skipNextAutoMessageRef = useRef4(false);
 
+  // Load remote config on mount and merge into local state
+  useEffect4(() => {
+    fetch(apiUrl('/api/phone/state/love_widget_config'))
+      .then(r => r.ok ? r.json() : null)
+      .then(json => {
+        const remote = json?.data;
+        if (!remote || typeof remote !== 'object') return;
+        if (remote.info) setInfo(prev => ({ ...prev, ...remote.info }));
+        if (remote.widgetId) setWidgetId(remote.widgetId);
+        if (remote.size) setSize(remote.size);
+        if (remote.aiId) setAiId(remote.aiId);
+        if (typeof remote.glass === 'number') setGlass(remote.glass);
+        if (typeof remote.accentIdx === 'number') setAccentIdx(remote.accentIdx);
+        if (typeof remote.wallIdx === 'number') setWallIdx(remote.wallIdx);
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect4(() => {
     const ctrl = new AbortController();
     fetch(apiUrl('/api/agents'), { signal: ctrl.signal })
@@ -266,6 +284,12 @@ function StageAtelierScreen({ onClose } = {}) {
     const next = currentConfig(liveInfo);
     setInfo(next.info);
     saveLoveWidgetConfig(next);
+    // Sync partner info + widget config to backend (Supabase)
+    fetch(apiUrl('/api/phone/state/love_widget_config'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: next }),
+    }).catch(() => {});
   };
 
   const handleReset = () => {
