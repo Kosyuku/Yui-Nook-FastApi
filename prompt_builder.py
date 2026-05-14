@@ -1190,3 +1190,47 @@ def _format_tool_descriptions(tool_profile: str = "chat") -> str:
             desc = desc[:max_desc_chars] + "..."
         lines.append(f"- `{name}`: {desc}")
     return "\n".join(lines)
+
+
+# ── Anthropic native cache-control payload ─────────────────────────────────
+
+def to_anthropic_payload(blocks: list[PromptBlock]) -> dict:
+    """Convert BuiltPrompt blocks to Anthropic Messages API payload format.
+
+    Anthropic native API differences vs OpenAI-compat:
+    - System prompt lives in a top-level "system" array, NOT as a message.
+    - Content blocks can carry "cache_control": {"type": "ephemeral"} to mark
+      prefix-cache breakpoints.
+    - cache_control is injected at the end of the Fixed Block (most stable
+      prefix) and optionally at the end of the Summary Block.
+
+    Returns:
+        {
+            "system": [{"type": "text", "text": ..., "cache_control": ...}, ...],
+            "messages": [{"role": "user"|"assistant", "content": ...}, ...],
+        }
+    The caller merges this into the Anthropic /v1/messages request payload.
+    """
+    system_blocks: list[dict] = []
+    messages: list[dict] = []
+
+    # Blocks that should receive a cache breakpoint after them
+    CACHE_BREAKPOINT_NAMES = {"fixed", "summary"}
+
+    for block in blocks:
+        if not block.content.strip():
+            continue
+        if block.role == "system":
+            cb: dict = {"type": "text", "text": block.content}
+            if block.name in CACHE_BREAKPOINT_NAMES:
+                cb["cache_control"] = {"type": "ephemeral"}
+            system_blocks.append(cb)
+        else:
+            # user / assistant messages
+            messages.append({"role": block.role, "content": block.content})
+
+    # Anthropic requires at least one user message
+    if not messages:
+        messages.append({"role": "user", "content": "(no user message)"})
+
+    return {"system": system_blocks, "messages": messages}
