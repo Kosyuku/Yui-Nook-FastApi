@@ -683,6 +683,9 @@ async def chat(body: ChatRequest):
             tool_calls_buffer = {}
 
             try:
+                # 透传 blocks 给原生 Anthropic 适配器用于 cache_control 注入
+                if built_prompt is not None:
+                    override_kwargs.setdefault("_blocks", built_prompt.blocks)
                 async for chunk in adapter.chat_stream(
                     current_messages,
                     temperature=body.temperature if body.temperature is not None else 0.7,

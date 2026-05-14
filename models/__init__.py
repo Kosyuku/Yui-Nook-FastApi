@@ -437,6 +437,161 @@ class OpenAICompatAdapter(ModelAdapter):
         return outputs
 
 
+# ==================== Anthropic Native Adapter ====================
+
+def _is_native_anthropic_url(base_url: str) -> bool:
+    """True only for the real Anthropic API, not OpenRouter/proxies."""
+    return "api.anthropic.com" in str(base_url or "").lower()
+
+
+class AnthropicNativeAdapter(ModelAdapter):
+    """Native Anthropic Messages API adapter with prompt-cache support.
+
+    Differences from OpenAICompatAdapter:
+    - POSTs to /v1/messages (Anthropic format, not OpenAI-compat).
+    - Accepts optional `_blocks` kwarg (list[PromptBlock]) to build the
+      payload with cache_control markers via to_anthropic_payload().
+    - Falls back to flat messages when no blocks are provided.
+    - Sends anthropic-beta: prompt-caching-2024-07-31 header.
+    - Parses Anthropic SSE events (content_block_delta, message_delta).
+    - Records cached_tokens from message_delta usage.
+    """
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.7,
+        **kwargs,
+    ) -> AsyncIterator[str | dict[str, Any]]:
+        from prompt_builder import to_anthropic_payload, PromptBlock
+
+        actual_api_key = kwargs.get("api_key") or self.config.api_key
+        actual_base_url = (kwargs.get("base_url") or self.config.base_url).rstrip("/")
+        actual_model = kwargs.get("model") or self.config.model
+
+        if not actual_base_url or not actual_api_key:
+            yield "\n\n❌ 缺少 API Key 或 Base URL，请在「系统设置」中配置。"
+            return
+
+        url = f"{actual_base_url}/v1/messages"
+
+        # Build Anthropic payload
+        blocks: list[PromptBlock] | None = kwargs.get("_blocks")
+        if blocks:
+            anthr = to_anthropic_payload(blocks)
+            system_payload = anthr["system"]
+            msg_payload = anthr["messages"]
+        else:
+            # Fallback: pull system out of the first system-role message
+            system_payload = []
+            msg_payload = []
+            for m in messages:
+                if m.get("role") == "system" and not system_payload:
+                    system_payload = [{"type": "text", "text": m["content"]}]
+                else:
+                    msg_payload.append(m)
+
+        # Anthropic requires at least one user message
+        if not msg_payload:
+            msg_payload = [{"role": "user", "content": "(no user message)"}]
+
+        payload: dict[str, Any] = {
+            "model": actual_model,
+            "max_tokens": kwargs.get("max_tokens", 4096),
+            "temperature": temperature,
+            "stream": True,
+            "messages": msg_payload,
+        }
+        if system_payload:
+            payload["system"] = system_payload
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": actual_api_key,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "prompt-caching-2024-07-31",
+        }
+
+        logger.info(
+            "AnthropicNativeAdapter: model=%s system_blocks=%d messages=%d cache_control=%s",
+            actual_model,
+            len(system_payload),
+            len(msg_payload),
+            any("cache_control" in b for b in system_payload),
+        )
+
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
+                if response.status_code != 200:
+                    body = await response.aread()
+                    error_text = body.decode("utf-8", errors="replace")
+                    logger.error("AnthropicNativeAdapter: HTTP %s: %s", response.status_code, error_text[:300])
+                    yield f"\n\n❌ Anthropic API 错误 {response.status_code}: {error_text[:200]}"
+                    return
+
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str in ("", "[DONE]"):
+                        continue
+                    try:
+                        data = json.loads(data_str)
+                    except Exception:
+                        continue
+
+                    event_type = data.get("type", "")
+
+                    # Text delta
+                    if event_type == "content_block_delta":
+                        delta = data.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            text = delta.get("text", "")
+                            if text:
+                                yield text
+
+                    # Usage (including cached_tokens)
+                    elif event_type == "message_delta":
+                        usage = data.get("usage", {})
+                        if usage:
+                            input_tokens = int(usage.get("input_tokens") or 0)
+                            output_tokens = int(usage.get("output_tokens") or 0)
+                            cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
+                            cache_read = int(usage.get("cache_read_input_tokens") or 0)
+                            yield {
+                                "type": "usage",
+                                "usage": {
+                                    "prompt_tokens": input_tokens,
+                                    "completion_tokens": output_tokens,
+                                    "total_tokens": input_tokens + output_tokens,
+                                    "cached_tokens": cache_read,
+                                    "prompt_tokens_details": {
+                                        "cached_tokens": cache_read,
+                                        "cache_creation_tokens": cache_creation,
+                                    },
+                                },
+                            }
+
+                    elif event_type == "message_start":
+                        # Initial usage before streaming
+                        usage = data.get("message", {}).get("usage", {})
+                        if usage:
+                            cache_read = int(usage.get("cache_read_input_tokens") or 0)
+                            if cache_read:
+                                logger.info(
+                                    "AnthropicNativeAdapter: cache_read_input_tokens=%d (prefix cache HIT)",
+                                    cache_read,
+                                )
+
+    def get_model_info(self) -> dict[str, str]:
+        return {
+            "provider": self.config.name,
+            "model": self.config.model or "",
+            "adapter": "AnthropicNativeAdapter",
+        }
+
+
 # ==================== 模型路由器 ====================
 
 # Provider 类型 → 适配器类 映射
@@ -449,6 +604,8 @@ ADAPTER_MAP: dict[str, type[ModelAdapter]] = {
     "deepseek": OpenAICompatAdapter,
     "openai": OpenAICompatAdapter,
     "custom": OpenAICompatAdapter,
+    # 原生 Anthropic API（api.anthropic.com）— 自动检测，不需要手动填
+    "anthropic_native": AnthropicNativeAdapter,
 }
 
 
@@ -460,9 +617,16 @@ class ModelRouter:
 
     def register(self, purpose: str, config: ProviderConfig):
         """注册一个 Provider（用途：chat / summary）"""
-        adapter_cls = ADAPTER_MAP.get(config.name, OpenAICompatAdapter)
+        # Native Anthropic API 自动检测：base_url 包含 api.anthropic.com
+        if _is_native_anthropic_url(config.base_url):
+            adapter_cls = AnthropicNativeAdapter
+        else:
+            adapter_cls = ADAPTER_MAP.get(config.name, OpenAICompatAdapter)
         self._adapters[purpose] = adapter_cls(config)
-        logger.info(f"已注册 [{purpose}] provider: {config.name} (model={config.model or 'echo'})")
+        logger.info(
+            "已注册 [%s] provider: %s adapter: %s (model=%s)",
+            purpose, config.name, adapter_cls.__name__, config.model or "echo",
+        )
 
     def get(self, purpose: str = "chat") -> ModelAdapter:
         """获取指定用途的适配器"""
