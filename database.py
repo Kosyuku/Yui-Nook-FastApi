@@ -4326,6 +4326,73 @@ async def list_recent_cot_logs(
     return [dict(row) for row in rows]
 
 
+async def list_memory_candidates(
+    *,
+    agent_id: str | None = None,
+    status: str = "candidate",
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """List daily_loop memory_candidate cot_log entries."""
+    safe_limit = max(1, min(int(limit or 30), 100))
+    normalized_agent = normalize_agent_id(agent_id) if agent_id else ""
+    if _use_supabase_data():
+        filters: dict[str, str] = {
+            "source": "eq.daily_loop",
+            "log_type": "eq.memory_candidate",
+            "status": f"eq.{status}",
+        }
+        if normalized_agent:
+            filters["agent_id"] = f"eq.{normalized_agent}"
+        try:
+            return await _supabase_select(
+                "cot_logs",
+                filters=filters,
+                order="created_at.desc",
+                limit=safe_limit,
+            )
+        except Exception as exc:
+            logger.debug("Supabase list_memory_candidates skipped: %s", exc)
+            return []
+    conn = await get_db()
+    where = ["source = ?", "log_type = ?", "status = ?"]
+    params: list[Any] = ["daily_loop", "memory_candidate", status]
+    if normalized_agent:
+        where.append("agent_id = ?")
+        params.append(normalized_agent)
+    query = "SELECT * FROM cot_logs WHERE " + " AND ".join(where) + " ORDER BY created_at DESC LIMIT ?"
+    params.append(safe_limit)
+    cursor = await conn.execute(query, params)
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def update_cot_log_status(log_id: str, status: str) -> bool:
+    """Update status field of a cot_log row."""
+    safe_id = str(log_id or "").strip()
+    safe_status = str(status or "").strip()[:40]
+    if not safe_id:
+        return False
+    now = _now()
+    if _use_supabase_data():
+        try:
+            rows = await _supabase_update_verified(
+                "cot_logs",
+                {"status": safe_status, "expires_at": now},
+                {"id": f"eq.{safe_id}"},
+            )
+            return bool(rows)
+        except Exception as exc:
+            logger.warning("Supabase update_cot_log_status failed: %s", exc)
+            return False
+    conn = await get_db()
+    cursor = await conn.execute(
+        "UPDATE cot_logs SET status = ? WHERE id = ?",
+        (safe_status, safe_id),
+    )
+    await conn.commit()
+    return cursor.rowcount > 0
+
+
 def _normalize_rp_room_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "room_id": str(row.get("room_id") or row.get("id") or ""),
