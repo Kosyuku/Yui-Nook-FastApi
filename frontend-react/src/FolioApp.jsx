@@ -303,6 +303,8 @@ export default function FolioApp({ onClose, agents = [] }) {
   const [activeActor, setActiveActor] = useState("user");
   const [importError, setImportError] = useState("");
   const [importing, setImporting] = useState(false);
+  const [migratingToR2, setMigratingToR2] = useState(false);
+  const [migrateResult, setMigrateResult] = useState(null); // {done, total, errors}
   const [activeTab, setActiveTab] = useState("全部");
   const [coverMenuOpen, setCoverMenuOpen] = useState(false);
   const [readingPageTop, setReadingPageTop] = useState(0);
@@ -486,6 +488,48 @@ export default function FolioApp({ onClose, agents = [] }) {
       setImporting(false);
     }
     e.target.value = "";
+  }
+
+  // ── Migrate local-only books to R2 ──────────────────────────────────────
+  async function handleMigrateToR2() {
+    if (mediaUploadProvider !== "r2") return;
+    const localBooks = (data.books || []).filter(b => !b.mediaItemId && b.chapters?.length > 0);
+    if (localBooks.length === 0) { setMigrateResult({ done: 0, total: 0, errors: [] }); return; }
+    setMigratingToR2(true);
+    setMigrateResult(null);
+    let done = 0; const errors = [];
+    for (const book of localBooks) {
+      try {
+        // Reconstruct text from chapters
+        const lines = [];
+        for (const ch of book.chapters) {
+          if (ch.title) lines.push(ch.title);
+          if (ch.content) lines.push(ch.content);
+        }
+        const text = lines.join("\n\n");
+        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const file = new File([blob], `${book.title || book.id}.txt`, { type: "text/plain" });
+        const mediaItem = await uploadMediaFile(file, {
+          type: "book",
+          title: book.title || book.id,
+          metadata: { source: "folio_migration", book_id: book.id },
+        });
+        // Update book record
+        updateData(prev => ({
+          ...prev,
+          books: prev.books.map(b => b.id === book.id
+            ? { ...b, mediaItemId: mediaItem?.id || "", storageProvider: "r2", storageKey: mediaItem?.storage_key || "" }
+            : b
+          ),
+        }));
+        done++;
+      } catch (err) {
+        console.warn("[folio] migrate to R2 failed", book.id, err);
+        errors.push(book.title || book.id);
+      }
+    }
+    setMigratingToR2(false);
+    setMigrateResult({ done, total: localBooks.length, errors });
   }
 
   function handleMouseUp(event) {
@@ -689,6 +733,25 @@ export default function FolioApp({ onClose, agents = [] }) {
           ))}
         </div>
         {importError && <div className="folio-error">{importError}</div>}
+        {/* R2 migration banner */}
+        {mediaUploadProvider === "r2" && (() => {
+          const unsynced = (data.books || []).filter(b => !b.mediaItemId && b.chapters?.length > 0).length;
+          if (unsynced === 0 && !migrateResult) return null;
+          return (
+            <div style={{ padding: "8px 14px", fontSize: 12, color: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.6)", borderBottom: "1px solid rgba(0,0,0,0.06)" }}>
+              {migrateResult ? (
+                <span>✓ 已同步 {migrateResult.done}/{migrateResult.total} 本{migrateResult.errors.length > 0 ? `，${migrateResult.errors.length} 本失败` : ""}</span>
+              ) : (
+                <>
+                  <span>{unsynced} 本书仅存本地</span>
+                  <button onClick={handleMigrateToR2} disabled={migratingToR2} style={{ fontSize: 11, padding: "2px 8px", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 6, background: "transparent", cursor: "pointer", color: "rgba(0,0,0,0.55)" }}>
+                    {migratingToR2 ? "同步中…" : "同步到云端 ↑"}
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })()}
         <div className="folio-shelf">
           {books.length === 0 && (
             <div className="folio-empty">
