@@ -2346,3 +2346,91 @@ async def delete_extracted_item(item_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="条目不存在")
     return {"ok": True}
+
+
+# ── Memory Candidates (daily_loop → formal memory) ────────────────────────
+
+class PromoteCandidateBody(BaseModel):
+    category: Optional[str] = None
+    importance: Optional[int] = None
+    tags: Optional[str] = None
+
+@extra_api.get("/consciousness/memory-candidates")
+async def list_memory_candidates_endpoint(
+    agent_id: Optional[str] = Query(None),
+    status: str = Query("candidate"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """列出 daily_loop 产出的记忆候选（等待人工或自动采纳）。"""
+    candidates = await db.list_memory_candidates(
+        agent_id=agent_id,
+        status=status,
+        limit=limit,
+    )
+    # 解析 content JSON，提取 candidate 字段
+    result = []
+    for row in candidates:
+        parsed: dict = {}
+        try:
+            parsed = json.loads(row.get("content") or "{}")
+        except Exception:
+            parsed = {}
+        result.append({
+            "id": row.get("id"),
+            "agent_id": row.get("agent_id"),
+            "status": row.get("status"),
+            "created_at": row.get("created_at"),
+            "summary": row.get("summary") or parsed.get("content", ""),
+            "content": parsed.get("content") or row.get("summary") or "",
+            "category": parsed.get("category") or parsed.get("tag") or "",
+            "importance": parsed.get("importance") or 3,
+        })
+    return {"candidates": result, "total": len(result)}
+
+
+@extra_api.post("/consciousness/memory-candidates/{log_id}/promote")
+async def promote_memory_candidate(
+    log_id: str,
+    body: PromoteCandidateBody = None,
+    agent_id: Optional[str] = Query(None),
+):
+    """采纳候选：写入正式 memory 表，标记 cot_log status=promoted。"""
+    body = body or PromoteCandidateBody()
+    rows = await db.list_memory_candidates(agent_id=agent_id, status="candidate", limit=100)
+    row = next((r for r in rows if str(r.get("id") or "") == log_id), None)
+    if not row:
+        raise HTTPException(status_code=404, detail="候选不存在或已处理")
+
+    parsed: dict = {}
+    try:
+        parsed = json.loads(row.get("content") or "{}")
+    except Exception:
+        pass
+
+    content = str(parsed.get("content") or row.get("summary") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="候选内容为空，无法写入")
+
+    category = body.category or parsed.get("category") or parsed.get("tag") or "recent_pending"
+    importance = body.importance or int(parsed.get("importance") or 3)
+    tags = body.tags or parsed.get("tag") or category
+
+    memory = await db.add_memory(
+        content=content,
+        category=category,
+        importance=importance,
+        tags=tags,
+        source="daily_loop_promoted",
+        agent_id=row.get("agent_id") or agent_id,
+    )
+    await db.update_cot_log_status(log_id, "promoted")
+    return {"ok": True, "memory": memory}
+
+
+@extra_api.delete("/consciousness/memory-candidates/{log_id}")
+async def dismiss_memory_candidate(log_id: str):
+    """忽略候选：标记 cot_log status=dismissed，不写入 memory。"""
+    ok = await db.update_cot_log_status(log_id, "dismissed")
+    if not ok:
+        raise HTTPException(status_code=404, detail="候选不存在")
+    return {"ok": True}
