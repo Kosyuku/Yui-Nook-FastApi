@@ -56,8 +56,31 @@ async def run_once(agent_id: str | None = None):
 
     await phase1_housekeeping()
     await phase2_produce_snapshot(agent_id=resolved_agent_id)
+    await phase3_extract_memories(agent_id=resolved_agent_id)
 
     logger.info("Consciousness loop: finished")
+
+
+async def phase3_extract_memories(agent_id: str | None = None):
+    """Phase 3: 从最近对话中提取值得长期记住的信息写入 memory 表。"""
+    resolved_agent_id = await db.resolve_agent_id(agent_id=agent_id, purpose="phase3_extract_memories")
+    logger.info("  Phase 3: memory extraction for agent %s", resolved_agent_id)
+    try:
+        from consciousness.memory_extraction import run_memory_extraction
+        result = await run_memory_extraction(resolved_agent_id)
+        logger.info(
+            "  -> memory extraction done: extracted=%d skipped=%d messages=%d",
+            result.get("extracted", 0),
+            result.get("skipped", 0),
+            result.get("messages_used", 0),
+        )
+        _status["last_memory_extraction"] = {
+            "at": datetime.now().astimezone().isoformat(),
+            "agent_id": resolved_agent_id,
+            **result,
+        }
+    except Exception as exc:
+        logger.warning("  Phase 3 memory extraction failed: %s", exc)
 
 
 async def phase1_housekeeping():
