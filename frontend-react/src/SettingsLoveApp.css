@@ -1,0 +1,44 @@
+/* ── SettingsLoveApp ───────────────────────────────────────────────────── */
+
+.sla-root * {
+  box-sizing: border-box;
+}
+
+/* Hide scrollbar */
+.sla-root ::-webkit-scrollbar { display: none; }
+.sla-root * { scrollbar-width: none; }
+
+/* Range inputs */
+.sla-root input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.12);
+  outline: none;
+  cursor: pointer;
+}
+.sla-root input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+}
+.sla-root input[type="range"]::-webkit-slider-runnable-track {
+  border-radius: 2px;
+}
+
+/* Nav back button */
+.sla-nav-btn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: inherit;
+}

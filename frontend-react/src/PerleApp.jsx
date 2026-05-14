@@ -87,6 +87,10 @@ function displayPhotoName({ id = "", title = "", label = "", originalName = "" }
   return shortId(id);
 }
 
+function toInputValue(value = "") {
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+}
+
 function mediaPhotoToPerlePhoto(item) {
   const meta = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
   const originalName = meta.original_filename || meta.filename || originalNameFromStorageKey(item.storage_key);
@@ -103,6 +107,43 @@ function mediaPhotoToPerlePhoto(item) {
     tags: normalizePhotoTags(meta, cat),
     storage_key: item.storage_key,
     media_item: item,
+  };
+}
+
+function mergeMediaItemResponse(oldItem = {}, responseItem = {}) {
+  const oldMeta = oldItem.metadata && typeof oldItem.metadata === "object" ? oldItem.metadata : {};
+  const nextMeta = responseItem?.metadata && typeof responseItem.metadata === "object" ? responseItem.metadata : {};
+  return {
+    ...oldItem,
+    ...(responseItem || {}),
+    id: responseItem?.id || oldItem.id,
+    owner_type: responseItem?.owner_type || oldItem.owner_type,
+    agent_id: responseItem?.agent_id || oldItem.agent_id || oldMeta.agent_id || mediaAgentId,
+    type: responseItem?.type || oldItem.type,
+    storage_provider: responseItem?.storage_provider || oldItem.storage_provider,
+    storage_key: responseItem?.storage_key || oldItem.storage_key,
+    cover_key: responseItem?.cover_key ?? oldItem.cover_key,
+    mime_type: responseItem?.mime_type || oldItem.mime_type,
+    size_bytes: responseItem?.size_bytes ?? oldItem.size_bytes,
+    duration_seconds: responseItem?.duration_seconds ?? oldItem.duration_seconds,
+    created_at: responseItem?.created_at || oldItem.created_at,
+    updated_at: responseItem?.updated_at || oldItem.updated_at,
+    url: oldItem.url || responseItem?.url || "",
+    src: oldItem.src || responseItem?.src || "",
+    previewUrl: oldItem.previewUrl || responseItem?.previewUrl || "",
+    signedUrl: oldItem.signedUrl || responseItem?.signedUrl || "",
+    metadata: { ...oldMeta, ...nextMeta },
+  };
+}
+
+function mergePhotoFromMediaResponse(photo, responseItem, patch = {}) {
+  const mediaItem = mergeMediaItemResponse(photo?.media_item || {}, responseItem);
+  return {
+    ...photo,
+    ...mediaPhotoToPerlePhoto(mediaItem),
+    ...patch,
+    url: photo?.url || mediaItem.url || "",
+    media_item: mediaItem,
   };
 }
 
@@ -177,6 +218,102 @@ function currentLrcIndex(rows, currentTime) {
   return index;
 }
 
+function PerleScopedStyles() {
+  return (
+    <style>{`
+      .perle-root .perle-soft-button,
+      .perle-root .perle-primary-button,
+      .perle-root .perle-ghost-button,
+      .perle-root .perle-danger-button,
+      .perle-root .perle-icon-button {
+        appearance: none;
+        -webkit-appearance: none;
+        border-radius: 999px;
+        font-family: ${DD_FONTS.serifCn};
+        letter-spacing: 1px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 0.5px solid rgba(150,120,130,0.22);
+        box-shadow: 0 6px 16px rgba(120,80,110,0.08);
+        cursor: pointer;
+      }
+      .perle-root .perle-soft-button {
+        background: rgba(255,253,248,0.74);
+        color: #6E5264;
+        padding: 8px 13px;
+        font-size: 12px;
+      }
+      .perle-root .perle-primary-button {
+        background: linear-gradient(135deg, #D8A5BF, #C9A7BB);
+        color: #fff;
+        border-color: rgba(216,165,191,0.44);
+        padding: 8px 16px;
+        font-size: 12px;
+      }
+      .perle-root .perle-ghost-button {
+        background: rgba(255,255,255,0.28);
+        color: #7B6874;
+        padding: 8px 13px;
+        font-size: 12px;
+      }
+      .perle-root .perle-danger-button {
+        background: rgba(184,74,62,0.07);
+        color: ${DD_TOKENS.stamp};
+        border-color: rgba(184,74,62,0.24);
+        padding: 8px 13px;
+        font-size: 12px;
+      }
+      .perle-root .perle-icon-button {
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        background: rgba(255,253,248,0.68);
+        color: #6E5264;
+      }
+      .perle-root .perle-soft-button:disabled,
+      .perle-root .perle-primary-button:disabled,
+      .perle-root .perle-danger-button:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .perle-root .perle-field,
+      .perle-root .perle-textarea {
+        border-radius: 16px;
+        border: 0.5px solid rgba(150,120,130,0.24);
+        background: rgba(251,247,242,0.74);
+        color: #2B2420;
+        outline: none;
+        font-family: ${DD_FONTS.serifCn};
+        letter-spacing: 1px;
+        box-sizing: border-box;
+      }
+      .perle-root .perle-field {
+        min-height: 36px;
+        padding: 8px 14px;
+        font-size: 12px;
+      }
+      .perle-root .perle-textarea {
+        padding: 12px;
+        font-size: 13px;
+        line-height: 1.65;
+      }
+      .perle-root .perle-dark-field {
+        border-radius: 999px;
+        background: rgba(255,255,255,0.12);
+        border: 0.5px solid rgba(255,255,255,0.24);
+        color: #fff;
+      }
+      .perle-root .perle-dark-button {
+        border-color: rgba(255,255,255,0.22);
+        background: rgba(255,255,255,0.12);
+        color: rgba(255,255,255,0.78);
+        box-shadow: none;
+      }
+    `}</style>
+  );
+}
+
 export function Tape({ color = 'rgba(246, 220, 196, 0.75)', width = 64, height = 20, rotate = -6, style = {} }) {
   return (
     <div style={{
@@ -200,12 +337,32 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalT
   const [savingTag, setSavingTag] = useState(false);
   const [savingName, setSavingName] = useState(false);
   const touchStartX = useRef(0);
+  const renameInputRef = useRef(null);
   const photo = photos[idx];
   if (!photo) return null;
   const go = (dir) => setIdx(i => Math.max(0, Math.min(photos.length - 1, i + dir)));
+  const stopControlEvent = (event) => {
+    event.stopPropagation();
+  };
+  const hiddenLayerStyle = {
+    position: 'absolute',
+    opacity: 0,
+    pointerEvents: 'none',
+    width: 0,
+    height: 0,
+    overflow: 'hidden',
+  };
   const submitTag = async (tag) => {
-    const nextTag = String(tag || "").trim();
-    if (!nextTag || savingTag) return;
+    const nextTag = toInputValue(tag).trim();
+    const disabledReason = savingTag ? "saving" : (!nextTag ? "empty_tag" : (!photo.id ? "missing_photo_id" : ""));
+    console.log("[Perle PhotoViewer] add tag", {
+      tagInput,
+      tag: nextTag,
+      photoId: photo.id,
+      agentId: mediaAgentId,
+      disabledReason,
+    });
+    if (disabledReason) return;
     setSavingTag(true);
     setTagError('');
     try {
@@ -217,14 +374,35 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalT
       setSavingTag(false);
     }
   };
+  const handleAddTagClick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    submitTag(tagInput);
+  };
   const startRename = () => {
-    setRenameDraft(photo.label || "");
+    setRenameDraft(toInputValue(displayPhotoName({
+      id: photo.id,
+      title: photo.title,
+      label: photo.label,
+      originalName: photo.originalName,
+    })));
     setRenameError('');
     setRenaming(true);
   };
+  useEffect(() => {
+    if (!renaming) return;
+    requestAnimationFrame(() => {
+      renameInputRef.current?.focus?.();
+      renameInputRef.current?.select?.();
+    });
+  }, [renaming]);
   const submitRename = async () => {
-    const nextName = renameDraft.trim();
-    if (!nextName || savingName) return;
+    const nextName = toInputValue(renameDraft).trim();
+    if (savingName) return;
+    if (!nextName) {
+      setRenameError("Name cannot be empty.");
+      return;
+    }
     setSavingName(true);
     setRenameError('');
     try {
@@ -264,22 +442,19 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalT
         )}
       </div>
 
-      <div style={{ flexShrink: 0, background: 'rgba(0,0,0,0.75)', padding: '12px 18px calc(28px + env(safe-area-inset-bottom, 0px))', backdropFilter: 'blur(12px)' }}>
-        <div style={{ marginBottom: 10 }}>
-          {renaming ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} style={{ flex: 1, minWidth: 0, background: 'rgba(255,255,255,0.1)', border: '0.5px solid rgba(255,255,255,0.22)', color: '#fff', padding: '7px 10px', outline: 'none', fontFamily: DD_FONTS.serifCn, fontSize: 13, letterSpacing: 1 }} />
-              <button type="button" onClick={submitRename} disabled={savingName} style={{ border: 0, background: '#D8A5BF', color: '#fff', padding: '7px 10px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: savingName ? 'default' : 'pointer', opacity: savingName ? 0.65 : 1 }}>保存</button>
-              <button type="button" onClick={() => setRenaming(false)} style={{ border: '0.5px solid rgba(255,255,255,0.22)', background: 'transparent', color: 'rgba(255,255,255,0.72)', padding: '7px 10px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: 'pointer' }}>取消</button>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ fontFamily: DD_FONTS.handCn, fontSize: 15, color: 'rgba(255,255,255,0.75)', letterSpacing: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{photo.label}</div>
-              <button type="button" onClick={startRename} aria-label="重命名" style={{ width: 28, height: 28, border: '0.5px solid rgba(255,255,255,0.18)', borderRadius: '50%', background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-                <svg width="13" height="13" viewBox="0 0 18 18" fill="none"><path d="M2.5 15.5h3.1L14.7 6.4 11.6 3.3 2.5 12.4v3.1Z" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round" /><path d="M10.8 4.1 13.9 7.2" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" /></svg>
-              </button>
-            </div>
-          )}
+      <div onPointerDown={stopControlEvent} onTouchStart={stopControlEvent} style={{ flexShrink: 0, position: 'relative', zIndex: 5, background: 'rgba(0,0,0,0.75)', padding: '12px 18px calc(28px + env(safe-area-inset-bottom, 0px))', backdropFilter: 'blur(12px)', touchAction: 'manipulation' }}>
+        <div style={{ marginBottom: 10, position: 'relative' }}>
+          <div style={renaming ? { display: 'flex', alignItems: 'center', gap: 8 } : hiddenLayerStyle} aria-hidden={!renaming}>
+            <input ref={renameInputRef} value={toInputValue(renameDraft)} onChange={(event) => setRenameDraft(event.target.value)} disabled={!renaming} className="perle-field perle-dark-field" style={{ flex: 1, minWidth: 0, pointerEvents: renaming ? 'auto' : 'none' }} />
+            <button type="button" className="perle-primary-button" onClick={submitRename} disabled={savingName} style={{ minHeight: 34, opacity: savingName ? 0.65 : 1 }}>保存</button>
+            <button type="button" className="perle-ghost-button perle-dark-button" onClick={() => { setRenameDraft(''); setRenameError(''); setRenaming(false); }} style={{ minHeight: 34 }}>取消</button>
+          </div>
+          <div style={renaming ? hiddenLayerStyle : { display: 'flex', alignItems: 'center', gap: 8 }} aria-hidden={renaming}>
+            <div style={{ fontFamily: DD_FONTS.handCn, fontSize: 15, color: 'rgba(255,255,255,0.75)', letterSpacing: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayPhotoName({ id: photo.id, title: photo.title, label: photo.label, originalName: photo.originalName })}</div>
+            <button type="button" onClick={startRename} aria-label="重命名" style={{ width: 28, height: 28, border: '0.5px solid rgba(255,255,255,0.18)', borderRadius: '50%', background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+              <svg width="13" height="13" viewBox="0 0 18 18" fill="none"><path d="M2.5 15.5h3.1L14.7 6.4 11.6 3.3 2.5 12.4v3.1Z" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round" /><path d="M10.8 4.1 13.9 7.2" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" /></svg>
+            </button>
+          </div>
           {renameError && <div role="alert" style={{ color: '#F0A3A3', fontFamily: DD_FONTS.serifEn, fontSize: 11, marginTop: 6 }}>{renameError}</div>}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 10 }}>
@@ -295,13 +470,15 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalT
             );
           })}
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input value={tagInput} onChange={e => setTagInput(e.target.value)} placeholder="+ 新标签"
-            style={{ flex: 1, background: 'rgba(255,255,255,0.1)', border: '0.5px solid rgba(255,255,255,0.22)', color: '#fff', padding: '7px 14px', borderRadius: 999, outline: 'none', fontFamily: DD_FONTS.serifCn, fontSize: 12, letterSpacing: 1 }}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'relative', zIndex: 2 }}>
+          <input value={toInputValue(tagInput)} onChange={(event) => setTagInput(event.target.value)} placeholder="+ 新标签"
+            className="perle-field perle-dark-field"
+            style={{ flex: 1 }}
             onKeyDown={e => { if (e.key === 'Enter') submitTag(tagInput); }}
           />
-          <button type="button" disabled={savingTag} onClick={() => submitTag(tagInput)}
-            style={{ border: 0, padding: '7px 16px', borderRadius: 999, background: '#D8A5BF', color: '#fff', fontSize: 12, fontFamily: DD_FONTS.serifCn, cursor: savingTag ? 'default' : 'pointer', letterSpacing: 1, flexShrink: 0, opacity: savingTag ? 0.65 : 1 }}>添加</button>
+          <button type="button" disabled={savingTag} onClick={handleAddTagClick}
+            className="perle-primary-button"
+            style={{ flexShrink: 0, minHeight: 36, opacity: savingTag ? 0.65 : 1, pointerEvents: savingTag ? 'none' : 'auto' }}>添加</button>
         </div>
         {tagError && <div role="alert" style={{ color: '#F0A3A3', fontFamily: DD_FONTS.serifEn, fontSize: 11, marginTop: 7 }}>{tagError}</div>}
       </div>
@@ -677,15 +854,15 @@ function LyricsEditorPanel({ track, open, saving, error, onClose, onSave, onDele
           </div>
           <button type="button" onClick={onClose} style={{ border: 0, background: 'transparent', color: '#7B6874', fontFamily: DD_FONTS.serifCn, fontSize: 13, cursor: 'pointer' }}>取消</button>
         </div>
-        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="粘贴歌词，或上传 .lrc / .txt" style={{ width: '100%', minHeight: 170, maxHeight: 260, resize: 'vertical', boxSizing: 'border-box', border: '0.5px solid rgba(150,120,130,0.24)', background: 'rgba(251,247,242,0.72)', color: '#2B2420', outline: 'none', padding: 12, fontFamily: DD_FONTS.serifCn, fontSize: 13, lineHeight: 1.65, letterSpacing: 1 }} />
+        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="粘贴歌词，或上传 .lrc / .txt" className="perle-textarea" style={{ width: '100%', minHeight: 170, maxHeight: 260, resize: 'vertical' }} />
         {filename && <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 11, color: '#9E8894', letterSpacing: 1 }}>{filename}</div>}
         {error && <div role="alert" style={{ fontFamily: DD_FONTS.serifCn, fontSize: 12, color: DD_TOKENS.stamp, letterSpacing: 1 }}>{error}</div>}
         <input ref={fileInputRef} type="file" accept=".lrc,.txt,text/plain" hidden onChange={readFile} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button type="button" onClick={() => fileInputRef.current?.click()} style={{ border: '0.5px solid rgba(150,120,130,0.22)', background: 'rgba(255,255,255,0.72)', color: '#6E5264', padding: '8px 12px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: 'pointer' }}>上传文件</button>
-          <button type="button" onClick={() => onDelete(track)} disabled={saving || !track.lyrics} style={{ border: '0.5px solid rgba(184,74,62,0.24)', background: 'rgba(184,74,62,0.06)', color: DD_TOKENS.stamp, padding: '8px 12px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: saving || !track.lyrics ? 'default' : 'pointer', opacity: saving || !track.lyrics ? 0.48 : 1 }}>删除歌词</button>
+          <button type="button" className="perle-soft-button" onClick={() => fileInputRef.current?.click()}>上传文件</button>
+          <button type="button" className="perle-danger-button" onClick={() => onDelete(track)} disabled={saving || !track.lyrics} style={{ opacity: saving || !track.lyrics ? 0.48 : 1 }}>删除歌词</button>
           <div style={{ flex: 1 }} />
-          <button type="button" onClick={() => onSave(track, draft, filename)} disabled={saving} style={{ border: 0, background: '#D8A5BF', color: '#fff', padding: '8px 16px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.65 : 1 }}>保存</button>
+          <button type="button" className="perle-primary-button" onClick={() => onSave(track, draft, filename)} disabled={saving} style={{ opacity: saving ? 0.65 : 1 }}>保存</button>
         </div>
       </div>
     </div>
@@ -723,12 +900,14 @@ function PerleMusicB({ tracks, initialTrack, playing, togglePlay, setTrackIdx, p
         <div style={{ fontFamily: DD_FONTS.serifCn, fontSize: 11, color: '#9E8894', letterSpacing: 3 }}>{track?.artist || 'Unknown'}　·　{track?.album || 'Unknown'}</div>
       </div>
 
-      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px 28px 10px' }}>
+      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px 28px 6px' }}>
         <div style={{ textAlign: 'center', width: '100%' }}>
           <LyricsDisplay track={track} currentTime={progress} />
-          {track && <button type="button" onClick={() => setLyricsOpen(true)} style={{ marginTop: 10, border: '0.5px solid rgba(150,120,130,0.22)', background: 'rgba(255,255,255,0.56)', color: '#7B6874', padding: '6px 12px', fontFamily: DD_FONTS.serifCn, fontSize: 12, cursor: 'pointer' }}>歌词</button>}
+          {track && <button type="button" className="perle-soft-button" onClick={() => setLyricsOpen(true)} style={{ marginTop: 10, padding: '6px 12px' }}>歌词</button>}
         </div>
       </div>
+
+      <div style={{ flex: '1 1 auto', minHeight: 12 }} />
 
       <div style={{ padding: '8px 28px 6px', flexShrink: 0 }}>
         <div style={{ height: 2, background: 'rgba(150,120,130,0.18)', position: 'relative' }}>
@@ -741,7 +920,7 @@ function PerleMusicB({ tracks, initialTrack, playing, togglePlay, setTrackIdx, p
         </div>
       </div>
 
-      <div style={{ padding: '8px 24px 28px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 32, flexShrink: 0 }}>
+      <div style={{ padding: '8px 24px calc(22px + env(safe-area-inset-bottom, 0px))', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 32, flexShrink: 0 }}>
         <div onClick={() => setTrackIdx((i) => (i - 1 + tracks.length) % tracks.length)} style={{ width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
           <svg width="22" height="22" viewBox="0 0 22 22"><path d="M16 4 L8 11 L16 18 M6 4 V18" stroke="#2B2420" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </div>
@@ -1143,15 +1322,16 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
       if (mediaUploadProvider === "r2") {
         const currentMeta = photo.media_item?.metadata && typeof photo.media_item.metadata === "object" ? photo.media_item.metadata : {};
         const item = await updateMediaItem(photoId, {
+          agent_id: mediaAgentId,
           metadata: { ...currentMeta, cat: nextTag, tags: nextTags, label: photo.label, original_filename: photo.originalName || currentMeta.original_filename || "", agent_id: currentMeta.agent_id || mediaAgentId },
         });
-        setPhotos(prev => prev.map(p => p.id === photoId ? mediaPhotoToPerlePhoto({ ...item, url: p.url }) : p));
+        setPhotos(prev => prev.map(p => p.id === photoId ? mergePhotoFromMediaResponse(p, item, { cat: nextTag, tags: nextTags }) : p));
         return;
       }
       const response = await fetch(apiUrl(`/api/perle/photos/${photoId}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cat: nextTag, agent_id: "" })
+        body: JSON.stringify({ cat: nextTag, agent_id: mediaAgentId })
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
     } catch (err) {
@@ -1165,23 +1345,24 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
     const photo = photos.find((p) => p.id === photoId);
     if (!photo) throw new Error("Photo not found.");
     const nextName = String(name || "").trim();
-    if (!nextName) return;
+    if (!nextName) throw new Error("Name cannot be empty.");
     const prevPhotos = photos;
     setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, title: nextName, label: nextName } : p));
     try {
       if (mediaUploadProvider === "r2") {
         const currentMeta = photo.media_item?.metadata && typeof photo.media_item.metadata === "object" ? photo.media_item.metadata : {};
         const item = await updateMediaItem(photoId, {
+          agent_id: mediaAgentId,
           title: nextName,
           metadata: { ...currentMeta, title: nextName, label: nextName, name: nextName, tags: photo.tags || [], cat: photo.cat || "all", original_filename: photo.originalName || currentMeta.original_filename || "", agent_id: currentMeta.agent_id || mediaAgentId },
         });
-        setPhotos(prev => prev.map(p => p.id === photoId ? mediaPhotoToPerlePhoto({ ...item, url: p.url }) : p));
+        setPhotos(prev => prev.map(p => p.id === photoId ? mergePhotoFromMediaResponse(p, item, { title: nextName, label: nextName }) : p));
         return;
       }
       const response = await fetch(apiUrl(`/api/perle/photos/${photoId}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: nextName, agent_id: "" })
+        body: JSON.stringify({ label: nextName, agent_id: mediaAgentId })
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
     } catch (err) {
@@ -1220,7 +1401,8 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
   }, []);
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div className="perle-root" style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <PerleScopedStyles />
       <input id="photo-input" type="file" accept="image/*" multiple hidden onChange={handlePhotoUpload} />
       <input id="music-input" type="file" accept="audio/*" multiple hidden onChange={handleMusicUpload} />
       <audio ref={audioRef} id="home-audio" preload="metadata" hidden />
