@@ -6313,41 +6313,85 @@
     `;
     }
 
+    function renderMemoryTempBar(temp) {
+        const t = Math.max(0, Math.min(100, Number(temp) || 0));
+        const color = t > 60 ? '#c9908a' : t > 30 ? '#c8a07a' : '#b0b0b8';
+        return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:${color};">
+          <span style="display:inline-block;width:${Math.round(t * 0.36)}px;max-width:36px;min-width:2px;height:3px;border-radius:2px;background:${color};"></span>
+          ${t > 0 ? `热度 ${t}` : ''}
+        </span>`;
+    }
+
     function renderMemoryServicePage() {
         const contact = byId(state.currentContactId) || state.contacts[0];
         const entries = Array.isArray(state.memoryServiceEntries) ? state.memoryServiceEntries : [];
+        const candidates = Array.isArray(state.memoryCandidates) ? state.memoryCandidates : [];
+        const sort = state.memoryServiceSort || 'updated_at';
+        const SORTS = [
+            { key: 'updated_at', label: '最新' },
+            { key: 'importance', label: '最重要' },
+            { key: 'temperature', label: '有温度' },
+        ];
         return `
       <section class="settings-page page-block ai-settings-page">
         <div class="settings-group glass-frost ai-panel compact-panel">
-          <h3>\u8bb0\u5fc6\u670d\u52a1</h3>
-          <p class="section-eyebrow">\u5f53\u524d\u8054\u7cfb\u4eba\uff1a${escapeHtml(contact?.name || '\u672a\u547d\u540d')} \u3002\u8fd9\u91cc\u76f4\u63a5\u8bfb\u5199\u540e\u7aef memories\uff0c\u4e0d\u518d\u4ee5\u672c\u5730\u5047\u6570\u636e\u4e3a\u51c6\u3002</p>
+          <h3>记忆服务</h3>
+          <p class="section-eyebrow">当前联系人：${escapeHtml(contact?.name || '未命名')}。这里直接读写后端 memories，不再以本地假数据为准。</p>
           <div class="ai-inline-actions" style="margin-top:10px;">
-            <button class="ghost-action" data-action="memory-service-refresh">\u5237\u65b0</button>
-            <button class="ghost-action" data-action="memory-service-create">\u65b0\u5efa\u8bb0\u5fc6</button>
+            <button class="ghost-action" data-action="memory-service-refresh">刷新</button>
+            <button class="ghost-action" data-action="memory-service-create">新建记忆</button>
+          </div>
+          <div class="ai-inline-actions" style="margin-top:8px;">
+            ${SORTS.map(s => `<button class="ghost-action${sort === s.key ? ' active' : ''}" data-action="memory-service-sort" data-sort="${s.key}">${s.label}</button>`).join('')}
           </div>
         </div>
         <div class="settings-group glass-frost ai-panel compact-panel">
-          <h3>\u8bb0\u5fc6\u5217\u8868</h3>
-          ${state.memoryServiceLoading ? '<p class="section-eyebrow">\u6b63\u5728\u52a0\u8f7d\u2026</p>' : ''}
-          ${!state.memoryServiceLoading && !entries.length ? '<p class="section-eyebrow">\u8fd9\u4e2a\u89d2\u8272\u8fd8\u6ca1\u6709\u8bb0\u5fc6\u3002</p>' : ''}
-          ${entries.map((item) => `
+          <h3>记忆列表</h3>
+          ${state.memoryServiceLoading ? '<p class="section-eyebrow">正在加载…</p>' : ''}
+          ${!state.memoryServiceLoading && !entries.length ? '<p class="section-eyebrow">这个角色还没有记忆。</p>' : ''}
+          ${entries.map((item) => {
+            const text = item.compressed_content || item.raw_content || item.content || '未命名记忆';
+            const imp = item.importance ?? 3;
+            const temp = item.temperature ?? 0;
+            const impDots = '★'.repeat(imp) + '☆'.repeat(5 - imp);
+            return `
             <div class="theme-choice-item active" style="cursor:default; display:block;">
               <div class="theme-choice-copy" style="display:block;">
-                <strong>${escapeHtml(item.compressed_content || item.raw_content || item.content || '\u672a\u547d\u540d\u8bb0\u5fc6')}</strong>
-                <em>${escapeHtml(`${item.category || ''} / ${item.visibility || 'private'} / importance ${item.importance ?? 3}`)}</em>
-                ${item.expires_at ? `<em>\u8fc7\u671f\uff1a${escapeHtml(String(item.expires_at))}</em>` : ''}
+                <strong>${escapeHtml(text)}</strong>
+                <em style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:3px;">
+                  <span>${escapeHtml(item.category || '')}</span>
+                  <span style="color:#c9908a;">${impDots}</span>
+                  ${renderMemoryTempBar(temp)}
+                </em>
+                ${item.expires_at ? `<em>过期：${escapeHtml(String(item.expires_at))}</em>` : ''}
               </div>
               <div class="ai-inline-actions" style="margin-top:10px;">
-                <button class="ghost-action" data-action="memory-service-edit" data-memory-id="${escapeHtml(String(item.id || ''))}">\u7f16\u8f91</button>
-                <button class="ghost-action" data-action="memory-service-delete" data-memory-id="${escapeHtml(String(item.id || ''))}">\u5220\u9664</button>
+                <button class="ghost-action" data-action="memory-service-edit" data-memory-id="${escapeHtml(String(item.id || ''))}">编辑</button>
+                <button class="ghost-action" data-action="memory-service-delete" data-memory-id="${escapeHtml(String(item.id || ''))}">删除</button>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+        ${candidates.length > 0 ? `
+        <div class="settings-group glass-frost ai-panel compact-panel">
+          <h3>待审记忆候选 <span style="font-size:12px;font-weight:400;color:var(--muted);">· 日循环提取，可采纳或忽略</span></h3>
+          ${candidates.map(c => `
+            <div class="theme-choice-item active" style="cursor:default; display:block;">
+              <div class="theme-choice-copy" style="display:block;">
+                <strong>${escapeHtml(c.content || c.summary || '')}</strong>
+                <em>${escapeHtml(c.category || '')} / importance ${c.importance ?? 3}</em>
+              </div>
+              <div class="ai-inline-actions" style="margin-top:8px;">
+                <button class="ghost-action" data-action="memory-candidate-promote" data-candidate-id="${escapeHtml(String(c.id || ''))}">✓ 采纳</button>
+                <button class="ghost-action" data-action="memory-candidate-dismiss" data-candidate-id="${escapeHtml(String(c.id || ''))}">✕ 忽略</button>
               </div>
             </div>
           `).join('')}
         </div>
+        ` : ''}
       </section>
     `;
     }
-
     function currentMemoryServiceAgentId() {
         return String(state.currentContactId || byId(state.currentContactId)?.id || 'default').trim() || 'default';
     }
@@ -6358,28 +6402,50 @@
         state.memoryServiceLoading = true;
         render();
         try {
-            const qs = new URLSearchParams({
-                agent_id: normalizedAgentId,
-                sort_by: 'updated_at',
-                order: 'desc',
-                limit: '100',
-            });
-            const resp = await fetch(`${API_BASE}/api/memories?${qs.toString()}`);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const data = await resp.json().catch(() => ({}));
+            const sortBy = state.memoryServiceSort || 'updated_at';
+            const qs = new URLSearchParams({ agent_id: normalizedAgentId, sort_by: sortBy, order: 'desc', limit: '100' });
+            const [memResp, candResp] = await Promise.all([
+                fetch(`${API_BASE}/api/memories?${qs.toString()}`),
+                fetch(`${API_BASE}/api/consciousness/memory-candidates?agent_id=${encodeURIComponent(normalizedAgentId)}&limit=20`),
+            ]);
+            if (!memResp.ok) throw new Error(`HTTP ${memResp.status}`);
+            const data = await memResp.json().catch(() => ({}));
             state.memoryServiceEntries = Array.isArray(data?.memories) ? data.memories : [];
+            if (candResp.ok) {
+                const candData = await candResp.json().catch(() => ({}));
+                state.memoryCandidates = Array.isArray(candData?.candidates) ? candData.candidates : [];
+            }
         } catch (error) {
             console.warn('[memory service] load failed', error);
-            if (!silent) {
-                state.toast = '\u8bb0\u5fc6\u52a0\u8f7d\u5931\u8d25';
-                window.setTimeout(() => { state.toast = ''; render(); }, 1200);
-            }
+            if (!silent) { state.toast = '记忆加载失败'; window.setTimeout(() => { state.toast = ''; render(); }, 1200); }
         } finally {
             state.memoryServiceLoading = false;
             render();
         }
     }
 
+    async function promoteMemoryCandidate(candidateId) {
+        const agentId = currentMemoryServiceAgentId();
+        try {
+            const resp = await fetch(`${API_BASE}/api/consciousness/memory-candidates/${encodeURIComponent(candidateId)}/promote?agent_id=${encodeURIComponent(agentId)}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            state.memoryCandidates = (state.memoryCandidates || []).filter(c => String(c.id) !== String(candidateId));
+            state.toast = '✓ 已采纳为正式记忆';
+            window.setTimeout(() => { state.toast = ''; render(); }, 1800);
+            await loadMemoryService(agentId, { silent: true });
+        } catch (e) { console.warn('[memory] promote failed', e); }
+    }
+
+    async function dismissMemoryCandidate(candidateId) {
+        try {
+            const resp = await fetch(`${API_BASE}/api/consciousness/memory-candidates/${encodeURIComponent(candidateId)}`, { method: 'DELETE' });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            state.memoryCandidates = (state.memoryCandidates || []).filter(c => String(c.id) !== String(candidateId));
+            render();
+        } catch (e) { console.warn('[memory] dismiss failed', e); }
+    }
     function promptMemoryDraft(existing = null) {
         const base = existing || {};
         const content = window.prompt('\u8bb0\u5fc6\u5185\u5bb9', String(base.raw_content || base.content || '').trim());
@@ -7280,6 +7346,13 @@
         }
         if (action === 'open-memory-service') return openAiSubView('memoryService', () => { loadMemoryService(state.currentContactId); });
         if (action === 'memory-service-refresh') { loadMemoryService(state.currentContactId, { silent: false }); return; }
+        if (action === 'memory-service-sort') {
+            state.memoryServiceSort = target.dataset.sort || 'updated_at';
+            loadMemoryService(state.currentContactId, { silent: true });
+            return;
+        }
+        if (action === 'memory-candidate-promote') { promoteMemoryCandidate(target.dataset.candidateId); return; }
+        if (action === 'memory-candidate-dismiss') { dismissMemoryCandidate(target.dataset.candidateId); return; }
         if (action === 'memory-service-create') {
             createMemoryServiceEntry()
                 .then(() => loadMemoryService(state.currentContactId, { silent: false }))
