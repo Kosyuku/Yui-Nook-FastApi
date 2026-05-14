@@ -1,4 +1,5 @@
 ﻿import { useEffect, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
 import "./legacy-chat/chat-app.css";
 import legacyLockPageHtml from "./legacy-apps/lock-page.html?raw";
 import legacyHomePageHtml from "./legacy-apps/home-page.html?raw";
@@ -11,6 +12,9 @@ import FolioApp from "./FolioApp.jsx";
 import { apiBase, apiUrl } from "./apiBase.js";
 import DriftCalendarApp from "./DriftCalendarApp.jsx";
 import InboxApp from "./InboxApp.jsx";
+import SettingsLoveApp from "./SettingsLoveApp.jsx";
+import "./settings-love-stage/tokens.jsx";
+import "./settings-love-stage/widgets.jsx";
 import { listMediaItems, mediaUploadProvider, withMediaUrls } from "./mediaApi.js";
 
 const RICH_TEXT_SELECTOR = 'input:not([type="file"]):not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([readonly]), textarea:not([readonly])';
@@ -37,6 +41,13 @@ function restoreNativeInput(input) {
   proxy?.remove();
   wrapper.parentNode?.insertBefore(input, wrapper);
   wrapper.remove();
+}
+
+function setNativeInputValue(element, value) {
+  const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  if (setter) setter.call(element, value);
+  else element.value = value;
 }
 
 function dispatchNativeInput(element) {
@@ -81,11 +92,19 @@ function insertHtmlAtSelection(html) {
 function syncRichProxy(editor, input) {
   const plain = (editor.innerText || "").replace(/\u00a0/g, " ");
   const normalized = input.tagName === "INPUT" ? plain.replace(/\r?\n/g, " ") : plain;
-  input.value = normalized;
+  setNativeInputValue(input, normalized);
   input.dataset.richHtml = normalizeRichHtml(editor.innerHTML);
   input.dataset.richPlain = normalized;
   dispatchNativeInput(input);
   editor.classList.toggle("is-empty", !editor.textContent?.trim());
+}
+
+function flushRichTextInputs(rootNode = document) {
+  rootNode.querySelectorAll?.(".rich-text-proxy-wrap").forEach((wrapper) => {
+    const editor = wrapper.querySelector(".rich-text-proxy");
+    const input = wrapper.querySelector(".rich-text-source");
+    if (editor && input) syncRichProxy(editor, input);
+  });
 }
 
 function paintRichProxy(editor, input) {
@@ -149,6 +168,7 @@ function enhanceRichInput(input) {
   editor.addEventListener("focus", () => wrapper.classList.add("is-focused"));
   editor.addEventListener("blur", () => wrapper.classList.remove("is-focused"));
   editor.addEventListener("keydown", (event) => {
+    syncRichProxy(editor, input);
     if (input.tagName === "INPUT" && event.key === "Enter") event.preventDefault();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: event.key, code: event.code, bubbles: true }));
   });
@@ -569,7 +589,100 @@ function HomeInboxWidget({ onOpen }) {
   );
 }
 
+const LOVE_WIDGET_STORAGE_KEY = "yui_nook_love_widget_config_v1";
+const DEFAULT_LOVE_WIDGET_CONFIG = {
+  widgetId: "twinmoon",
+  size: "M",
+  aiId: "yui",
+  glass: 84,
+  info: {
+    startDate: "2026-03-01",
+    leftName: "小酒",
+    rightName: "夏彦",
+    title: "私たちの永遠の幸福",
+    aiMessage: "今天也想见你呢",
+    leftAvatar: "",
+    rightAvatar: "",
+  },
+};
+
+function readLoveWidgetConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOVE_WIDGET_STORAGE_KEY) || "null");
+    if (!saved || typeof saved !== "object") return DEFAULT_LOVE_WIDGET_CONFIG;
+    return {
+      ...DEFAULT_LOVE_WIDGET_CONFIG,
+      ...saved,
+      info: { ...DEFAULT_LOVE_WIDGET_CONFIG.info, ...(saved.info || {}) },
+    };
+  } catch {
+    return DEFAULT_LOVE_WIDGET_CONFIG;
+  }
+}
+
+function calcLoveDays(startDate) {
+  const start = new Date(`${startDate || DEFAULT_LOVE_WIDGET_CONFIG.info.startDate}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return 0;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.max(0, Math.floor((today - start) / 86400000) + 1);
+}
+
 function LoveWidget() {
+  const [config, setConfig] = useState(() => readLoveWidgetConfig());
+  const [showWhisper, setShowWhisper] = useState(false);
+  useEffect(() => {
+    const update = (event) => setConfig(event?.detail || readLoveWidgetConfig());
+    window.addEventListener("storage", update);
+    window.addEventListener("yui-love-widget-updated", update);
+    return () => {
+      window.removeEventListener("storage", update);
+      window.removeEventListener("yui-love-widget-updated", update);
+    };
+  }, []);
+  const renderers = window.WIDGET_RENDERERS || {};
+  const Widget = renderers[config.widgetId] || renderers.twinmoon;
+  const info = config.info || DEFAULT_LOVE_WIDGET_CONFIG.info;
+  const aiLabel = String(config.aiLabel || info.rightName || "彦").slice(0, 1);
+  const whisperText = info.aiMessage || "偷偷说：今天也想你。";
+  function handleLoveWidgetClick(event) {
+    if (!event.target.closest?.('[data-love-avatar="right"]')) return;
+    setShowWhisper((value) => !value);
+  }
+  if (Widget) {
+    return (
+      <div
+        className="love-widget love-widget-rendered liquid-card"
+        role="button"
+        tabIndex={0}
+        aria-label="恋爱小组件"
+        onClick={handleLoveWidgetClick}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setShowWhisper((value) => !value);
+          }
+        }}
+      >
+        {showWhisper && <div className="love-widget-whisper">{whisperText}</div>}
+        <Widget
+          size={config.size || "M"}
+          days={calcLoveDays(info.startDate)}
+          leftLabel={String(info.leftName || "小").slice(0, 1)}
+          rightLabel={aiLabel}
+          leftName={info.leftName || "小酒"}
+          rightName={info.rightName || "夏彦"}
+          title={info.title || DEFAULT_LOVE_WIDGET_CONFIG.info.title}
+          message={info.aiMessage || DEFAULT_LOVE_WIDGET_CONFIG.info.aiMessage}
+          leftAvatar={info.leftAvatar || ""}
+          rightAvatar={info.rightAvatar || ""}
+          leftTone="butter"
+          rightTone={config.aiTone || "lilac"}
+          glass={Number(config.glass || 84)}
+        />
+      </div>
+    );
+  }
   return (
     <button className="love-widget liquid-card" type="button" aria-label="恋爱小组件">
       <img alt="" src="https://images.unsplash.com/photo-1528459105426-b9548367069b?w=240&q=80" />
@@ -673,6 +786,7 @@ function HomePage({ pageIndex, setPageIndex, onOpenApp, phone }) {
 function LegacyHomePage({ onOpenApp, phone }) {
   useEffect(() => {
     ensureLegacyStylesheet("legacy-index-css", "/legacy-apps/legacy-index.css");
+    let loveWidgetRoot = null;
     const previous = {
       toggleDI: window.toggleDI,
       openPage: window.openPage,
@@ -834,6 +948,15 @@ function LegacyHomePage({ onOpenApp, phone }) {
     const wallpaper = document.getElementById("wallpaper");
     if (wallpaper && phone.wallpaper) wallpaper.style.backgroundImage = `url("${phone.wallpaper}")`;
     window.__yuiHomePageIndex = Math.max(0, (parseInt(String(phone.mainPage || "第 1 页").match(/\d+/)?.[0] || "1", 10) || 1) - 1);
+    const loveSection = document.getElementById("home-love-section");
+    if (loveSection) {
+      loveSection.innerHTML = '<div id="legacy-love-widget-react-root"></div>';
+      const mount = document.getElementById("legacy-love-widget-react-root");
+      if (mount) {
+        loveWidgetRoot = createRoot(mount);
+        loveWidgetRoot.render(<LoveWidget />);
+      }
+    }
     renderHomeAltPage();
 
     // ── Glean 拾遗 DI helpers ──
@@ -1163,6 +1286,7 @@ function LegacyHomePage({ onOpenApp, phone }) {
       homeAudio?.removeEventListener("play", handleHomeAudioPlay);
       homeAudio?.removeEventListener("pause", handleHomeAudioPause);
       homeAudio?.removeEventListener("ended", handleHomeAudioEnded);
+      loveWidgetRoot?.unmount();
       Object.assign(window, previous);
     };
   }, [onOpenApp, phone.desktopApps, phone.layout, phone.mainPage, phone.wallpaper]);
@@ -1213,14 +1337,7 @@ function LegacyDiaryApp() {
   return <DaydreamDiaryApp apiBase={API_BASE} />;
 }
 
-function LegacySettingsApp() {
-  useEffect(() => {
-    ensureLegacyStylesheet("legacy-settings-css", "/legacy-apps/settings-app.css");
-    loadLegacyScript("/legacy-apps/settings-app.js")
-      .catch((error) => console.warn("[legacy settings] load failed", error));
-  }, []);
-  return <div id="settings-app-root" className="legacy-app-root" />;
-}
+// LegacySettingsApp replaced by SettingsLoveApp (React component)
 
 function LegacyCalendarApp() {
   useEffect(() => {
@@ -1381,7 +1498,7 @@ function AppShell({ appId, onHome, phone, setPhone }) {
         </div>
       )}
       {isSettings || isWallpaper ? (
-        <LegacySettingsApp />
+        <SettingsLoveApp phone={phone} setPhone={setPhone} onClose={onHome} />
       ) : isChat ? (
         <LegacyChatApp />
       ) : isDiary ? (
@@ -2041,6 +2158,7 @@ export default function App() {
   const [pageIndex, setPageIndex] = useState(0);
   const [phone, setPhone] = useState(createInitialPhone);
   const [phoneLoaded, setPhoneLoaded] = useState(false);
+  const [screenMotion, setScreenMotion] = useState("idle");
   const unlockGuardUntil = useRef(0);
 
   useEffect(() => {
@@ -2067,31 +2185,17 @@ export default function App() {
     if (phoneLoaded) savePhoneState("phone_config", { phone }).catch(() => {});
   }, [phone, phoneLoaded]);
 
-  useEffect(() => {
-    function handleLegacySettingsSync(event) {
-      const payload = event.detail;
-      if (!payload || typeof payload !== "object") return;
-      setPhone((current) => ({
-        ...current,
-        wallpaper: payload.customWallpaper || current.wallpaper,
-        accent: payload.accent || current.accent,
-        layout: payload.layoutStyle || current.layout,
-        mainPage: payload.mainPage || current.mainPage,
-        desktopApps: Array.isArray(payload.desktopApps)
-          ? payload.desktopApps.map((app) => normalizeLegacyPhoneApp(app, 0))
-          : current.desktopApps,
-        dockApps: Array.isArray(payload.dockApps)
-          ? payload.dockApps.map((app) => normalizeLegacyPhoneApp(app, 0))
-          : current.dockApps,
-        widgetSize: payload.loveWidget?.size || current.widgetSize,
-      }));
-    }
-    window.addEventListener("settings-app-sync", handleLegacySettingsSync);
-    return () => window.removeEventListener("settings-app-sync", handleLegacySettingsSync);
-  }, []);
+  // settings-app-sync removed — new SettingsLoveApp writes directly to phone state via setPhone
 
   useEffect(() => {
     installRichTextInputs(document);
+    const flushBeforeAction = (event) => {
+      if (!(event.target instanceof Element)) return;
+      if (!event.target.closest("button, [role='button'], input[type='submit'], input[type='button']")) return;
+      flushRichTextInputs(document);
+    };
+    document.addEventListener("pointerdown", flushBeforeAction, true);
+    document.addEventListener("click", flushBeforeAction, true);
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         mutation.addedNodes.forEach((node) => {
@@ -2102,29 +2206,66 @@ export default function App() {
       });
     });
     observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    return () => {
+      document.removeEventListener("pointerdown", flushBeforeAction, true);
+      document.removeEventListener("click", flushBeforeAction, true);
+      observer.disconnect();
+    };
   }, []);
+
+  useEffect(() => {
+    const tapTargets = [
+      "button",
+      "[role='button']",
+      ".app-cell",
+      ".bottom-tab",
+      ".dock-item",
+      "[data-home-target]",
+      "[data-action]",
+    ].join(",");
+    const handleTap = (event) => {
+      if (!(event.target instanceof Element)) return;
+      if (event.target.closest("input, textarea, select, option")) return;
+      const target = event.target.closest(tapTargets);
+      if (!(target instanceof HTMLElement)) return;
+      target.classList.remove("tap-motion");
+      void target.offsetWidth;
+      target.classList.add("tap-motion");
+      window.setTimeout(() => target.classList.remove("tap-motion"), 260);
+    };
+    document.addEventListener("pointerdown", handleTap, true);
+    return () => document.removeEventListener("pointerdown", handleTap, true);
+  }, []);
+
+  useEffect(() => {
+    if (screenMotion === "idle") return;
+    const timer = window.setTimeout(() => setScreenMotion("idle"), 420);
+    return () => window.clearTimeout(timer);
+  }, [screenMotion]);
 
   function openApp(appId) {
     if (Date.now() < unlockGuardUntil.current) return;
+    setScreenMotion("open");
     setActiveApp(appId);
     setScreen("app");
   }
 
   function unlockToHome() {
     unlockGuardUntil.current = Date.now() + 650;
+    setScreenMotion("unlock");
     setActiveApp(null);
     setPageIndex(0);
     setScreen("home");
   }
 
   function goHome() {
+    setScreenMotion("home");
     setActiveApp(null);
     setScreen("home");
   }
 
   return (
-    <div className="phone-root" style={{ fontSize: `calc(16px * ${phone.fontScale / 100})` }}>
+    <div className={`phone-root screen-motion-${screenMotion}`} style={{ fontSize: `calc(16px * ${phone.fontScale / 100})` }}>
       {screen === "lock" && <LegacyLockScreen onUnlock={unlockToHome} />}
       {screen === "home" && <LegacyHomePage onOpenApp={openApp} phone={phone} />}
       {screen === "app" && <AppShell appId={activeApp} onHome={goHome} phone={phone} setPhone={setPhone} />}
