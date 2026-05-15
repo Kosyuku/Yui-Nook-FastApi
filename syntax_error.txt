@@ -1,4 +1,0 @@
-  File "d:\YUI Nook\backend\routes\__init__.py", line 220
-    title: str = "ÐÂ¶Ô\ufffd
-                 ^
-SyntaxError: unterminated string literal (detected at line 220)
