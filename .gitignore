@@ -53,3 +53,7 @@ dist/
 .DS_Store
 Thumbs.db
 vps.txt
+docs/
+out.txt
+syntax_error.txt
+frontend -latest.zip
