@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
@@ -1498,7 +1499,7 @@ async def safe_delete_agent(agent_id: str):
 async def discover_provider_models(body: ProviderDiscoverPayload):
     base_url = (body.base_url or "").strip()
     if not base_url:
-        raise HTTPException(status_code=400, detail="?? Base URL")
+        raise HTTPException(status_code=400, detail="Base URL 不能为空")
 
     endpoint = base_url.rstrip("/")
     if not endpoint.endswith("/models"):
@@ -1513,39 +1514,71 @@ async def discover_provider_models(body: ProviderDiscoverPayload):
             resp = await client.get(endpoint, headers=headers)
     except Exception as exc:
         logger.warning("discover models request failed: %s", exc)
-        raise HTTPException(status_code=502, detail="????????????????????????????")
+        raise HTTPException(status_code=502, detail="模型同步请求失败")
 
+    content_type = (resp.headers.get("content-type") or "").lower()
     if resp.status_code >= 300:
-        detail = "????????????????"
-        try:
-            payload = resp.json()
-            if isinstance(payload, dict):
-                detail = payload.get("error", {}).get("message") or payload.get("message") or detail
-        except Exception:
-            pass
+        detail = f"provider returned HTTP {resp.status_code}"
+        if "application/json" in content_type:
+            try:
+                payload = resp.json()
+                if isinstance(payload, dict):
+                    error = payload.get("error")
+                    if isinstance(error, dict):
+                        detail = error.get("message") or detail
+                    detail = payload.get("message") or payload.get("detail") or detail
+            except Exception:
+                pass
         raise HTTPException(status_code=resp.status_code, detail=detail)
+
+    if "application/json" not in content_type:
+        preview = resp.text[:120].replace("\n", " ")
+        logger.warning("discover models non-json response: content_type=%s preview=%s", content_type, preview)
+        raise HTTPException(status_code=502, detail="model discovery returned non-JSON response")
 
     try:
         payload = resp.json()
     except Exception as exc:
         logger.warning("discover models invalid json: %s", exc)
-        raise HTTPException(status_code=502, detail="?????????? JSON?????????")
+        raise HTTPException(status_code=502, detail="模型同步返回 JSON 解析失败")
 
     items = payload.get("data") if isinstance(payload, dict) else payload
     if not isinstance(items, list):
-        raise HTTPException(status_code=502, detail="?????????????????????")
+        raise HTTPException(status_code=502, detail="模型同步返回格式不支持")
 
     models: list[str] = []
+    seen: set[str] = set()
     for item in items:
         model_id = None
         if isinstance(item, dict):
             model_id = item.get("id") or item.get("name") or item.get("model") or item.get("slug")
         elif isinstance(item, str):
             model_id = item
-        if model_id and model_id not in models:
+        model_id = _sanitize_discovered_model_id(model_id)
+        key = model_id.lower() if model_id else ""
+        if model_id and key not in seen:
+            seen.add(key)
             models.append(model_id)
 
     return {"models": models, "count": len(models), "endpoint": endpoint}
+
+
+def _sanitize_discovered_model_id(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if not text or len(text) > 120:
+        return ""
+    lowered = text.lower()
+    if "<" in text or ">" in text:
+        return ""
+    if any(token in lowered for token in ("<!doctype", "<html", "</div", "</body")):
+        return ""
+    if re.search(r"[\x00-\x1f\x7f]|\s", text):
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._:/@+\-]+", text):
+        return ""
+    return text
 
 
 def _tool_icon_for_mcp(name: str) -> str:

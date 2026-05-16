@@ -3189,6 +3189,110 @@
         return !!target.closest('input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea, select, [contenteditable="true"]');
     }
 
+    function isLikelyTouchDevice() {
+        return !!(window.matchMedia?.('(pointer: coarse)').matches || 'ontouchstart' in window || navigator.maxTouchPoints > 0);
+    }
+
+    function isChatImageFile(file) {
+        return !!file && /^image\/(png|jpe?g|webp|gif|heic|heif)$/i.test(file.type || '');
+    }
+
+    function serializeChatAttachment(attachment) {
+        if (!attachment) return null;
+        return {
+            id: attachment.id,
+            kind: attachment.kind || 'image',
+            type: attachment.type || 'image/*',
+            name: attachment.name || 'image',
+            size: Number(attachment.size || 0),
+            url: attachment.url || '',
+        };
+    }
+
+    function readChatAttachmentFile(file) {
+        return new Promise((resolve, reject) => {
+            if (!isChatImageFile(file)) {
+                reject(new Error('只支持图片附件'));
+                return;
+            }
+            const reader = new FileReader();
+            reader.onerror = () => reject(new Error('图片读取失败'));
+            reader.onload = () => resolve({
+                id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                kind: 'image',
+                type: file.type || 'image/*',
+                name: file.name || 'pasted-image',
+                size: file.size || 0,
+                url: typeof reader.result === 'string' ? reader.result : '',
+            });
+            reader.readAsDataURL(file);
+        });
+    }
+
+    async function addChatImageFiles(files = []) {
+        const imageFiles = Array.from(files).filter(isChatImageFile);
+        if (!imageFiles.length) return false;
+        try {
+            const next = await Promise.all(imageFiles.map(readChatAttachmentFile));
+            state.chatAttachments = [...(state.chatAttachments || []), ...next].slice(0, 6);
+            state.chatPasteError = '';
+            state.showAttach = false;
+            render();
+            return true;
+        } catch (error) {
+            console.warn('[chat] image attach failed', error);
+            state.chatPasteError = error?.message || '图片添加失败';
+            state.toast = state.chatPasteError;
+            render();
+            window.setTimeout(() => { state.toast = ''; render(); }, 1400);
+            return false;
+        }
+    }
+
+    function insertPlainTextIntoInput(input, text) {
+        if (!input || !text) return;
+        const value = String(input.value || '');
+        const start = typeof input.selectionStart === 'number' ? input.selectionStart : value.length;
+        const end = typeof input.selectionEnd === 'number' ? input.selectionEnd : start;
+        input.value = `${value.slice(0, start)}${text}${value.slice(end)}`;
+        const nextPos = start + text.length;
+        input.setSelectionRange?.(nextPos, nextPos);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function plainTextFromHtml(html) {
+        if (!html) return '';
+        const temp = document.createElement('div');
+        temp.innerHTML = html;
+        return (temp.textContent || temp.innerText || '').replace(/\n{3,}/g, '\n\n');
+    }
+
+    async function handleChatInputPaste(event) {
+        if (state.currentView !== 'room') return;
+        const clipboard = event.clipboardData;
+        if (!clipboard) return;
+        const directFiles = Array.from(clipboard.files || []).filter(isChatImageFile);
+        const itemFiles = Array.from(clipboard.items || [])
+            .filter((item) => item.kind === 'file' && /^image\//i.test(item.type || ''))
+            .map((item) => item.getAsFile())
+            .filter(isChatImageFile);
+        const imageFiles = [...directFiles, ...itemFiles].filter((file, index, all) => (
+            index === all.findIndex((item) => item.name === file.name && item.size === file.size && item.type === file.type)
+        ));
+        const plain = clipboard.getData('text/plain') || '';
+        const html = clipboard.getData('text/html') || '';
+        if (imageFiles.length) {
+            event.preventDefault();
+            await addChatImageFiles(imageFiles);
+            if (plain.trim()) insertPlainTextIntoInput(event.currentTarget, plain);
+            return;
+        }
+        if (html) {
+            event.preventDefault();
+            insertPlainTextIntoInput(event.currentTarget, plain || plainTextFromHtml(html));
+        }
+    }
+
     function openAvatarCropper(kind, src) {
         if (!src) return;
         state.avatarCropper = { kind, src, x: 50, y: 50, zoom: 1 };
@@ -3334,14 +3438,22 @@
         // Enter to send
         const chatInput = mount.querySelector('.chat-input');
         if (chatInput) {
+            chatInput.addEventListener('paste', handleChatInputPaste);
             chatInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     doSendMessage();
                 }
             });
-            // Auto focus
-            if (['room', 'rpRoom'].includes(state.currentView)) chatInput.focus();
+            if (['room', 'rpRoom'].includes(state.currentView) && !isLikelyTouchDevice()) chatInput.focus();
+        }
+
+        const chatImageInput = mount.querySelector('#chat-image-input');
+        if (chatImageInput) {
+            chatImageInput.addEventListener('change', async (e) => {
+                await addChatImageFiles(e.target.files || []);
+                e.target.value = '';
+            });
         }
     }
 
@@ -4094,6 +4206,14 @@
         if (action === 'expand-actions') {
             state.showAttach = !state.showAttach;
             render();
+            return;
+        }
+
+        if (action === 'remove-chat-attachment') {
+            const id = target.dataset.id;
+            state.chatAttachments = (state.chatAttachments || []).filter((item) => item.id !== id);
+            render();
+            return;
         }
 
         if (action === 'clear-quote') {
@@ -4201,7 +4321,13 @@
 
         if (action === 'attach-option') {
             state.showAttach = false;
-            state.toast = `${target.dataset.label} \u529f\u80fd\u7a0d\u540e\u8865\u4e0a`;
+            const label = target.dataset.label || '';
+            if (label === '\u56fe\u7247' || label === '\u62cd\u7167') {
+                render();
+                requestAnimationFrame(() => root()?.querySelector('#chat-image-input')?.click());
+                return;
+            }
+            state.toast = `${label} \u529f\u80fd\u7a0d\u540e\u8865\u4e0a`;
             render();
             window.setTimeout(() => { state.toast = ''; render(); }, 1200);
         }
@@ -5836,6 +5962,7 @@
     state.providerAdvancedOpen = !!state.providerAdvancedOpen;
     state.providerEditorDraft = state.providerEditorDraft || null;
     state.providerModelMenuOpen = !!state.providerModelMenuOpen;
+    state.providerModelSyncingId = state.providerModelSyncingId || '';
     state.modelSlotMenuOpen = !!state.modelSlotMenuOpen;
     state.providerSearch = state.providerSearch || '';
     state.activePromptSlot = state.activePromptSlot || 'summary';
@@ -5875,8 +6002,52 @@
             apiKey: item.apiKey || item.api_key || '',
             apiPath: explicitApiPath,
             api_path: explicitApiPath,
-            models: Array.isArray(item.models) ? item.models : [],
+            models: normalizeModelIdList(item.models),
+            defaultModel: sanitizeModelId(item.defaultModel || item.default_model || ''),
         };
+    }
+
+    function sanitizeModelId(value) {
+        if (typeof value !== 'string') return '';
+        const text = value.trim();
+        if (!text || text.length > 120) return '';
+        if (/[<>]/.test(text)) return '';
+        if (/<\/?[a-z][\s\S]*>/i.test(text) || /<!doctype|<html|<\/div|<\/body/i.test(text)) return '';
+        if (/[\u0000-\u001f\u007f]/.test(text)) return '';
+        if (/\s/.test(text)) return '';
+        if (!/^[A-Za-z0-9._:/@+\-]+$/.test(text)) return '';
+        return text;
+    }
+
+    function normalizeModelIdList(values) {
+        const raw = Array.isArray(values) ? values : [];
+        const seen = new Set();
+        const result = [];
+        raw.forEach((item) => {
+            const candidate = typeof item === 'string'
+                ? item
+                : (item && typeof item === 'object' ? (item.id || item.name || item.model || item.slug) : '');
+            const id = sanitizeModelId(candidate);
+            const key = id.toLowerCase();
+            if (id && !seen.has(key)) {
+                seen.add(key);
+                result.push(id);
+            }
+        });
+        return result;
+    }
+
+    function validateModelIdForSave(value, label = '模型') {
+        const id = sanitizeModelId(value);
+        if (!id) throw new Error(`${label} 不是合法模型 ID，不能包含 HTML、空格或乱码内容`);
+        return id;
+    }
+
+    function normalizeModelSlotConfig(value = {}) {
+        const next = { ...(value || {}) };
+        if (next.model) next.model = sanitizeModelId(next.model);
+        if (next.providerId) next.providerId = String(next.providerId || '').trim();
+        return next;
     }
 
     function createDefaultAiSettings() {
@@ -5916,6 +6087,7 @@
             delete ai.defaultPrompts.title;
             Object.entries(createDefaultAiSettings().defaultModels).forEach(([key, value]) => {
                 if (!ai.defaultModels[key]) ai.defaultModels[key] = { ...value };
+                if (key !== 'voice') ai.defaultModels[key] = normalizeModelSlotConfig(ai.defaultModels[key]);
             });
             Object.entries(createDefaultAiSettings().defaultPrompts).forEach(([key, value]) => {
                 if (typeof ai.defaultPrompts[key] !== 'string') ai.defaultPrompts[key] = value;
@@ -5953,7 +6125,10 @@
         }
         if (normalizedPayload.defaultModels) {
             Object.keys(merged.defaultModels).forEach((key) => {
-                if (normalizedPayload.defaultModels[key]) merged.defaultModels[key] = { ...merged.defaultModels[key], ...normalizedPayload.defaultModels[key] };
+                if (normalizedPayload.defaultModels[key]) {
+                    const next = { ...merged.defaultModels[key], ...normalizedPayload.defaultModels[key] };
+                    merged.defaultModels[key] = key === 'voice' ? next : normalizeModelSlotConfig(next);
+                }
             });
         }
         if (normalizedPayload.defaultPrompts) {
@@ -5979,7 +6154,7 @@
         const ai = ensureAiSettings();
         const chat = ai.defaultModels.chat;
         const provider = ai.providers.find((item) => item.id === chat.providerId);
-        state.globalSettings.defaultModel = chat.model;
+        state.globalSettings.defaultModel = sanitizeModelId(chat.model) || createDefaultAiSettings().defaultModels.chat.model;
         state.globalSettings.provider = provider?.name || 'OpenAI';
     }
 
@@ -5998,7 +6173,7 @@
             models: [],
             defaultModel: '',
         });
-        const existingModels = Array.isArray(base.models) ? [...base.models] : [];
+        const existingModels = normalizeModelIdList(base.models);
         const allModels = existingModels.map(parseModelToStructured);
         return {
             ...base,
@@ -6017,8 +6192,9 @@
 
     function filteredProviderModels(query = '', models = []) {
         const keyword = String(query || '').trim().toLowerCase();
-        if (!keyword) return [...models];
-        return models.filter((item) => String(item || '').toLowerCase().includes(keyword));
+        const list = normalizeModelIdList(models);
+        if (!keyword) return list;
+        return list.filter((item) => String(item || '').toLowerCase().includes(keyword));
     }
 
     // 鈹€鈹€ Model vendor / capability helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -6151,21 +6327,9 @@
         if (!menu || !hint) return;
         const { slot, models } = getCurrentModelSlotContextState();
         const query = input?.value || slot?.model || '';
-        const filteredModels = filteredProviderModels(query, models);
-        hint.textContent = modelSlotHintText(query, models);
-        if (!state.modelSlotMenuOpen) {
-            menu.innerHTML = '';
-            menu.classList.remove('open');
-            return;
-        }
-        menu.classList.add('open');
-        menu.innerHTML = filteredModels.length
-            ? filteredModels.map((item) => `
-          <button class="provider-model-option ${String(slot?.model || '').trim().toLowerCase() === String(item).toLowerCase() ? 'active' : ''}" data-action="pick-slot-model" data-slot="${state.activeModelSlot}" data-model="${escapeHtml(item)}" type="button">
-            ${escapeHtml(item)}
-          </button>
-        `).join('')
-            : '<div class="provider-model-empty">娌℃湁鍖归厤鍒板綋鍓嶄緵搴斿晢妯″瀷銆?/div>';
+        hint.textContent = modelSlotHintText(query, normalizeModelIdList(models));
+        menu.innerHTML = '';
+        menu.classList.remove('open');
     }
 
     function getResolvedSlot(slotId) {
@@ -6812,12 +6976,17 @@
 
     async function saveAiSettings() {
         syncLegacyAiSettings();
+        const ai = ensureAiSettings();
+        ai.providers = (ai.providers || []).map(normalizeProviderRecord);
+        Object.keys(ai.defaultModels || {}).forEach((key) => {
+            if (key !== 'voice') ai.defaultModels[key] = normalizeModelSlotConfig(ai.defaultModels[key]);
+        });
         state.aiSettingsSaving = true;
         try {
             await fetch(`${API_BASE}/api/settings/ai`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ settings: { ...state.globalSettings, aiSettings: ensureAiSettings() } }),
+                body: JSON.stringify({ settings: { ...state.globalSettings, aiSettings: ai } }),
             });
         } catch (error) {
             console.error('[ai settings] save failed', error);
@@ -6929,10 +7098,9 @@
             : getResolvedSlot(slotId);
         const providers = ensureAiSettings().providers.filter((item) => item.enabled);
         const provider = getProviderById(slot.providerId) || getProviderById(getSlot('chat')?.providerId) || providers[0];
-        const models = provider?.models || [];
+        const models = normalizeModelIdList(provider?.models || []);
 
         if (isContactContext) {
-            const filteredModels = filteredProviderModels(slot.model || '', models);
             return `
       <section class="settings-page page-block ai-settings-page">
         <div class="settings-group glass-frost ai-panel compact-panel">
@@ -6949,29 +7117,16 @@
           <h3>\u6a21\u578b\u5217\u8868</h3>
           <div class="provider-model-picker">
             <div class="provider-model-input-row">
-              <input id="model-slot-input" class="ai-input provider-model-input" value="${escapeHtml(slot.model || '')}" placeholder="${escapeHtml(models[0] || '杈撳叆鎴栭€夋嫨妯″瀷')}" autocomplete="off" />
+              <input id="model-slot-input" class="ai-input provider-model-input" value="${escapeHtml(slot.model || '')}" placeholder="${escapeHtml(models[0] || '输入或选择模型')}" autocomplete="off" />
               <button class="provider-model-toggle" data-action="toggle-model-slot-menu" type="button" aria-label="灞曞紑妯″瀷鍒楄〃">
                 ${icon('chevron')}
               </button>
             </div>
             <p id="model-slot-hint" class="section-eyebrow provider-model-hint">${escapeHtml(modelSlotHintText(slot.model || '', models))}</p>
-            <div id="model-slot-menu" class="provider-model-menu ${state.modelSlotMenuOpen ? 'open' : ''}">
-              ${state.modelSlotMenuOpen ? (
-                filteredModels.length ? filteredModels.map((item) => `
-                  <button class="provider-model-option ${slot.model === item ? 'active' : ''}" data-action="pick-slot-model" data-slot="${slotId}" data-model="${escapeHtml(item)}" type="button">
-                    ${escapeHtml(item)}
-                  </button>
-                `).join('') : '<div class="provider-model-empty">\u6ca1\u6709\u5339\u914d\u5230\u5f53\u524d\u4f9b\u5e94\u5546\u6a21\u578b\u3002</div>'
-              ) : ''}
-            </div>
+            <div id="model-slot-menu" class="provider-model-menu"></div>
           </div>
           <div class="model-choice-list">
-            ${models.length ? models.map((item) => `
-              <button class="model-choice-item ${slot.model === item ? 'active' : ''}" data-action="pick-slot-model" data-slot="${slotId}" data-model="${escapeHtml(item)}">
-                <span class="model-choice-name">${escapeHtml(item)}</span>
-                <span class="model-choice-check">${slot.model === item ? '\u5df2\u9009' : ''}</span>
-              </button>
-            `).join('') : '<div class="model-choice-empty">\u5f53\u524d\u4f9b\u5e94\u5546\u8fd8\u6ca1\u6709\u53ef\u9009\u6a21\u578b</div>'}
+            ${renderModelSlotChoiceList(slotId, slot, models)}
           </div>
         </div>
       </section>
@@ -6979,7 +7134,6 @@
         }
 
         // Global slot: show provider chips + provider.models directly (same structure as contact context)
-        const filteredModels = filteredProviderModels(slot.model || '', models);
         return `
       <section class="settings-page page-block ai-settings-page">
         <div class="settings-group glass-frost ai-panel compact-panel">
@@ -6996,29 +7150,16 @@
           <h3>\u6a21\u578b\u5217\u8868</h3>
           <div class="provider-model-picker">
             <div class="provider-model-input-row">
-              <input id="model-slot-input" class="ai-input provider-model-input" value="${escapeHtml(slot.model || '')}" placeholder="${escapeHtml(models[0] || '杈撳叆鎴栭€夋嫨妯″瀷')}" autocomplete="off" />
+              <input id="model-slot-input" class="ai-input provider-model-input" value="${escapeHtml(slot.model || '')}" placeholder="${escapeHtml(models[0] || '输入或选择模型')}" autocomplete="off" />
               <button class="provider-model-toggle" data-action="toggle-model-slot-menu" type="button" aria-label="\u5c55\u5f00\u6a21\u578b\u5217\u8868">
                 ${icon('chevron')}
               </button>
             </div>
             <p id="model-slot-hint" class="section-eyebrow provider-model-hint">${escapeHtml(modelSlotHintText(slot.model || '', models))}</p>
-            <div id="model-slot-menu" class="provider-model-menu ${state.modelSlotMenuOpen ? 'open' : ''}">
-              ${state.modelSlotMenuOpen ? (
-                filteredModels.length ? filteredModels.map((item) => `
-                  <button class="provider-model-option ${slot.model === item ? 'active' : ''}" data-action="pick-slot-model" data-slot="${slotId}" data-model="${escapeHtml(item)}" type="button">
-                    ${escapeHtml(item)}
-                  </button>
-                `).join('') : '<div class="provider-model-empty">\u6ca1\u6709\u5339\u914d\u5230\u5f53\u524d\u4f9b\u5e94\u5546\u6a21\u578b\u3002</div>'
-              ) : ''}
-            </div>
+            <div id="model-slot-menu" class="provider-model-menu"></div>
           </div>
           <div class="model-choice-list">
-            ${models.length ? models.map((item) => `
-              <button class="model-choice-item ${slot.model === item ? 'active' : ''}" data-action="pick-slot-model" data-slot="${slotId}" data-model="${escapeHtml(item)}">
-                <span class="model-choice-name">${escapeHtml(item)}</span>
-                <span class="model-choice-check">${slot.model === item ? '\u5df2\u9009' : ''}</span>
-              </button>
-            `).join('') : '<div class="model-choice-empty">\u5f53\u524d\u4f9b\u5e94\u5546\u8fd8\u6ca1\u6709\u53ef\u9009\u6a21\u578b\uff0c\u8bf7\u5148\u5728\u201c\u6a21\u578b\u4f9b\u5e94\u5546\u201d\u9875\u9009\u62e9\u5e76\u4fdd\u5b58</div>'}
+            ${renderModelSlotChoiceList(slotId, slot, models)}
           </div>
         </div>
       </section>
@@ -7134,6 +7275,20 @@
       </div>`;
     }
 
+    function renderModelSlotChoiceList(slotId, slot, models) {
+        const list = normalizeModelIdList(models);
+        const selected = sanitizeModelId(slot?.model || '');
+        if (!list.length) {
+            return '<div class="model-choice-empty">当前供应商还没有可选模型，请先在“模型供应商”页同步并保存。</div>';
+        }
+        return list.map((item) => `
+          <button class="model-choice-item ${selected === item ? 'active' : ''}" data-action="pick-slot-model" data-slot="${slotId}" data-model="${escapeHtml(item)}">
+            <span class="model-choice-name">${escapeHtml(item)}</span>
+            <span class="model-choice-check">${selected === item ? '已选' : ''}</span>
+          </button>
+        `).join('');
+    }
+
     function renderProviderEditorPage() {
         const provider = ensureProviderEditorDraft();
         const explicitApiPath = normalizeProviderApiPath(provider.apiPath || provider.api_path || '', { allowEmpty: true });
@@ -7186,7 +7341,7 @@
           <div class="prov-sec">
             <div class="prov-sec-title-row">
               <h3 class="prov-sec-title" style="margin:0;">\u6a21\u578b\u5217\u8868</h3>
-              <button class="prov-sync-btn" data-action="sync-provider-models" data-provider="${provider.id}" type="button">${icon('reroll')}\u540c\u6b65</button>
+              <button class="prov-sync-btn" data-action="sync-provider-models" data-provider="${provider.id}" type="button" ${state.providerModelSyncingId === provider.id ? 'disabled' : ''}>${icon('reroll')}${state.providerModelSyncingId === provider.id ? '同步中' : '同步'}</button>
             </div>
             ${renderProviderModelPool(provider)}
             <p class="section-eyebrow" style="margin-top:4px;">\u540c\u6b65\u4f1a\u5c1d\u8bd5\u8bf7\u6c42 /models \u63a5\u53e3\uff1b\u4e0d\u517c\u5bb9\u65f6\u53ef\u624b\u52a8\u6dfb\u52a0\u3002</p>
@@ -7205,6 +7360,8 @@
     }
 
     async function syncProviderModelsFromEditor() {
+        const draft = ensureProviderEditorDraft();
+        if (state.providerModelSyncingId) return;
         const baseUrl = document.getElementById('provider-base-input')?.value?.trim() || '';
         const apiKey = document.getElementById('provider-key-input')?.value?.trim() || '';
         if (!baseUrl) {
@@ -7212,19 +7369,40 @@
             return;
         }
 
+        state.providerModelSyncingId = draft.id || state.providerDraftId || 'syncing';
+        render();
         try {
             const resp = await fetch(`${API_BASE}/api/settings/ai/discover-models`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
             });
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok) throw new Error(data.detail || '\u540c\u6b65\u5931\u8d25');
-            const modelNames = Array.isArray(data.models) ? data.models : [];
+            const contentType = resp.headers.get('content-type') || '';
+            const rawText = await resp.text();
+            if (!resp.ok) {
+                let detail = '';
+                try {
+                    const payload = contentType.includes('application/json') ? JSON.parse(rawText) : null;
+                    detail = payload?.detail || payload?.message || '';
+                } catch { }
+                throw new Error(detail || `HTTP ${resp.status}`);
+            }
+            if (!contentType.includes('application/json')) {
+                throw new Error('后端返回的不是 JSON，已阻止写入模型列表');
+            }
+            let data = {};
+            try {
+                data = JSON.parse(rawText || '{}');
+            } catch {
+                throw new Error('后端返回 JSON 解析失败，已阻止写入模型列表');
+            }
+            const modelNames = normalizeModelIdList(Array.isArray(data.models) ? data.models : []);
+            if (!modelNames.length) {
+                alert('没有获取到模型，已保留当前默认模型和已有列表。');
+                return;
+            }
 
-            const draft = ensureProviderEditorDraft();
             // Preserve existing manual models; merge synced ones
-            const existingIds = new Set((draft._allModels || []).map((m) => m.id));
             const syncedModels = modelNames.map(parseModelToStructured);
             const merged = [
                 ...syncedModels,
@@ -7240,11 +7418,6 @@
             // Keep existing selection; new synced models are NOT auto-selected
             draft.models = [...draft._selectedModelIds];
 
-            const defaultInput = document.getElementById('provider-default-model-input');
-            if (defaultInput && (!defaultInput.value || !modelNames.includes(defaultInput.value))) {
-                defaultInput.value = modelNames[0] || defaultInput.value;
-            }
-            draft.defaultModel = defaultInput?.value?.trim() || draft.defaultModel || '';
             render();
             renderProviderModelMenu();
             alert(modelNames.length ? `\u5df2\u540c\u6b65 ${modelNames.length} \u4e2a\u6a21\u578b\uff0c\u8bf7\u5728\u6a21\u578b\u6c60\u4e2d\u9009\u62e9\u9700\u8981\u7684\u6a21\u578b` : '\u63a5\u53e3\u5df2\u8fde\u63a5\uff0c\u4f46\u4f9b\u5e94\u5546\u6ca1\u6709\u8fd4\u56de\u53ef\u7528\u6a21\u578b');
@@ -7255,6 +7428,9 @@
                 return;
             }
             alert(`\u540c\u6b65\u5931\u8d25\uff1a${message}`);
+        } finally {
+            state.providerModelSyncingId = '';
+            render();
         }
     }
 
@@ -7432,7 +7608,7 @@
             return;
         }
         if (action === 'toggle-model-slot-menu') {
-            state.modelSlotMenuOpen = !state.modelSlotMenuOpen;
+            state.modelSlotMenuOpen = false;
             renderModelSlotMenu();
             return;
         }
@@ -7442,7 +7618,8 @@
             return;
         }
         if (action === 'pick-provider-default-model') {
-            const model = target.dataset.model || '';
+            const model = sanitizeModelId(target.dataset.model || '');
+            if (!model) return;
             const draft = ensureProviderEditorDraft();
             draft.defaultModel = model;
             const input = document.getElementById('provider-default-model-input');
@@ -7461,7 +7638,7 @@
                 state.modelSlotMenuOpen = false;
                 if (c?.settings) {
                     c.settings.modelProviderId = providerId;
-                    if (!c.settings.model || !(provider?.models || []).includes(c.settings.model)) {
+                    if (!sanitizeModelId(c.settings.model) || !(provider?.models || []).includes(c.settings.model)) {
                         c.settings.model = provider?.defaultModel || provider?.models?.[0] || c.settings.model || '';
                     }
                 }
@@ -7472,7 +7649,7 @@
             const slot = getSlot(target.dataset.slot);
             slot.providerId = target.dataset.providerId;
             const provider = getProviderById(slot.providerId);
-            if (provider) slot.model = provider.defaultModel || provider.models?.[0] || slot.model;
+            if (provider) slot.model = sanitizeModelId(provider.defaultModel) || provider.models?.[0] || sanitizeModelId(slot.model) || '';
             state.modelSlotMenuOpen = false;
             render();
             saveAiSettings();
@@ -7522,7 +7699,7 @@
         if (action === 'add-provider-model') {
             const draft = ensureProviderEditorDraft();
             if (!(draft._selectedModelIds instanceof Set)) draft._selectedModelIds = new Set(draft._selectedModelIds || []);
-            const mid = target.dataset.modelId;
+            const mid = sanitizeModelId(target.dataset.modelId || '');
             if (mid) draft._selectedModelIds.add(mid);
             draft.models = [...draft._selectedModelIds];
             render();
@@ -7532,7 +7709,7 @@
         if (action === 'remove-provider-model') {
             const draft = ensureProviderEditorDraft();
             if (!(draft._selectedModelIds instanceof Set)) draft._selectedModelIds = new Set(draft._selectedModelIds || []);
-            const mid = target.dataset.modelId;
+            const mid = sanitizeModelId(target.dataset.modelId || '');
             if (mid) draft._selectedModelIds.delete(mid);
             draft.models = [...draft._selectedModelIds];
             render();
@@ -7542,7 +7719,11 @@
         if (action === 'add-manual-provider-model') {
             const draft = ensureProviderEditorDraft();
             const input = document.getElementById('provider-manual-model-input');
-            const m = (input?.value || '').trim();
+            const m = sanitizeModelId(input?.value || '');
+            if ((input?.value || '').trim() && !m) {
+                alert('模型 ID 不合法，不能包含 HTML、空格或乱码内容');
+                return;
+            }
             if (!m) return;
             if (!(draft._selectedModelIds instanceof Set)) draft._selectedModelIds = new Set(draft._selectedModelIds || []);
             if (!Array.isArray(draft._allModels)) draft._allModels = [];
@@ -7567,7 +7748,7 @@
         if (action === 'add-model-to-slot') {
             const slotId = target.dataset.slot;
             const pid = target.dataset.providerId;
-            const m = target.dataset.model;
+            const m = sanitizeModelId(target.dataset.model || '');
             if (!slotId || !pid || !m) return;
             const slot = getSlot(slotId);
             if (!Array.isArray(slot.selectedModels)) slot.selectedModels = [];
@@ -7596,7 +7777,11 @@
         if (action === 'add-manual-slot-model') {
             const slotId = target.dataset.slot;
             const input = document.getElementById('model-slot-manual-input');
-            const m = (input?.value || '').trim();
+            const m = sanitizeModelId(input?.value || '');
+            if ((input?.value || '').trim() && !m) {
+                alert('模型 ID 不合法，不能包含 HTML、空格或乱码内容');
+                return;
+            }
             if (!slotId || !m) return;
             const slot = getSlot(slotId);
             if (!Array.isArray(slot.manualModels)) slot.manualModels = [];
@@ -7608,7 +7793,7 @@
 
         if (action === 'remove-manual-slot-model') {
             const slotId = target.dataset.slot;
-            const m = target.dataset.model;
+            const m = sanitizeModelId(target.dataset.model || '');
             if (!slotId || !m) return;
             const slot = getSlot(slotId);
             if (Array.isArray(slot.manualModels)) {
@@ -7738,13 +7923,15 @@
         }
 
         if (action === 'pick-slot-model') {
+            const model = sanitizeModelId(target.dataset.model || '');
+            if (!model) return;
             if (state.activeModelSlotContext === 'contact') {
                 const c = byId(state.currentContactId) || state.contacts[0];
                 if (c?.settings) {
                     if (target.dataset.slot === 'consciousness') {
-                        c.settings.loopModel = target.dataset.model;
+                        c.settings.loopModel = model;
                     } else {
-                        c.settings.model = target.dataset.model;
+                        c.settings.model = model;
                         c.settings.modelProviderId = state.activeModelProviderId || c.settings.modelProviderId || getSlot('chat')?.providerId || 'openai';
                     }
                 }
@@ -7754,7 +7941,7 @@
                 return;
             }
             const slot = getSlot(target.dataset.slot);
-            slot.model = target.dataset.model;
+            slot.model = model;
             if (target.dataset.providerId) slot.providerId = target.dataset.providerId;
             state.modelSlotMenuOpen = false;
             render();
@@ -7780,9 +7967,21 @@
             const draft = ensureProviderEditorDraft();
             // Derive models from structured selection
             const sel = draft._selectedModelIds instanceof Set ? draft._selectedModelIds : new Set(draft._selectedModelIds || []);
-            const models = [...sel].filter(Boolean);
+            const models = normalizeModelIdList([...sel]);
             const existing = getProviderById(id);
             const apiPath = normalizeProviderApiPath(document.getElementById('provider-api-path-input')?.value || '', { allowEmpty: true });
+            const defaultInputValue = document.getElementById('provider-default-model-input')?.value?.trim() || '';
+            let defaultModel = '';
+            try {
+                defaultModel = defaultInputValue ? validateModelIdForSave(defaultInputValue, '默认模型') : (models[0] || '');
+            } catch (error) {
+                alert(error.message || '默认模型不合法');
+                return;
+            }
+            if (!defaultModel) {
+                alert('默认模型不能为空，请手动输入或选择一个合法模型');
+                return;
+            }
             const next = {
                 ...(existing || { id }),
                 id,
@@ -7791,7 +7990,7 @@
                 apiPath,
                 api_path: apiPath,
                 apiKey: document.getElementById('provider-key-input')?.value?.trim() || '',
-                defaultModel: document.getElementById('provider-default-model-input')?.value?.trim() || models[0] || '',
+                defaultModel,
                 models,
             };
             const ai = ensureAiSettings();
@@ -7836,7 +8035,13 @@
         }
         if (target?.id === 'model-slot-input') {
             const c = byId(state.currentContactId) || state.contacts[0];
-            const nextValue = target.value || '';
+            const rawValue = target.value || '';
+            const nextValue = rawValue ? sanitizeModelId(rawValue) : '';
+            if (rawValue && !nextValue) {
+                state.modelSlotMenuOpen = false;
+                renderModelSlotMenu();
+                return;
+            }
             if (state.activeModelSlotContext === 'contact') {
                 if (c?.settings) {
                     if (state.activeModelSlot === 'consciousness') c.settings.loopModel = nextValue;
@@ -7846,7 +8051,7 @@
                 const slot = getSlot(state.activeModelSlot);
                 if (slot) slot.model = nextValue;
             }
-            state.modelSlotMenuOpen = true;
+            state.modelSlotMenuOpen = false;
             renderModelSlotMenu();
             return;
         }
@@ -8319,7 +8524,7 @@
     document.addEventListener('focusin', (event) => {
         const target = event.target;
         if (target?.id === 'model-slot-input') {
-            state.modelSlotMenuOpen = true;
+            state.modelSlotMenuOpen = false;
             renderModelSlotMenu();
             return;
         }

@@ -1128,7 +1128,7 @@
 .composer-zone {
   flex-shrink: 0;
   flex: 0 0 auto;
-  padding: 8px 12px calc(env(safe-area-inset-bottom) + 10px);
+  padding: 6px 12px max(8px, env(safe-area-inset-bottom));
   background: linear-gradient(180deg, rgba(252,247,255,0), rgba(250,248,250,.96) 32%);
   z-index: 20;
 }
@@ -1217,6 +1217,54 @@
   height: 24px;
 }
 
+.chat-attachment-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 2px 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-attachment-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 58px;
+  height: 58px;
+  margin: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255,255,255,.94);
+  border: 1px solid rgba(232, 219, 225, 0.96);
+  box-shadow: 0 5px 14px rgba(181, 146, 159, 0.1);
+}
+
+.chat-attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.chat-attachment-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid rgba(232, 219, 225, 0.95);
+  background: rgba(255,255,255,.9);
+  color: rgba(109, 89, 97, 0.9);
+  font: inherit;
+  font-size: 14px;
+  line-height: 18px;
+  padding: 0;
+}
+
+.chat-file-input {
+  display: none;
+}
+
 .composer-card {
   position: relative;
   display: flex;
@@ -1265,6 +1313,12 @@
   color: rgba(64, 50, 56, 0.96);
 }
 
+@supports (-webkit-touch-callout: none) {
+  .composer-card .chat-input {
+    font-size: 16px;
+  }
+}
+
 .chat-input::placeholder,
 .sheet-input::placeholder { color: rgba(156, 131, 140, 0.72); }
 
@@ -1277,6 +1331,25 @@
   flex-shrink: 0;
   border: 1px solid rgba(226, 213, 220, 0.98);
   box-shadow: 0 3px 10px rgba(181, 146, 159, 0.08);
+}
+
+.message-attachments {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.message-attachments:only-child {
+  margin-bottom: 0;
+}
+
+.message-attachment-image {
+  max-width: min(210px, 62vw);
+  max-height: 220px;
+  border-radius: 12px;
+  object-fit: cover;
+  display: block;
+  border: 1px solid rgba(232, 219, 225, 0.78);
 }
 
 .section-eyebrow {

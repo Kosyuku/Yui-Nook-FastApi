@@ -25,7 +25,7 @@ const RICH_TEXT_SKIP_SELECTOR = [
 
 function shouldEnhanceRichInput(input) {
   if (!input) return false;
-  if (input.closest(".chat-composer, .composer-zone, .rp-composer, .moment-composer-sheet")) return true;
+  if (input.closest(".chat-app")) return false;
   return !input.closest(RICH_TEXT_SKIP_SELECTOR);
 }
 
@@ -87,6 +87,27 @@ function insertHtmlAtSelection(html) {
     selection.addRange(range);
   }
   return true;
+}
+
+function insertTextAtSelection(text) {
+  const selection = window.getSelection?.();
+  if (!selection || !selection.rangeCount) return false;
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  const node = document.createTextNode(text);
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
+function plainTextFromHtml(html) {
+  if (!html) return "";
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return (template.content.textContent || "").replace(/\n{3,}/g, "\n\n");
 }
 
 function syncRichProxy(editor, input) {
@@ -151,19 +172,12 @@ function enhanceRichInput(input) {
 
   editor.addEventListener("input", () => syncRichProxy(editor, input));
   editor.addEventListener("paste", (event) => {
-    const items = [...(event.clipboardData?.items || [])];
-    const imageItem = items.find((item) => item.type.startsWith("image/"));
-    if (!imageItem) return;
-    const file = imageItem.getAsFile();
-    if (!file) return;
     event.preventDefault();
-    const reader = new FileReader();
-    reader.onload = () => {
-      const src = String(reader.result || "");
-      insertHtmlAtSelection(`<img class="rich-inline-image" src="${src}" alt="pasted image" />`);
-      syncRichProxy(editor, input);
-    };
-    reader.readAsDataURL(file);
+    const clipboard = event.clipboardData;
+    const plain = clipboard?.getData("text/plain") || "";
+    const html = clipboard?.getData("text/html") || "";
+    insertTextAtSelection(plain || plainTextFromHtml(html));
+    syncRichProxy(editor, input);
   });
   editor.addEventListener("focus", () => wrapper.classList.add("is-focused"));
   editor.addEventListener("blur", () => wrapper.classList.remove("is-focused"));
