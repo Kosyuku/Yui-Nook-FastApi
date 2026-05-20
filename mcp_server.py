@@ -7,6 +7,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 import database as db
+import media_storage
 from config import settings
 from routes import chat, ChatRequest
 
@@ -392,6 +393,101 @@ async def search_diary(query: str, agent_id: str = None, limit: int = 10) -> str
         diaries = diaries[:limit]
         
     return json.dumps(diaries, ensure_ascii=False)
+
+
+CURIO_INLINE_LIMIT_BYTES = 500 * 1024
+
+
+def _artifact_storage_key(title: str) -> str:
+    filename = media_storage.sanitize_filename(f"{title or 'artifact'}.html")
+    return f"curio/{db._new_id()}_{filename}"
+
+
+def _artifact_should_use_r2(content: str, storage_mode: str) -> bool:
+    text = str(content or "").lstrip().lower()
+    looks_inline = text.startswith("<!doctype") or text.startswith("<html") or "<script" in text[:2048] or "<body" in text[:2048]
+    return bool(content) and (
+        len(content.encode("utf-8")) >= CURIO_INLINE_LIMIT_BYTES
+        or (str(storage_mode or "").lower() == "r2" and looks_inline)
+    )
+
+
+@mcp.tool()
+async def save_artifact(
+    title: str,
+    description: str = "",
+    type: str = "page",
+    content: str = "",
+    tags: list[str] = None,
+    agent_id: str = "azheng",
+    session_id: str = "",
+    storage_mode: str = "inline",
+    cover_url: str = "",
+    is_pinned: bool = False,
+    is_surprise: bool = False,
+) -> str:
+    """
+    Save a conversation artifact into Curio. Use this after creating a small web page,
+    game, surprise page, or widget that the user may want to reopen later.
+    """
+    backend_error = _backend_failure()
+    if backend_error:
+        return backend_error
+    try:
+        metadata: dict[str, Any] = {"source": "claude_mcp"}
+        artifact_content = content or ""
+        artifact_storage = storage_mode or "inline"
+        if _artifact_should_use_r2(artifact_content, artifact_storage):
+            data = artifact_content.encode("utf-8")
+            storage_key = _artifact_storage_key(title)
+            media_storage.r2_client.put_object(storage_key, data, mime_type="text/html; charset=utf-8")
+            artifact_content = storage_key
+            artifact_storage = "r2"
+            metadata.update({"size_bytes": len(data), "r2_mime_type": "text/html; charset=utf-8"})
+        item = await db.create_artifact_item(
+            title=title,
+            description=description,
+            type=type,
+            content=artifact_content,
+            storage_mode=artifact_storage,
+            cover_url=cover_url,
+            tags=tags or [],
+            agent_id=agent_id,
+            session_id=session_id,
+            is_pinned=is_pinned,
+            is_surprise=is_surprise,
+            metadata=metadata,
+        )
+        return json.dumps({"success": True, "artifact_id": item["id"], "item": item}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def list_artifacts(
+    type: str = None,
+    agent_id: str = None,
+    tag: str = None,
+    pinned: bool = None,
+    surprise: bool = None,
+    limit: int = 20,
+) -> str:
+    """
+    List Curio artifacts already saved, optionally filtered by type, agent, tag,
+    pinned state, or surprise state.
+    """
+    try:
+        items = await db.list_artifact_items(
+            type=type,
+            agent_id=agent_id,
+            tag=tag,
+            pinned=pinned,
+            surprise=surprise,
+            limit=limit,
+        )
+        return json.dumps({"success": True, "items": items, "count": len(items)}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
 @mcp.tool()

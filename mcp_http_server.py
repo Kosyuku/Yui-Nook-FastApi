@@ -33,6 +33,8 @@ REQUIRED_MCP_TOOLS = {
     "comment_diary_entry",
     "underline_diary_entry",
     "search_diary",
+    "save_artifact",
+    "list_artifacts",
     "save_memory",
     "search_memory",
 }

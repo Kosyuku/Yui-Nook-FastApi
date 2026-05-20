@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 import database as db
+import media_storage
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -548,6 +549,48 @@ TOOLS_SCHEMA = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_artifact",
+            "description": "Save a generated HTML page, mini game, surprise page, or widget into Curio.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "artifact title"},
+                    "description": {"type": "string", "description": "short card description"},
+                    "type": {"type": "string", "enum": ["html", "game", "page", "widget"], "description": "artifact type"},
+                    "content": {"type": "string", "description": "HTML source for inline artifacts, or an R2 object key"},
+                    "storage_mode": {"type": "string", "enum": ["inline", "r2"], "description": "inline for small HTML, r2 for large artifacts"},
+                    "cover_url": {"type": "string", "description": "optional cover image URL"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "labels such as 520, surprise, game"},
+                    "agent_id": {"type": "string", "description": "creator agent id"},
+                    "session_id": {"type": "string", "description": "source chat session id"},
+                    "is_pinned": {"type": "boolean", "description": "pin in Curio"},
+                    "is_surprise": {"type": "boolean", "description": "mark as surprise page"},
+                },
+                "required": ["title", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_artifacts",
+            "description": "List Curio artifacts, optionally filtered by type, creator, tag, pinned, or surprise state.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["html", "game", "page", "widget"]},
+                    "agent_id": {"type": "string"},
+                    "tag": {"type": "string"},
+                    "pinned": {"type": "boolean"},
+                    "surprise": {"type": "boolean"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -572,6 +615,70 @@ async def execute_create_extracted_item(args: dict) -> str:
         return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
 
 
+CURIO_INLINE_LIMIT_BYTES = 500 * 1024
+
+
+def _artifact_storage_key(title: str) -> str:
+    filename = media_storage.sanitize_filename(f"{title or 'artifact'}.html")
+    return f"curio/{db._new_id()}_{filename}"
+
+
+def _artifact_should_use_r2(content: str, storage_mode: str) -> bool:
+    text = str(content or "").lstrip().lower()
+    looks_inline = text.startswith("<!doctype") or text.startswith("<html") or "<script" in text[:2048] or "<body" in text[:2048]
+    return bool(content) and (
+        len(content.encode("utf-8")) >= CURIO_INLINE_LIMIT_BYTES
+        or (str(storage_mode or "").lower() == "r2" and looks_inline)
+    )
+
+
+async def execute_save_artifact(args: dict) -> str:
+    try:
+        metadata = args.get("metadata") if isinstance(args.get("metadata"), dict) else {}
+        metadata = {**metadata, "source": args.get("source") or "agent_tool"}
+        content = str(args.get("content") or "")
+        storage_mode = str(args.get("storage_mode") or "inline")
+        if _artifact_should_use_r2(content, storage_mode):
+            data = content.encode("utf-8")
+            storage_key = _artifact_storage_key(args.get("title") or "artifact")
+            media_storage.r2_client.put_object(storage_key, data, mime_type="text/html; charset=utf-8")
+            content = storage_key
+            storage_mode = "r2"
+            metadata.update({"size_bytes": len(data), "r2_mime_type": "text/html; charset=utf-8"})
+        item = await db.create_artifact_item(
+            title=args.get("title") or "",
+            description=args.get("description") or "",
+            type=args.get("type") or "page",
+            content=content,
+            storage_mode=storage_mode,
+            cover_url=args.get("cover_url") or "",
+            tags=args.get("tags") or [],
+            agent_id=args.get("agent_id") or "",
+            session_id=args.get("session_id") or "",
+            is_pinned=bool(args.get("is_pinned")),
+            is_surprise=bool(args.get("is_surprise")),
+            metadata=metadata,
+        )
+        return json.dumps({"status": "success", "artifact_id": item["id"], "item": item}, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+
+
+async def execute_list_artifacts(args: dict) -> str:
+    try:
+        items = await db.list_artifact_items(
+            type=args.get("type"),
+            agent_id=args.get("agent_id"),
+            tag=args.get("tag"),
+            pinned=args.get("pinned"),
+            surprise=args.get("surprise"),
+            limit=args.get("limit") or 20,
+        )
+        return json.dumps({"status": "success", "items": items, "count": len(items)}, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+
+
 TOOL_EXECUTORS: dict[str, Any] = {
     "get_current_time": execute_get_current_time,
     "add_memory": execute_add_memory,
@@ -589,6 +696,8 @@ TOOL_EXECUTORS: dict[str, Any] = {
     "comment_diary_entry": execute_comment_diary_entry,
     "underline_diary_entry": execute_underline_diary_entry,
     "create_extracted_item": execute_create_extracted_item,
+    "save_artifact": execute_save_artifact,
+    "list_artifacts": execute_list_artifacts,
 }
 
 
