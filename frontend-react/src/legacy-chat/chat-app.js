@@ -1599,6 +1599,7 @@
                 proactiveEnabled: false,
                 proactiveFrequency: 30,
                 memoryEnabled: true,
+                codexEnabled: false,
                 ...(contact.settings || {}),
             },
         };
@@ -1839,6 +1840,7 @@
         const c = byId(state.currentContactId) || state.contacts[0];
         const quoteMoment = state.quoteMomentId ? getMoment(state.quoteMomentId) : null;
         const quoteMessage = state.quoteMessageId ? c.messages.find((item) => item.id === state.quoteMessageId) : null;
+        const codexActive = !!c.settings?.codexEnabled;
         return `
       <section class="room-page room-theme-${c.theme}">
         <div class="messages-panel">
@@ -1851,6 +1853,7 @@
             <div class="composer-input-wrap">
               <input class="chat-input" placeholder="\u8f93\u5165\u6d88\u606f..." value="" />
             </div>
+            <button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" type="button" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">Cx</button>
             <button class="icon-btn icon-circle soft-mini" data-action="expand-actions" aria-label="\u9644\u4ef6">${icon('attach')}</button>
             ${state.streamingAbortController
                 ? `<button class="icon-btn send-round send-stop-active" data-action="fake-send" aria-label="\u505c\u6b62">${icon('stop')}</button>`
@@ -1864,9 +1867,13 @@
 
     function renderMessage(message, contact) {
         const roleClass = message.role === 'user' ? 'from-user' : 'from-ai';
+        const isCodexSource = String(message.source || message.provider || '').toLowerCase() === 'codex';
         const allowReasoning = !!contact?.settings?.reasoning_visibility;
         const avatar = message.role === 'ai'
             ? `<img class="bubble-avatar" src="${contact.avatar}" alt="${escapeHtml(contact.name)}" />`
+            : '';
+        const sourceBadge = message.role === 'ai' && isCodexSource
+            ? '<span class="message-source-badge codex">Codex</span>'
             : '';
         const cotButton = message.role === 'ai' && allowReasoning && message.thinking && !message.typing
             ? `<button class="bubble-cot-btn" data-action="toggle-thinking" data-id="${message.id}" aria-label="\u5c55\u5f00\u72ec\u767d">${icon('bubbleHeart')}</button>`
@@ -1892,6 +1899,7 @@
             ${message.role === 'user' ? `<time class="bubble-time">${escapeHtml(message.time)}</time>` : ''}
             <div class="message-bubble ${roleClass}${bubbleClassExtra}" ${message.role === 'ai' ? `data-msg-id="${message.id}" data-action="toggle-message-tools" data-id="${message.id}"` : ''}>
               ${cotButton}
+              ${sourceBadge}
               ${(message.typing || (message.streaming && !message.text))
                   ? `<div class="typing-dots"><span></span><span></span><span></span></div>`
                   : `<div class="message-text">${escapeHtml(message.text)}</div>`}
@@ -3317,6 +3325,8 @@
                 state.streamingAbortController.abort();
                 state.streamingAbortController = null;
                 render(); // immediately revert button without waiting for catch block
+            } else if (state.currentView !== 'rpRoom' && byId(state.currentContactId)?.settings?.codexEnabled) {
+                doSendCodexMessage();
             } else {
                 doSendMessage();
             }
@@ -3337,7 +3347,11 @@
             chatInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    doSendMessage();
+                    if (state.currentView !== 'rpRoom' && byId(state.currentContactId)?.settings?.codexEnabled) {
+                        doSendCodexMessage();
+                    } else {
+                        doSendMessage();
+                    }
                 }
             });
             // Auto focus
@@ -4174,9 +4188,26 @@
             if (input) input.value = mcpAction?.prompt || map[mcpAction?.mcpToolId || actionId] || map[actionId] || `${mcpAction?.label || ''}`.trim();
         }
 
+        if (action === 'toggle-codex-mode') {
+            const c = byId(state.currentContactId);
+            if (!c) return;
+            c.settings = { ...(c.settings || {}), codexEnabled: !c.settings?.codexEnabled };
+            queueLocalSyncIfChanged(120);
+            render();
+            return;
+        }
+
         if (action === 'fake-send') {
+            if (state.streamingAbortController) {
+                state.streamingAbortController.abort();
+                state.streamingAbortController = null;
+                render();
+                return;
+            }
             if (state.currentView === 'rpRoom') {
                 doSendRpMessage();
+            } else if (byId(state.currentContactId)?.settings?.codexEnabled) {
+                doSendCodexMessage();
             } else {
                 doSendMessage();
             }
@@ -4357,6 +4388,8 @@
             created_at: createdAt,
             time,
             ...(message.model ? { model: message.model } : {}),
+            ...(message.source ? { source: message.source } : {}),
+            ...(message.provider ? { provider: message.provider } : {}),
             ...(message.attachments ? { attachments: message.attachments } : {}),
             ...(message.thinking ? { thinking: message.thinking } : {}),
             ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}),
@@ -5288,6 +5321,103 @@
             state.streamingAbortController = null;
             if (state.currentRpRoomId) state.rpMessages[state.currentRpRoomId] = state.currentRpMessages.map(normalizeStoredMessage);
             queueLocalSyncIfChanged(120);
+            render();
+        }
+    }
+
+    async function doSendCodexMessage() {
+        const input = root()?.querySelector('.chat-input');
+        const text = input?.value?.trim();
+        if (!text) return;
+        const c = byId(state.currentContactId);
+        if (!c) return;
+        cancelAssistantPlayback();
+
+        const msgId = 'u' + Date.now();
+        c.messages.push({ id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
+        c.lastMessage = text;
+        c.lastTime = '\u521a\u521a';
+        input.value = '';
+
+        const aiId = 'ai_' + Date.now();
+        c.messages.push({
+            id: aiId,
+            role: 'ai',
+            text: '',
+            content: '',
+            time: '',
+            created_at: new Date().toISOString(),
+            typing: true,
+            source: 'codex',
+        });
+
+        syncConversationsFromContacts();
+        queueLocalSyncIfChanged(120);
+        render();
+        scrollToBottom();
+
+        const abortCtrl = new AbortController();
+        state.streamingAbortController = abortCtrl;
+        render();
+
+        try {
+            const resp = await fetch(`${API_BASE}/api/codex/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_key: `yui:${c.id}`,
+                    content: text,
+                    reset: false,
+                }),
+                signal: abortCtrl.signal,
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+
+            const reply = String(data.reply || '').trim() || '\u2026';
+            const idx = c.messages.findIndex((m) => m.id === aiId);
+            if (idx !== -1) {
+                c.messages[idx] = {
+                    id: aiId,
+                    role: 'ai',
+                    text: reply,
+                    content: reply,
+                    source: 'codex',
+                    provider: 'codex',
+                    time: nowTimeStr(),
+                    created_at: new Date().toISOString(),
+                    typing: false,
+                };
+            }
+            c.lastMessage = reply;
+            c.lastTime = nowTimeStr();
+            syncConversationsFromContacts();
+            queueLocalSyncIfChanged(120);
+            render();
+            scrollToBottom();
+        } catch (err) {
+            const wasAborted = err.name === 'AbortError';
+            if (!wasAborted) console.error('[codex chat] error:', err);
+            const idx = c.messages.findIndex((m) => m.id === aiId);
+            if (idx !== -1) {
+                const textOut = wasAborted ? '\u2026' : `Codex \u8fde\u63a5\u5931\u8d25\uff1a${err.message}`;
+                c.messages[idx] = {
+                    id: aiId,
+                    role: 'ai',
+                    text: textOut,
+                    content: textOut,
+                    source: 'codex',
+                    provider: 'codex',
+                    time: nowTimeStr(),
+                    created_at: new Date().toISOString(),
+                    typing: false,
+                };
+            }
+            syncConversationsFromContacts();
+            queueLocalSyncIfChanged(120);
+            render();
+        } finally {
+            state.streamingAbortController = null;
             render();
         }
     }

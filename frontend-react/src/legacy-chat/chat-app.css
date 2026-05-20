@@ -698,6 +698,27 @@
   padding-right: 34px;
 }
 
+.message-source-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  margin: 0 0 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  color: rgba(95, 76, 88, 0.74);
+  background: rgba(244, 235, 241, 0.92);
+  border: 1px solid rgba(226, 211, 220, 0.86);
+}
+
+.message-source-badge.codex {
+  color: rgba(80, 70, 98, 0.82);
+  background: rgba(238, 235, 248, 0.94);
+  border-color: rgba(211, 205, 232, 0.9);
+}
+
 .message-bubble.from-user {
   color: rgba(61, 50, 56, 0.96);
   background: rgba(247, 236, 241, 0.98);
@@ -1251,6 +1272,29 @@
   height: 34px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.codex-toggle {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(226, 213, 220, 0.98);
+  background: rgba(255, 255, 255, 0.96);
+  color: rgba(116, 96, 106, 0.82);
+  box-shadow: 0 3px 10px rgba(181, 146, 159, 0.06);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.codex-toggle.active {
+  color: rgba(80, 70, 98, 0.96);
+  background: rgba(238, 235, 248, 0.98);
+  border-color: rgba(196, 186, 230, 0.98);
+  box-shadow: 0 4px 12px rgba(130, 112, 176, 0.13);
 }
 
 .chat-input,

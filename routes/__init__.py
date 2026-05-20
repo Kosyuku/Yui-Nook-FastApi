@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 import ai_runtime
+from codex_bridge import codex_bridge_chat
 import database as db
 from models import router as model_router
 from models import OpenAICompatAdapter, EchoAdapter, ADAPTER_MAP
@@ -312,6 +313,13 @@ class ChatRequest(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     api_path: Optional[str] = None
+
+
+class CodexChatRequest(BaseModel):
+    conversation_key: str
+    content: str
+    reset: bool = False
+    timeout_seconds: Optional[int] = None
 
 
 class RPChatRequest(BaseModel):
@@ -889,6 +897,31 @@ async def chat(body: ChatRequest):
             break
 
     return EventSourceResponse(event_generator())
+
+
+@api.post("/codex/chat")
+async def codex_chat(body: CodexChatRequest):
+    """
+    Bridge a client conversation into a persistent Codex CLI thread.
+
+    Same conversation_key from YUI Nook and Discord resumes the same Codex thread.
+    """
+    try:
+        result = await codex_bridge_chat(
+            conversation_key=body.conversation_key,
+            content=body.content,
+            reset=body.reset,
+            timeout_seconds=body.timeout_seconds or 180,
+        )
+    except Exception as exc:
+        logger.exception("Codex bridge failed")
+        raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
+
+    return {
+        "conversation_key": result.conversation_key,
+        "thread_id": result.thread_id,
+        "reply": result.reply,
+    }
 
 
 @api.post("/rp/chat")
