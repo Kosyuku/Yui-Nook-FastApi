@@ -8443,13 +8443,28 @@
         resetQuickGesture();
     }, { passive: true });
 
-    document.addEventListener('click', (event) => {
+    let lastCodexToggleEventAt = 0;
+
+    function handleCodexTogglePress(event) {
         const target = event.target?.closest?.('.codex-toggle');
         if (!target) return;
+        const now = Date.now();
+        if (now - lastCodexToggleEventAt < 320) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation?.();
+            return;
+        }
+        lastCodexToggleEventAt = now;
         event.preventDefault();
         event.stopPropagation();
+        event.stopImmediatePropagation?.();
         toggleCurrentCodexMode(target.dataset.contactId);
-    }, true);
+    }
+
+    ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach((eventName) => {
+        document.addEventListener(eventName, handleCodexTogglePress, true);
+    });
 
     document.addEventListener('mousedown', (event) => {
         if (isEditableTarget(event.target)) return;
