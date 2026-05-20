@@ -18,6 +18,7 @@ from config import settings
 _db: aiosqlite.Connection | None = None
 logger = logging.getLogger(__name__)
 _supabase_settings_table_missing = False
+_supabase_artifact_items_table_missing = False
 
 MEMORY_CATEGORY_ALIASES = {
     "core": "core_profile",
@@ -504,6 +505,32 @@ CREATE INDEX IF NOT EXISTS idx_extracted_items_agent
     ON extracted_items(agent_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_extracted_items_module
     ON extracted_items(target_module, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS artifact_items (
+    id           TEXT PRIMARY KEY,
+    title        TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    type         TEXT NOT NULL DEFAULT 'page',
+    content      TEXT NOT NULL DEFAULT '',
+    storage_mode TEXT NOT NULL DEFAULT 'inline',
+    cover_url    TEXT NOT NULL DEFAULT '',
+    tags         TEXT NOT NULL DEFAULT '[]',
+    agent_id     TEXT NOT NULL DEFAULT '',
+    session_id   TEXT NOT NULL DEFAULT '',
+    is_pinned    INTEGER NOT NULL DEFAULT 0,
+    is_surprise  INTEGER NOT NULL DEFAULT 0,
+    metadata     TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_items_agent_id
+    ON artifact_items(agent_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_items_type
+    ON artifact_items(type);
+CREATE INDEX IF NOT EXISTS idx_artifact_items_is_pinned
+    ON artifact_items(is_pinned);
+CREATE INDEX IF NOT EXISTS idx_artifact_items_created_at
+    ON artifact_items(created_at DESC);
 """
 
 
@@ -7373,5 +7400,354 @@ async def delete_extracted_item(item_id: str) -> bool:
     result = await db.execute(
         "DELETE FROM extracted_items WHERE id = ?", (item_id,)
     )
+    await db.commit()
+    return result.rowcount > 0
+
+
+# ==================== Curio Artifacts ====================
+
+ARTIFACT_TYPES = {"html", "game", "page", "widget"}
+ARTIFACT_STORAGE_MODES = {"inline", "r2"}
+
+
+def _use_supabase_artifacts() -> bool:
+    # Curio can run locally even while the Supabase artifact_items migration is not applied yet.
+    return False
+
+
+CURIO_ARTIFACTS_SETTING_KEY = "curio_artifact_items"
+
+
+async def _load_artifact_setting_items() -> list[dict[str, Any]]:
+    row = await get_setting(CURIO_ARTIFACTS_SETTING_KEY)
+    if not row:
+        return []
+    try:
+        data = json.loads(row.get("value") or "[]")
+    except Exception:
+        data = []
+    if not isinstance(data, list):
+        return []
+    return [item for item in (_normalize_artifact(row) for row in data if isinstance(row, dict)) if item]
+
+
+async def _save_artifact_setting_items(items: list[dict[str, Any]]) -> None:
+    await set_setting(CURIO_ARTIFACTS_SETTING_KEY, json.dumps(items, ensure_ascii=False))
+
+
+def _json_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except Exception:
+            pass
+        return [item.strip() for item in text.split(",") if item.strip()]
+    return []
+
+
+def _normalize_artifact(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    item["tags"] = _json_list(item.get("tags"))
+    try:
+        item["metadata"] = json.loads(item.get("metadata") or "{}")
+    except Exception:
+        item["metadata"] = {}
+    item["is_pinned"] = bool(item.get("is_pinned"))
+    item["is_surprise"] = bool(item.get("is_surprise"))
+    return item
+
+
+def _artifact_payload(
+    *,
+    title: str,
+    description: str = "",
+    type: str = "page",
+    content: str = "",
+    storage_mode: str = "inline",
+    cover_url: str = "",
+    tags: list[str] | str | None = None,
+    agent_id: str = "",
+    session_id: str = "",
+    is_pinned: bool = False,
+    is_surprise: bool = False,
+    metadata: dict | None = None,
+    item_id: str | None = None,
+) -> dict[str, Any]:
+    normalized_type = str(type or "page").strip().lower()
+    if normalized_type not in ARTIFACT_TYPES:
+        raise ValueError("type must be html, game, page, or widget")
+    normalized_storage = str(storage_mode or "inline").strip().lower()
+    if normalized_storage not in ARTIFACT_STORAGE_MODES:
+        raise ValueError("storage_mode must be inline or r2")
+    normalized_title = str(title or "").strip()
+    if not normalized_title:
+        raise ValueError("title is required")
+    now = _now()
+    return {
+        "id": item_id or _new_id(),
+        "title": normalized_title,
+        "description": str(description or "").strip(),
+        "type": normalized_type,
+        "content": str(content or ""),
+        "storage_mode": normalized_storage,
+        "cover_url": str(cover_url or "").strip(),
+        "tags": _json_list(tags),
+        "agent_id": str(agent_id or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "is_pinned": bool(is_pinned),
+        "is_surprise": bool(is_surprise),
+        "metadata": metadata or {},
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+async def create_artifact_item(**kwargs) -> dict[str, Any]:
+    global _supabase_artifact_items_table_missing
+    payload = _artifact_payload(**kwargs)
+    if _use_supabase_data():
+        items = await _load_artifact_setting_items()
+        items.insert(0, payload)
+        await _save_artifact_setting_items(items)
+        return payload
+    if _use_supabase_artifacts() and not _supabase_artifact_items_table_missing:
+        try:
+            row = await _supabase_insert_verified(
+                settings.supabase_artifact_items_table,
+                payload,
+            )
+            return _normalize_artifact(row) or payload
+        except Exception as exc:
+            if not _is_supabase_missing_table_error(exc, settings.supabase_artifact_items_table):
+                raise
+            _supabase_artifact_items_table_missing = True
+
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO artifact_items (
+            id, title, description, type, content, storage_mode, cover_url,
+            tags, agent_id, session_id, is_pinned, is_surprise, metadata,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            payload["id"], payload["title"], payload["description"], payload["type"],
+            payload["content"], payload["storage_mode"], payload["cover_url"],
+            json.dumps(payload["tags"], ensure_ascii=False), payload["agent_id"],
+            payload["session_id"], 1 if payload["is_pinned"] else 0,
+            1 if payload["is_surprise"] else 0,
+            json.dumps(payload["metadata"], ensure_ascii=False),
+            payload["created_at"], payload["updated_at"],
+        ),
+    )
+    await db.commit()
+    return payload
+
+
+async def list_artifact_items(
+    *,
+    type: str | None = None,
+    agent_id: str | None = None,
+    tag: str | None = None,
+    pinned: bool | None = None,
+    surprise: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    global _supabase_artifact_items_table_missing
+    limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
+    if _use_supabase_data():
+        items = await _load_artifact_setting_items()
+        def keep(item: dict[str, Any]) -> bool:
+            if type and item.get("type") != type:
+                return False
+            if agent_id and item.get("agent_id") != agent_id:
+                return False
+            if pinned is not None and bool(item.get("is_pinned")) is not pinned:
+                return False
+            if surprise is not None and bool(item.get("is_surprise")) is not surprise:
+                return False
+            if tag and tag not in item.get("tags", []):
+                return False
+            return True
+        return sorted([item for item in items if keep(item)], key=lambda item: (bool(item.get("is_pinned")), str(item.get("created_at") or "")), reverse=True)[offset:offset + limit]
+    if _use_supabase_artifacts() and not _supabase_artifact_items_table_missing:
+        filters: dict[str, str] = {}
+        if type:
+            filters["type"] = f"eq.{type}"
+        if agent_id:
+            filters["agent_id"] = f"eq.{agent_id}"
+        if pinned is not None:
+            filters["is_pinned"] = f"eq.{str(bool(pinned)).lower()}"
+        if surprise is not None:
+            filters["is_surprise"] = f"eq.{str(bool(surprise)).lower()}"
+        try:
+            rows = await _supabase_select(
+                settings.supabase_artifact_items_table,
+                filters=filters or None,
+                order="is_pinned.desc,created_at.desc",
+                limit=limit,
+            )
+            items = [item for item in (_normalize_artifact(row) for row in rows) if item]
+            if tag:
+                items = [item for item in items if tag in item.get("tags", [])]
+            return items
+        except Exception as exc:
+            if not _is_supabase_missing_table_error(exc, settings.supabase_artifact_items_table):
+                raise
+            _supabase_artifact_items_table_missing = True
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if type:
+        clauses.append("type = ?")
+        params.append(type)
+    if agent_id:
+        clauses.append("agent_id = ?")
+        params.append(agent_id)
+    if pinned is not None:
+        clauses.append("is_pinned = ?")
+        params.append(1 if pinned else 0)
+    if surprise is not None:
+        clauses.append("is_surprise = ?")
+        params.append(1 if surprise else 0)
+    if tag:
+        clauses.append("tags LIKE ?")
+        params.append(f"%{tag}%")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.extend([limit, offset])
+    db = await get_db()
+    cursor = await db.execute(
+        f"SELECT * FROM artifact_items {where} ORDER BY is_pinned DESC, created_at DESC LIMIT ? OFFSET ?",
+        params,
+    )
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_artifact(dict(row)) for row in rows) if item]
+
+
+async def get_artifact_item(item_id: str) -> dict[str, Any] | None:
+    global _supabase_artifact_items_table_missing
+    item_id = str(item_id or "").strip()
+    if not item_id:
+        return None
+    if _use_supabase_data():
+        return next((item for item in await _load_artifact_setting_items() if item.get("id") == item_id), None)
+    if _use_supabase_artifacts() and not _supabase_artifact_items_table_missing:
+        try:
+            rows = await _supabase_select(
+                settings.supabase_artifact_items_table,
+                filters={"id": f"eq.{item_id}"},
+                limit=1,
+            )
+            return _normalize_artifact(rows[0]) if rows else None
+        except Exception as exc:
+            if not _is_supabase_missing_table_error(exc, settings.supabase_artifact_items_table):
+                raise
+            _supabase_artifact_items_table_missing = True
+    db = await get_db()
+    cursor = await db.execute("SELECT * FROM artifact_items WHERE id = ?", (item_id,))
+    row = await cursor.fetchone()
+    return _normalize_artifact(dict(row)) if row else None
+
+
+async def update_artifact_item(item_id: str, **kwargs) -> bool:
+    global _supabase_artifact_items_table_missing
+    allowed = {
+        "title", "description", "type", "content", "storage_mode", "cover_url",
+        "tags", "agent_id", "session_id", "is_pinned", "is_surprise", "metadata",
+    }
+    updates = {key: value for key, value in kwargs.items() if key in allowed and value is not None}
+    if not updates:
+        return False
+    if _use_supabase_data():
+        items = await _load_artifact_setting_items()
+        changed = False
+        for index, item in enumerate(items):
+            if item.get("id") != item_id:
+                continue
+            next_item = {**item, **updates, "updated_at": _now()}
+            if "tags" in next_item:
+                next_item["tags"] = _json_list(next_item["tags"])
+            if "metadata" in next_item and not isinstance(next_item["metadata"], dict):
+                next_item["metadata"] = {}
+            items[index] = next_item
+            changed = True
+            break
+        if changed:
+            await _save_artifact_setting_items(items)
+        return changed
+    if "type" in updates and str(updates["type"]).lower() not in ARTIFACT_TYPES:
+        raise ValueError("type must be html, game, page, or widget")
+    if "storage_mode" in updates and str(updates["storage_mode"]).lower() not in ARTIFACT_STORAGE_MODES:
+        raise ValueError("storage_mode must be inline or r2")
+    if "tags" in updates:
+        updates["tags"] = _json_list(updates["tags"])
+    if "metadata" in updates and not isinstance(updates["metadata"], dict):
+        updates["metadata"] = {}
+    updates["updated_at"] = _now()
+
+    if _use_supabase_artifacts() and not _supabase_artifact_items_table_missing:
+        try:
+            row = await _supabase_update_verified(
+                settings.supabase_artifact_items_table,
+                {"id": f"eq.{item_id}"},
+                updates,
+            )
+            return bool(row)
+        except Exception as exc:
+            if not _is_supabase_missing_table_error(exc, settings.supabase_artifact_items_table):
+                raise
+            _supabase_artifact_items_table_missing = True
+
+    sqlite_updates = dict(updates)
+    if "tags" in sqlite_updates:
+        sqlite_updates["tags"] = json.dumps(sqlite_updates["tags"], ensure_ascii=False)
+    if "metadata" in sqlite_updates:
+        sqlite_updates["metadata"] = json.dumps(sqlite_updates["metadata"], ensure_ascii=False)
+    for key in ("is_pinned", "is_surprise"):
+        if key in sqlite_updates:
+            sqlite_updates[key] = 1 if sqlite_updates[key] else 0
+    sets = ", ".join(f"{key} = ?" for key in sqlite_updates)
+    db = await get_db()
+    result = await db.execute(
+        f"UPDATE artifact_items SET {sets} WHERE id = ?",
+        [*sqlite_updates.values(), item_id],
+    )
+    await db.commit()
+    return result.rowcount > 0
+
+
+async def delete_artifact_item(item_id: str) -> bool:
+    global _supabase_artifact_items_table_missing
+    if _use_supabase_data():
+        items = await _load_artifact_setting_items()
+        next_items = [item for item in items if item.get("id") != item_id]
+        if len(next_items) == len(items):
+            return False
+        await _save_artifact_setting_items(next_items)
+        return True
+    if _use_supabase_artifacts() and not _supabase_artifact_items_table_missing:
+        try:
+            return await _supabase_delete_verified(
+                settings.supabase_artifact_items_table,
+                {"id": f"eq.{item_id}"},
+            )
+        except Exception as exc:
+            if not _is_supabase_missing_table_error(exc, settings.supabase_artifact_items_table):
+                raise
+            _supabase_artifact_items_table_missing = True
+    db = await get_db()
+    result = await db.execute("DELETE FROM artifact_items WHERE id = ?", (item_id,))
     await db.commit()
     return result.rowcount > 0
