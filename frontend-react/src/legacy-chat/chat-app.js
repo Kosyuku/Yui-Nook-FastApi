@@ -1565,6 +1565,21 @@
         return String(value || '').trim().replace(/^@+/, '').toLowerCase();
     }
 
+    const CODEX_TOGGLE_CONTACT_IDS = new Set(['zhansi']);
+
+    function canToggleCodexForContact(contact = {}) {
+        const ids = [
+            contact?.id,
+            contact?.agent_id,
+            contact?.handle,
+        ].map(normalizeNewContactAgentId).filter(Boolean);
+        return ids.some((id) => CODEX_TOGGLE_CONTACT_IDS.has(id));
+    }
+
+    function isCodexEnabledForContact(contact = {}) {
+        return canToggleCodexForContact(contact) && !!contact?.settings?.codexEnabled;
+    }
+
     function contactDefaults(contact = {}) {
         const id = String(contact.id || '').trim() || `c${Date.now()}`;
         const chatTheme = getContactChatThemeKey(contact);
@@ -1840,7 +1855,8 @@
         const c = byId(state.currentContactId) || state.contacts[0];
         const quoteMoment = state.quoteMomentId ? getMoment(state.quoteMomentId) : null;
         const quoteMessage = state.quoteMessageId ? c.messages.find((item) => item.id === state.quoteMessageId) : null;
-        const codexActive = !!c.settings?.codexEnabled;
+        const codexAllowed = canToggleCodexForContact(c);
+        const codexActive = isCodexEnabledForContact(c);
         return `
       <section class="room-page room-theme-${c.theme}">
         <div class="messages-panel">
@@ -1853,7 +1869,7 @@
             <div class="composer-input-wrap">
               <input class="chat-input" placeholder="\u8f93\u5165\u6d88\u606f..." value="" />
             </div>
-            <button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>
+            ${codexAllowed ? `<button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>` : ''}
             <button class="icon-btn icon-circle soft-mini" data-action="expand-actions" aria-label="\u9644\u4ef6">${icon('attach')}</button>
             ${state.streamingAbortController
                 ? `<button class="icon-btn send-round send-stop-active" data-action="fake-send" aria-label="\u505c\u6b62">${icon('stop')}</button>`
@@ -3325,7 +3341,7 @@
                 state.streamingAbortController.abort();
                 state.streamingAbortController = null;
                 render(); // immediately revert button without waiting for catch block
-            } else if (state.currentView !== 'rpRoom' && byId(state.currentContactId)?.settings?.codexEnabled) {
+            } else if (state.currentView !== 'rpRoom' && isCodexEnabledForContact(byId(state.currentContactId))) {
                 doSendCodexMessage();
             } else {
                 doSendMessage();
@@ -3353,7 +3369,7 @@
             chatInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    if (state.currentView !== 'rpRoom' && byId(state.currentContactId)?.settings?.codexEnabled) {
+                    if (state.currentView !== 'rpRoom' && isCodexEnabledForContact(byId(state.currentContactId))) {
                         doSendCodexMessage();
                     } else {
                         doSendMessage();
@@ -3369,6 +3385,13 @@
         const c = byId(contactId) || byId(state.currentContactId);
         if (!c) return;
         state.currentContactId = c.id;
+        if (!canToggleCodexForContact(c)) {
+            c.settings = { ...(c.settings || {}), codexEnabled: false };
+            state.toast = '只有阿湛能切 Codex';
+            render();
+            window.setTimeout(() => { state.toast = ''; render(); }, 1200);
+            return;
+        }
         c.settings = { ...(c.settings || {}), codexEnabled: !c.settings?.codexEnabled };
         state.toast = c.settings.codexEnabled ? 'Codex 已接管这个窗口' : 'Codex 已关闭';
         queueLocalSyncIfChanged(120);
@@ -4219,7 +4242,7 @@
             }
             if (state.currentView === 'rpRoom') {
                 doSendRpMessage();
-            } else if (byId(state.currentContactId)?.settings?.codexEnabled) {
+            } else if (isCodexEnabledForContact(byId(state.currentContactId))) {
                 doSendCodexMessage();
             } else {
                 doSendMessage();
