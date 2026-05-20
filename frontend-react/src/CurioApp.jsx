@@ -107,6 +107,7 @@ function normalizeItem(row) {
     coverInk: metadata.cover_ink || row.coverInk || "#B84A3E",
     coverGlyph: metadata.cover_glyph || row.coverGlyph || (TYPE_LABEL[row.type]?.cn || "页").slice(0, 1),
     pushedAt: metadata.pushed_at || row.pushedAt || "",
+    srcUrl: row.src_url || row.url || "",
     srcdoc: row.storage_mode === "r2" ? "" : (row.content || row.srcdoc || ""),
   };
 }
@@ -205,7 +206,15 @@ function CurioCard({ item, onOpen }) {
 function PreviewModal({ item, onClose, onTogglePin, onToggleSurprise }) {
   if (!item) return null;
   const agent = AGENTS[item.agent_id] || AGENTS.azheng;
-  const srcdoc = item.srcdoc || `<!doctype html><meta charset=utf-8><body style="font-family:serif;padding:24px;color:#2B2420;background:#FBF7F2">R2 artifact: ${item.content || ""}</body>`;
+  const isR2 = item.storage_mode === "r2";
+  const srcdoc = item.srcdoc || `<!doctype html><meta charset=utf-8><body style="font-family:serif;padding:24px;color:#2B2420;background:#FBF7F2">正在打开 R2 artifact...</body>`;
+  const openPreview = () => {
+    if (isR2 && item.srcUrl) {
+      window.open(item.srcUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    window.open(`data:text/html;charset=utf-8,${encodeURIComponent(srcdoc)}`, "_blank");
+  };
   return (
     <div style={{ position: "absolute", inset: 0, zIndex: 100, background: "rgba(40,30,20,.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
       <div onClick={(event) => event.stopPropagation()} style={{ width: "100%", maxHeight: "92%", background: TOKENS.cream, borderRadius: 8, overflow: "hidden", boxShadow: "0 30px 60px rgba(40,30,20,.4)", display: "flex", flexDirection: "column", position: "relative" }}>
@@ -215,11 +224,11 @@ function PreviewModal({ item, onClose, onTogglePin, onToggleSurprise }) {
             <div style={{ fontFamily: FONTS.serifCn, fontSize: 13, fontWeight: 600, color: TOKENS.ink, letterSpacing: 0.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.title}</div>
             <div style={{ fontFamily: FONTS.serifCn, fontSize: 9, color: TOKENS.inkFaint, letterSpacing: 2, marginTop: 1 }}>{agent.name} · {item.tags.join(" · ")}</div>
           </div>
-          <button style={iconBtn} title="全屏" onClick={() => window.open(`data:text/html;charset=utf-8,${encodeURIComponent(srcdoc)}`, "_blank")}>⤢</button>
+          <button style={iconBtn} title="全屏" onClick={openPreview}>⤢</button>
           <button onClick={onClose} style={iconBtn} title="关闭">×</button>
         </div>
         <div style={{ padding: 10, background: TOKENS.paperDeep, display: "flex" }}>
-          <iframe sandbox="allow-scripts allow-forms allow-popups" srcDoc={srcdoc} style={{ width: "100%", height: 460, border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 4px 14px rgba(40,30,20,.12)", display: "block" }} />
+          <iframe sandbox="allow-scripts allow-forms allow-popups" src={isR2 ? item.srcUrl : undefined} srcDoc={isR2 ? undefined : srcdoc} style={{ width: "100%", height: 460, border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 4px 14px rgba(40,30,20,.12)", display: "block" }} />
         </div>
         <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 8, borderTop: `0.5px solid ${TOKENS.rule}`, background: TOKENS.cream }}>
           <button type="button" style={pillBtn(item.is_pinned ? TOKENS.stamp : null)} onClick={() => onTogglePin(item)}>{item.is_pinned ? "★ 已置顶" : "☆ 置顶"}</button>
@@ -308,6 +317,22 @@ export default function CurioApp() {
   const columns = [filtered.filter((_, index) => index % 2 === 0), filtered.filter((_, index) => index % 2 === 1)];
   const agentIds = ["all", ...Object.keys(AGENTS)];
 
+  async function openItem(item) {
+    const normalized = normalizeItem(item);
+    setActive(normalized);
+    if (normalized.storage_mode !== "r2" || normalized.srcUrl || normalized.id.startsWith("sample-")) return;
+    try {
+      const response = await fetch(apiUrl(`/api/curio/items/${encodeURIComponent(normalized.id)}/url`));
+      if (!response.ok) throw new Error(await response.text());
+      const data = await response.json();
+      const withUrl = normalizeItem({ ...normalized, src_url: data.url || "" });
+      setActive(withUrl);
+      setItems((current) => current.map((entry) => entry.id === normalized.id ? withUrl : entry));
+    } catch (err) {
+      setError(`R2 预览链接拿不到：${err.message}`);
+    }
+  }
+
   async function patchItem(id, body) {
     if (id.startsWith("sample-")) {
       setItems((current) => current.map((item) => item.id === id ? normalizeItem({ ...item, ...body }) : item));
@@ -382,7 +407,7 @@ export default function CurioApp() {
       <div style={{ padding: "16px 20px 64px", display: "flex", gap: 14, alignItems: "flex-start" }}>
         {columns.map((column, index) => (
           <div key={index} style={{ display: "flex", flexDirection: "column", gap: 18, flex: 1, marginTop: index ? 22 : 0 }}>
-            {column.map((item) => <CurioCard key={item.id} item={item} onOpen={setActive} />)}
+            {column.map((item) => <CurioCard key={item.id} item={item} onOpen={openItem} />)}
           </div>
         ))}
       </div>
