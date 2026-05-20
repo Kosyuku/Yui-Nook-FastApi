@@ -1853,7 +1853,7 @@
             <div class="composer-input-wrap">
               <input class="chat-input" placeholder="\u8f93\u5165\u6d88\u606f..." value="" />
             </div>
-            <button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>
+            <button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>
             <button class="icon-btn icon-circle soft-mini" data-action="expand-actions" aria-label="\u9644\u4ef6">${icon('attach')}</button>
             ${state.streamingAbortController
                 ? `<button class="icon-btn send-round send-stop-active" data-action="fake-send" aria-label="\u505c\u6b62">${icon('stop')}</button>`
@@ -3365,9 +3365,10 @@
         }
     }
 
-    function toggleCurrentCodexMode() {
-        const c = byId(state.currentContactId);
+    function toggleCurrentCodexMode(contactId = state.currentContactId) {
+        const c = byId(contactId) || byId(state.currentContactId);
         if (!c) return;
+        state.currentContactId = c.id;
         c.settings = { ...(c.settings || {}), codexEnabled: !c.settings?.codexEnabled };
         state.toast = c.settings.codexEnabled ? 'Codex 已接管这个窗口' : 'Codex 已关闭';
         queueLocalSyncIfChanged(120);
@@ -4205,7 +4206,7 @@
         }
 
         if (action === 'toggle-codex-mode') {
-            toggleCurrentCodexMode();
+            toggleCurrentCodexMode(target.dataset.contactId);
             return;
         }
 
@@ -8418,6 +8419,14 @@
         if (quickGesture.mode === 'drag') finishQuickDrag();
         resetQuickGesture();
     }, { passive: true });
+
+    document.addEventListener('click', (event) => {
+        const target = event.target?.closest?.('.codex-toggle');
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        toggleCurrentCodexMode(target.dataset.contactId);
+    }, true);
 
     document.addEventListener('mousedown', (event) => {
         if (isEditableTarget(event.target)) return;
