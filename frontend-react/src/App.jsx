@@ -13,6 +13,7 @@ import { apiBase, apiUrl } from "./apiBase.js";
 import DriftCalendarApp from "./DriftCalendarApp.jsx";
 import InboxApp from "./InboxApp.jsx";
 import SettingsLoveApp from "./SettingsLoveApp.jsx";
+import CurioApp from "./CurioApp.jsx";
 import "./settings-love-stage/tokens.jsx";
 import "./settings-love-stage/widgets.jsx";
 import { listMediaItems, mediaUploadProvider, withMediaUrls } from "./mediaApi.js";
@@ -253,6 +254,7 @@ const builtinApps = [
   { id: "wallpaper", label: "壁纸", glyph: "壁", type: "应用" },
   { id: "folio", label: "Folio", glyph: "书", type: "应用" },
   { id: "inbox", label: "Glean", glyph: "拾", type: "应用" },
+  { id: "curio", label: "Curio", glyph: "匣", type: "应用" },
 ];
 
 const appTitles = Object.fromEntries(builtinApps.map((app) => [app.id, app.label]));
@@ -309,17 +311,22 @@ function readSavedPhone() {
   }
 }
 
-function ensureInboxInApps(apps) {
-  if (apps.some(a => a.id === "inbox")) return apps;
-  const inboxApp = builtinApps.find(a => a.id === "inbox");
-  return inboxApp ? [...apps, { ...inboxApp, page: 0 }] : apps;
+function ensureDefaultApps(apps) {
+  const required = ["inbox", "curio"];
+  let next = apps;
+  required.forEach((id) => {
+    if (next.some((app) => app.id === id)) return;
+    const builtin = builtinApps.find((app) => app.id === id);
+    if (builtin) next = [...next, { ...builtin, page: 0 }];
+  });
+  return next;
 }
 
 function createInitialPhone() {
   const saved = readSavedPhone();
   return {
     wallpaper: saved.wallpaper || defaultWallpaper,
-    desktopApps: ensureInboxInApps(normalizeSavedApps(saved.desktopApps, defaultDesktopApps)),
+    desktopApps: ensureDefaultApps(normalizeSavedApps(saved.desktopApps, defaultDesktopApps)),
     dockApps: normalizeSavedApps(saved.dockApps, defaultDockApps),
     layout: saved.layout || "鎭嬬埍缁勪欢 + 6 App",
     colorMode: saved.colorMode || "璺熼殢绯荤粺",
@@ -828,6 +835,7 @@ function LegacyHomePage({ onOpenApp, phone }) {
       "page-settings": "settings",
       "page-folio": "folio",
       "page-inbox": "inbox",
+      "page-curio": "curio",
     };
     const getHomeAppTarget = (app) => {
       const id = app?.id || "";
@@ -839,6 +847,7 @@ function LegacyHomePage({ onOpenApp, phone }) {
       if (id === "wallpaper") return { page: "page-settings", settingsView: "wallpaper" };
       if (id === "folio") return { page: "page-folio" };
       if (id === "inbox") return { page: "page-inbox" };
+      if (id === "curio") return { page: "page-curio" };
       return null;
     };
     const renderSyncedAppIcon = (app, className = "app-icon-svg") => {
@@ -1487,11 +1496,12 @@ function AppShell({ appId, onHome, phone, setPhone }) {
   const isAlbum = canonicalAppId === "album";
   const isFolio = canonicalAppId === "folio";
   const isInbox = canonicalAppId === "inbox";
+  const isCurio = canonicalAppId === "curio";
   const isCalendar = canonicalAppId === "calendar";
   const isUnsupportedLegacyApp = canonicalAppId === "unsupported";
   const isLegacyMedia = isAlbum;
   const [legacyMediaPage, setLegacyMediaPage] = useState("photos");
-  const isLegacyShell = isChat || isDiary || isCalendar || isSettings || isWallpaper || isLegacyMedia || isFolio || isInbox;
+  const isLegacyShell = isChat || isDiary || isCalendar || isSettings || isWallpaper || isLegacyMedia || isFolio || isInbox || isCurio;
   useEffect(() => {
     if (isLegacyMedia) setLegacyMediaPage("photos");
   }, [canonicalAppId, isLegacyMedia]);
@@ -1525,6 +1535,8 @@ function AppShell({ appId, onHome, phone, setPhone }) {
         <FolioApp onClose={onHome} agents={[]} />
       ) : isInbox ? (
         <InboxApp onClose={onHome} />
+      ) : isCurio ? (
+        <CurioApp />
       ) : isUnsupportedLegacyApp ? (
         <main className="app-placeholder">
           <div className="liquid-card app-placeholder-card">
@@ -2181,7 +2193,11 @@ export default function App() {
       try {
         const data = await loadPhoneState("phone_config", {});
         if (!alive || !data.phone) return;
-        setPhone((current) => ({ ...current, ...data.phone }));
+        setPhone((current) => ({
+          ...current,
+          ...data.phone,
+          desktopApps: ensureDefaultApps(normalizeSavedApps(data.phone.desktopApps, current.desktopApps)),
+        }));
       } catch {
         // Local state still works when backend is unavailable.
       } finally {

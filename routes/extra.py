@@ -231,6 +231,36 @@ class ExtractedItemUpdate(BaseModel):
     metadata: Optional[dict] = None
 
 
+class CurioItemCreate(BaseModel):
+    title: str
+    description: str = ""
+    type: str = "page"
+    content: str = ""
+    storage_mode: str = "inline"
+    cover_url: str = ""
+    tags: list[str] = []
+    agent_id: str = ""
+    session_id: str = ""
+    is_pinned: bool = False
+    is_surprise: bool = False
+    metadata: dict = {}
+
+
+class CurioItemUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    type: Optional[str] = None
+    content: Optional[str] = None
+    storage_mode: Optional[str] = None
+    cover_url: Optional[str] = None
+    tags: Optional[list[str]] = None
+    agent_id: Optional[str] = None
+    session_id: Optional[str] = None
+    is_pinned: Optional[bool] = None
+    is_surprise: Optional[bool] = None
+    metadata: Optional[dict] = None
+
+
 class CompanionStateSummaryPayload(BaseModel):
     agentId: Optional[str] = None
     impression: Optional[str] = None
@@ -2379,6 +2409,94 @@ async def delete_extracted_item(item_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="条目不存在")
     return {"ok": True}
+
+
+# ══════════ Curio / Artifacts ══════════
+
+@extra_api.get("/curio/items")
+async def list_curio_items(
+    type: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    tag: Optional[str] = None,
+    pinned: Optional[bool] = None,
+    surprise: Optional[bool] = None,
+    limit: int = Query(default=80, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    items = await db.list_artifact_items(
+        type=type,
+        agent_id=agent_id,
+        tag=tag,
+        pinned=pinned,
+        surprise=surprise,
+        limit=limit,
+        offset=offset,
+    )
+    return {"items": items, "total": len(items)}
+
+
+@extra_api.post("/curio/items")
+async def create_curio_item(body: CurioItemCreate):
+    try:
+        item = await db.create_artifact_item(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"item": item}
+
+
+@extra_api.get("/curio/items/{item_id}")
+async def get_curio_item(item_id: str):
+    item = await db.get_artifact_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    return {"item": item}
+
+
+@extra_api.patch("/curio/items/{item_id}")
+async def update_curio_item(item_id: str, body: CurioItemUpdate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="没有需要更新的字段")
+    try:
+        ok = await db.update_artifact_item(item_id, **updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not ok:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    return {"ok": True}
+
+
+@extra_api.delete("/curio/items/{item_id}")
+async def delete_curio_item(item_id: str):
+    ok = await db.delete_artifact_item(item_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    return {"ok": True}
+
+
+@extra_api.post("/curio/items/{item_id}/pin")
+async def pin_curio_item(item_id: str):
+    ok = await db.update_artifact_item(item_id, is_pinned=True)
+    if not ok:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    return {"ok": True}
+
+
+@extra_api.delete("/curio/items/{item_id}/pin")
+async def unpin_curio_item(item_id: str):
+    ok = await db.update_artifact_item(item_id, is_pinned=False)
+    if not ok:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    return {"ok": True}
+
+
+@extra_api.post("/curio/upload")
+async def upload_curio_artifact(file: UploadFile = File(...)):
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty file")
+    key = f"curio/{db._new_id()}-{file.filename or 'artifact.html'}"
+    return {"storage_mode": "r2", "object_key": key, "size_bytes": len(content)}
 
 
 # ── Memory Candidates (daily_loop → formal memory) ────────────────────────
