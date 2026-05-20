@@ -1853,7 +1853,7 @@
             <div class="composer-input-wrap">
               <input class="chat-input" placeholder="\u8f93\u5165\u6d88\u606f..." value="" />
             </div>
-            <button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" type="button" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">Cx</button>
+            <button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>
             <button class="icon-btn icon-circle soft-mini" data-action="expand-actions" aria-label="\u9644\u4ef6">${icon('attach')}</button>
             ${state.streamingAbortController
                 ? `<button class="icon-btn send-round send-stop-active" data-action="fake-send" aria-label="\u505c\u6b62">${icon('stop')}</button>`
@@ -3333,6 +3333,12 @@
         });
         const attachBtn = mount.querySelector('.soft-mini');
         if (attachBtn) attachBtn.addEventListener('click', (e) => { e.stopPropagation(); state.showAttach = !state.showAttach; render(); });
+        const codexBtn = mount.querySelector('.codex-toggle');
+        if (codexBtn) codexBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleCurrentCodexMode();
+        });
         const contactRows = mount.querySelectorAll('.chat-list-item[data-contact-id]');
         contactRows.forEach((row) => {
             row.addEventListener('click', (e) => {
@@ -3357,6 +3363,16 @@
             // Auto focus
             if (['room', 'rpRoom'].includes(state.currentView)) chatInput.focus();
         }
+    }
+
+    function toggleCurrentCodexMode() {
+        const c = byId(state.currentContactId);
+        if (!c) return;
+        c.settings = { ...(c.settings || {}), codexEnabled: !c.settings?.codexEnabled };
+        state.toast = c.settings.codexEnabled ? 'Codex 已接管这个窗口' : 'Codex 已关闭';
+        queueLocalSyncIfChanged(120);
+        render();
+        window.setTimeout(() => { state.toast = ''; render(); }, 1200);
     }
 
     async function handleClick(event) {
@@ -4189,11 +4205,7 @@
         }
 
         if (action === 'toggle-codex-mode') {
-            const c = byId(state.currentContactId);
-            if (!c) return;
-            c.settings = { ...(c.settings || {}), codexEnabled: !c.settings?.codexEnabled };
-            queueLocalSyncIfChanged(120);
-            render();
+            toggleCurrentCodexMode();
             return;
         }
 

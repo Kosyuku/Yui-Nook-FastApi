@@ -1275,26 +1275,26 @@
 }
 
 .codex-toggle {
-  width: 34px;
+  min-width: 44px;
   height: 34px;
-  border-radius: 50%;
+  border-radius: 999px;
   border: 1px solid rgba(226, 213, 220, 0.98);
   background: rgba(255, 255, 255, 0.96);
   color: rgba(116, 96, 106, 0.82);
   box-shadow: 0 3px 10px rgba(181, 146, 159, 0.06);
   font: inherit;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 900;
   line-height: 1;
-  padding: 0;
+  padding: 0 8px;
   flex-shrink: 0;
 }
 
 .codex-toggle.active {
-  color: rgba(80, 70, 98, 0.96);
-  background: rgba(238, 235, 248, 0.98);
-  border-color: rgba(196, 186, 230, 0.98);
-  box-shadow: 0 4px 12px rgba(130, 112, 176, 0.13);
+  color: #fff;
+  background: rgba(92, 75, 132, 0.96);
+  border-color: rgba(92, 75, 132, 0.98);
+  box-shadow: 0 5px 14px rgba(92, 75, 132, 0.26);
 }
 
 .chat-input,
