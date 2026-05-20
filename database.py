@@ -3976,6 +3976,45 @@ async def get_session(session_id: str) -> dict[str, Any] | None:
     return _normalize_session_row(dict(row) if row else None)
 
 
+async def get_latest_session_for_agent_source(
+    *,
+    agent_id: str | None,
+    source_app: str | None,
+    title: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_agent_id = normalize_agent_id_value(agent_id)
+    normalized_source_app = normalize_source_app(source_app)
+    if not normalized_agent_id:
+        return None
+    if _use_supabase_data():
+        filters = {
+            "agent_id": f"eq.{normalized_agent_id}",
+            "source_app": f"eq.{normalized_source_app}",
+        }
+        if title is not None:
+            filters["title"] = f"eq.{title}"
+        rows = await _supabase_select(
+            settings.supabase_sessions_table,
+            filters=filters,
+            order="updated_at.desc",
+            limit=1,
+        )
+        return _normalize_session_row(rows[0] if rows else None)
+    db = await get_db()
+    if title is None:
+        cursor = await db.execute(
+            "SELECT * FROM sessions WHERE agent_id = ? AND source_app = ? ORDER BY updated_at DESC LIMIT 1",
+            (normalized_agent_id, normalized_source_app),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT * FROM sessions WHERE agent_id = ? AND source_app = ? AND title = ? ORDER BY updated_at DESC LIMIT 1",
+            (normalized_agent_id, normalized_source_app, title),
+        )
+    row = await cursor.fetchone()
+    return _normalize_session_row(dict(row) if row else None)
+
+
 async def update_session(session_id: str, **kwargs) -> bool:
     if "source_app" in kwargs:
         kwargs["source_app"] = normalize_source_app(kwargs.get("source_app"))

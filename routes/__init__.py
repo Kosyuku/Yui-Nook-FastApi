@@ -320,6 +320,7 @@ class CodexChatRequest(BaseModel):
     content: str
     reset: bool = False
     timeout_seconds: Optional[int] = None
+    agent_id: Optional[str] = None
 
 
 class RPChatRequest(BaseModel):
@@ -917,10 +918,46 @@ async def codex_chat(body: CodexChatRequest):
         logger.exception("Codex bridge failed")
         raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
 
+    raw_agent_id = (body.agent_id or body.conversation_key.rsplit(":", 1)[-1] or "").strip()
+    agent_id = db.normalize_agent_id_value(raw_agent_id)
+    session_title = f"Codex bridge: {body.conversation_key.strip()}"
+    try:
+        session = await db.get_latest_session_for_agent_source(
+            agent_id=agent_id,
+            source_app="codex_bridge",
+            title=session_title,
+        )
+        if not session:
+            session = await db.create_session(
+                title=session_title,
+                model="codex",
+                source_app="codex_bridge",
+                agent_id=agent_id,
+            )
+        user_message = await db.add_message(
+            session["id"],
+            "user",
+            body.content,
+            model="codex",
+            agent_id=agent_id,
+        )
+        assistant_message = await db.add_message(
+            session["id"],
+            "assistant",
+            result.reply,
+            model="codex",
+            agent_id=agent_id,
+        )
+    except Exception as exc:
+        logger.exception("Codex bridge persistence failed")
+        raise HTTPException(status_code=502, detail=f"Codex replied but failed to save messages: {exc}") from exc
+
     return {
         "conversation_key": result.conversation_key,
         "thread_id": result.thread_id,
         "reply": result.reply,
+        "user_message": user_message,
+        "assistant_message": assistant_message,
     }
 
 

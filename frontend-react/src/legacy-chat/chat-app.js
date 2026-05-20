@@ -4549,6 +4549,7 @@
         const role = String(message.role || '').toLowerCase() === 'user' ? 'user' : 'ai';
         const createdAt = String(message.created_at || '');
         const content = String(message.content || '');
+        const model = String(message.model || '');
         return normalizeStoredMessage({
             id: message.id || `${contactId}|${role}|${createdAt}|${content}`,
             session_id: message.session_id || '',
@@ -4558,7 +4559,8 @@
             text: content,
             created_at: createdAt,
             time: createdAt ? formatDisplayTime(createdAt, { fallback: '' }) : '',
-            model: message.model || '',
+            model,
+            ...(model.toLowerCase() === 'codex' ? { source: 'codex', provider: 'codex' } : {}),
         });
     }
 
@@ -5402,6 +5404,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     conversation_key: `yui:${c.id}`,
+                    agent_id: c.id,
                     content: text,
                     reset: false,
                 }),
@@ -5411,17 +5414,32 @@
             if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
 
             const reply = String(data.reply || '').trim() || '\u2026';
+            const persistedUser = data.user_message && typeof data.user_message === 'object'
+                ? murmurHistoryMessageToStored(data.user_message, c.id)
+                : null;
+            const persistedAssistant = data.assistant_message && typeof data.assistant_message === 'object'
+                ? {
+                    ...murmurHistoryMessageToStored(data.assistant_message, c.id),
+                    source: 'codex',
+                    provider: 'codex',
+                }
+                : null;
+            const userIdx = c.messages.findIndex((m) => m.id === msgId);
+            if (userIdx !== -1 && persistedUser) {
+                c.messages[userIdx] = contactMessageFromStored(persistedUser);
+            }
             const idx = c.messages.findIndex((m) => m.id === aiId);
             if (idx !== -1) {
                 c.messages[idx] = {
-                    id: aiId,
+                    ...(persistedAssistant ? contactMessageFromStored(persistedAssistant) : {}),
+                    id: persistedAssistant?.id || aiId,
                     role: 'ai',
                     text: reply,
                     content: reply,
                     source: 'codex',
                     provider: 'codex',
-                    time: nowTimeStr(),
-                    created_at: new Date().toISOString(),
+                    time: persistedAssistant?.time || nowTimeStr(),
+                    created_at: persistedAssistant?.created_at || new Date().toISOString(),
                     typing: false,
                 };
             }
