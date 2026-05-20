@@ -261,6 +261,11 @@ class CurioItemUpdate(BaseModel):
     metadata: Optional[dict] = None
 
 
+class CurioUploadUrlPayload(BaseModel):
+    filename: str = "artifact.html"
+    mime_type: str = "text/html; charset=utf-8"
+
+
 class CompanionStateSummaryPayload(BaseModel):
     agentId: Optional[str] = None
     impression: Optional[str] = None
@@ -2413,6 +2418,52 @@ async def delete_extracted_item(item_id: str):
 
 # ══════════ Curio / Artifacts ══════════
 
+CURIO_INLINE_LIMIT_BYTES = 500 * 1024
+
+
+def _curio_storage_key(filename: str | None = None) -> str:
+    safe_name = media_storage.sanitize_filename(filename or "artifact.html")
+    return f"curio/{db._new_id()}_{safe_name}"
+
+
+def _looks_like_inline_artifact(content: str) -> bool:
+    text = str(content or "").lstrip().lower()
+    return text.startswith("<!doctype") or text.startswith("<html") or "<script" in text[:2048] or "<body" in text[:2048]
+
+
+def _upload_curio_bytes_to_r2(data: bytes, *, filename: str | None = None, mime_type: str = "text/html; charset=utf-8") -> str:
+    if not data:
+        raise HTTPException(status_code=400, detail="empty artifact")
+    storage_key = _curio_storage_key(filename)
+    try:
+        media_storage.r2_client.put_object(storage_key, data, mime_type=mime_type)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=f"R2 storage is not configured: {exc}") from exc
+    except Exception as exc:
+        logger.warning("curio R2 upload failed: %s", exc)
+        raise HTTPException(status_code=502, detail="R2 upload failed") from exc
+    return storage_key
+
+
+def _prepare_curio_create_payload(body: CurioItemCreate) -> dict[str, Any]:
+    payload = body.model_dump()
+    content = str(payload.get("content") or "")
+    content_bytes = content.encode("utf-8")
+    storage_mode = str(payload.get("storage_mode") or "inline").strip().lower()
+    should_upload = bool(content) and (
+        len(content_bytes) >= CURIO_INLINE_LIMIT_BYTES
+        or (storage_mode == "r2" and _looks_like_inline_artifact(content))
+    )
+    if should_upload:
+        filename = f"{payload.get('title') or 'artifact'}.html"
+        storage_key = _upload_curio_bytes_to_r2(content_bytes, filename=filename)
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        payload["metadata"] = {**metadata, "size_bytes": len(content_bytes), "r2_mime_type": "text/html; charset=utf-8"}
+        payload["content"] = storage_key
+        payload["storage_mode"] = "r2"
+    return payload
+
+
 @extra_api.get("/curio/items")
 async def list_curio_items(
     type: Optional[str] = None,
@@ -2438,7 +2489,7 @@ async def list_curio_items(
 @extra_api.post("/curio/items")
 async def create_curio_item(body: CurioItemCreate):
     try:
-        item = await db.create_artifact_item(**body.model_dump())
+        item = await db.create_artifact_item(**_prepare_curio_create_payload(body))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"item": item}
@@ -2450,6 +2501,26 @@ async def get_curio_item(item_id: str):
     if not item:
         raise HTTPException(status_code=404, detail="artifact 不存在")
     return {"item": item}
+
+
+@extra_api.get("/curio/items/{item_id}/url")
+async def get_curio_item_url(item_id: str):
+    item = await db.get_artifact_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    if item.get("storage_mode") != "r2":
+        raise HTTPException(status_code=400, detail="artifact is stored inline")
+    storage_key = str(item.get("content") or "").strip()
+    if not storage_key:
+        raise HTTPException(status_code=404, detail="artifact object key is missing")
+    try:
+        url = media_storage.r2_client.presigned_download_url(storage_key)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=f"R2 storage is not configured: {exc}") from exc
+    except Exception as exc:
+        logger.warning("curio R2 signed url failed: %s", exc)
+        raise HTTPException(status_code=502, detail="R2 signed URL failed") from exc
+    return {"url": url, "storage_key": storage_key, "expires_in": settings.r2_presign_expires_seconds}
 
 
 @extra_api.patch("/curio/items/{item_id}")
@@ -2495,8 +2566,33 @@ async def upload_curio_artifact(file: UploadFile = File(...)):
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="empty file")
-    key = f"curio/{db._new_id()}-{file.filename or 'artifact.html'}"
-    return {"storage_mode": "r2", "object_key": key, "size_bytes": len(content)}
+    key = _upload_curio_bytes_to_r2(
+        content,
+        filename=file.filename or "artifact.html",
+        mime_type=file.content_type or "text/html; charset=utf-8",
+    )
+    return {"storage_mode": "r2", "object_key": key, "storage_key": key, "size_bytes": len(content)}
+
+
+@extra_api.post("/curio/upload-url")
+async def create_curio_upload_url(body: CurioUploadUrlPayload):
+    mime_type = body.mime_type or "text/html; charset=utf-8"
+    storage_key = _curio_storage_key(body.filename)
+    try:
+        upload_url = media_storage.r2_client.presigned_upload_url(storage_key, mime_type=mime_type)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=f"R2 storage is not configured: {exc}") from exc
+    except Exception as exc:
+        logger.warning("curio R2 upload url failed: %s", exc)
+        raise HTTPException(status_code=502, detail="R2 upload URL failed") from exc
+    return {
+        "storage_mode": "r2",
+        "object_key": storage_key,
+        "storage_key": storage_key,
+        "upload_url": upload_url,
+        "headers": {"Content-Type": mime_type},
+        "expires_in": settings.r2_presign_expires_seconds,
+    }
 
 
 # ── Memory Candidates (daily_loop → formal memory) ────────────────────────
