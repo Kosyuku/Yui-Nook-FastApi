@@ -14,6 +14,7 @@ import DriftCalendarApp from "./DriftCalendarApp.jsx";
 import InboxApp from "./InboxApp.jsx";
 import SettingsLoveApp from "./SettingsLoveApp.jsx";
 import CurioApp from "./CurioApp.jsx";
+import ParlorApp from "./ParlorApp.jsx";
 import "./settings-love-stage/tokens.jsx";
 import "./settings-love-stage/widgets.jsx";
 import { listMediaItems, mediaUploadProvider, withMediaUrls } from "./mediaApi.js";
@@ -255,6 +256,7 @@ const builtinApps = [
   { id: "folio", label: "Folio", glyph: "书", type: "应用" },
   { id: "inbox", label: "Glean", glyph: "拾", type: "应用" },
   { id: "curio", label: "Curio", glyph: "匣", type: "应用" },
+  { id: "parlor", label: "Parlor", glyph: "炉", type: "应用" },
 ];
 
 const appTitles = Object.fromEntries(builtinApps.map((app) => [app.id, app.label]));
@@ -312,7 +314,7 @@ function readSavedPhone() {
 }
 
 function ensureDefaultApps(apps) {
-  const required = ["inbox", "curio"];
+  const required = ["inbox", "curio", "parlor"];
   let next = apps;
   required.forEach((id) => {
     if (next.some((app) => app.id === id)) return;
@@ -836,6 +838,7 @@ function LegacyHomePage({ onOpenApp, phone }) {
       "page-folio": "folio",
       "page-inbox": "inbox",
       "page-curio": "curio",
+      "page-parlor": "parlor",
     };
     const getHomeAppTarget = (app) => {
       const id = app?.id || "";
@@ -848,6 +851,7 @@ function LegacyHomePage({ onOpenApp, phone }) {
       if (id === "folio") return { page: "page-folio" };
       if (id === "inbox") return { page: "page-inbox" };
       if (id === "curio") return { page: "page-curio" };
+      if (id === "parlor") return { page: "page-parlor" };
       return null;
     };
     const renderSyncedAppIcon = (app, className = "app-icon-svg") => {
@@ -1497,11 +1501,12 @@ function AppShell({ appId, onHome, phone, setPhone }) {
   const isFolio = canonicalAppId === "folio";
   const isInbox = canonicalAppId === "inbox";
   const isCurio = canonicalAppId === "curio";
+  const isParlor = canonicalAppId === "parlor";
   const isCalendar = canonicalAppId === "calendar";
   const isUnsupportedLegacyApp = canonicalAppId === "unsupported";
   const isLegacyMedia = isAlbum;
   const [legacyMediaPage, setLegacyMediaPage] = useState("photos");
-  const isLegacyShell = isChat || isDiary || isCalendar || isSettings || isWallpaper || isLegacyMedia || isFolio || isInbox || isCurio;
+  const isLegacyShell = isChat || isDiary || isCalendar || isSettings || isWallpaper || isLegacyMedia || isFolio || isInbox || isCurio || isParlor;
   useEffect(() => {
     if (isLegacyMedia) setLegacyMediaPage("photos");
   }, [canonicalAppId, isLegacyMedia]);
@@ -1537,6 +1542,8 @@ function AppShell({ appId, onHome, phone, setPhone }) {
         <InboxApp onClose={onHome} />
       ) : isCurio ? (
         <CurioApp />
+      ) : isParlor ? (
+        <ParlorApp />
       ) : isUnsupportedLegacyApp ? (
         <main className="app-placeholder">
           <div className="liquid-card app-placeholder-card">

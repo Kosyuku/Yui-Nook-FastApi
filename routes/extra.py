@@ -1,4 +1,4 @@
-"""新增 API 路由 — 待办/便签/主动消息/历史/意识循环"""
+﻿"""新增 API 路由 — 待办/便签/主动消息/历史/意识循环"""
 from __future__ import annotations
 
 import json
@@ -264,6 +264,56 @@ class CurioItemUpdate(BaseModel):
 class CurioUploadUrlPayload(BaseModel):
     filename: str = "artifact.html"
     mime_type: str = "text/html; charset=utf-8"
+
+
+class ParlorSeatPayload(BaseModel):
+    agent_id: str
+    display_name: str = ""
+    model: str = ""
+    provider: str = ""
+    system_prompt: str = ""
+    color: str = ""
+    seat_order: int = 0
+
+
+class ParlorRoundCreate(BaseModel):
+    title: str
+    description: str = ""
+    created_by: str = "user"
+    mode: str = "roundtable"
+    auto_mode: str = "manual"
+    max_turns_per_session: int = 6
+    seats: list[ParlorSeatPayload] = []
+    opening: str = ""
+
+
+class ParlorRoundUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    mode: Optional[str] = None
+    auto_mode: Optional[str] = None
+    max_turns_per_session: Optional[int] = None
+    summary: Optional[dict[str, Any]] = None
+    last_viewed_turn_n: Optional[int] = None
+
+
+class ParlorSeatUpdate(BaseModel):
+    agent_id: Optional[str] = None
+    display_name: Optional[str] = None
+    model: Optional[str] = None
+    provider: Optional[str] = None
+    system_prompt: Optional[str] = None
+    color: Optional[str] = None
+    seat_order: Optional[int] = None
+
+
+class ParlorSpeakPayload(BaseModel):
+    content: str
+
+
+class ParlorNextPayload(BaseModel):
+    force_seat_id: Optional[str] = None
 
 
 class CompanionStateSummaryPayload(BaseModel):
@@ -2594,6 +2644,220 @@ async def create_curio_upload_url(body: CurioUploadUrlPayload):
         "expires_in": settings.r2_presign_expires_seconds,
     }
 
+# -- Parlor / Roundtable ----------------------------------------------------
+
+DEFAULT_PARLOR_SEATS: list[dict[str, Any]] = [
+    {"agent_id": "azheng", "display_name": "阿正", "color": "#9b5b3d", "seat_order": 0},
+    {"agent_id": "zhansi", "display_name": "斩思", "color": "#5d6f82", "seat_order": 1},
+    {"agent_id": "ayan", "display_name": "阿砚", "color": "#8b6f47", "seat_order": 2},
+]
+
+
+def _parlor_turn_prompt(round_info: dict[str, Any], seat: dict[str, Any], turns: list[dict[str, Any]]) -> list[dict[str, str]]:
+    history = "\n".join(
+        f"{item.get('agent_id') or 'user'}: {item.get('content') or ''}"
+        for item in turns[-18:]
+    )
+    persona = seat.get("system_prompt") or f"You are {seat.get('display_name') or seat.get('agent_id')}, one seat in Parlor."
+    return [
+        {"role": "system", "content": f"{persona}\nSpeak warmly, briefly, and stay in character. Keep it under 120 Chinese characters."},
+        {"role": "user", "content": f"Room: {round_info.get('title')}\nTopic: {round_info.get('description')}\nRecent turns:\n{history}\nYour turn now."},
+    ]
+
+
+async def _pick_parlor_seat(round_id: str, force_seat_id: str | None = None) -> dict[str, Any] | None:
+    seats = await db.list_parlor_seats(round_id)
+    if force_seat_id:
+        return next((seat for seat in seats if seat.get("id") == force_seat_id), None)
+    if not seats:
+        return None
+    turns = await db.list_parlor_turns(round_id, limit=50)
+    last_agent = next((turn.get("agent_id") for turn in reversed(turns) if not turn.get("is_user")), "")
+    ordered = sorted(seats, key=lambda item: int(item.get("seat_order") or 0))
+    if not last_agent:
+        return ordered[0]
+    for index, seat in enumerate(ordered):
+        if seat.get("agent_id") == last_agent:
+            return ordered[(index + 1) % len(ordered)]
+    return ordered[0]
+
+
+async def _create_parlor_ai_turn(round_id: str, force_seat_id: str | None = None) -> dict[str, Any]:
+    round_info = await db.get_parlor_round(round_id)
+    if not round_info:
+        raise HTTPException(status_code=404, detail="round not found")
+    if round_info.get("status") == "ended":
+        raise HTTPException(status_code=409, detail="round has ended")
+    seat = await _pick_parlor_seat(round_id, force_seat_id)
+    if not seat:
+        raise HTTPException(status_code=400, detail="no parlor seats")
+    turns = await db.list_parlor_turns(round_id, limit=200)
+    text, _model_info = await _collect_slot_text("chat", _parlor_turn_prompt(round_info, seat, turns), temperature=0.75)
+    content = text.strip() if text and not _looks_like_model_failure(text) else "我先坐这儿听一会儿。你继续。"
+    return await db.create_parlor_turn(
+        round_id,
+        seat_id=seat.get("id") or "",
+        agent_id=seat.get("agent_id") or "",
+        content=content,
+        is_user=False,
+    )
+
+
+@extra_api.get("/parlor/rounds")
+async def list_parlor_rounds(status: Optional[str] = None, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
+    rounds = await db.list_parlor_rounds(status=status, limit=limit, offset=offset)
+    for item in rounds:
+        item["seats"] = await db.list_parlor_seats(item["id"])
+        item["turns_count"] = len(await db.list_parlor_turns(item["id"], limit=300))
+    return {"items": rounds}
+
+
+@extra_api.post("/parlor/rounds")
+async def create_parlor_round(body: ParlorRoundCreate):
+    try:
+        round_info = await db.create_parlor_round(
+            title=body.title,
+            description=body.description,
+            created_by=body.created_by,
+            mode=body.mode,
+            auto_mode=body.auto_mode,
+            max_turns_per_session=body.max_turns_per_session,
+        )
+        seats = body.seats or [ParlorSeatPayload(**seat) for seat in DEFAULT_PARLOR_SEATS]
+        for index, seat in enumerate(seats):
+            data = seat.model_dump()
+            data["seat_order"] = data.get("seat_order") or index
+            await db.create_parlor_seat(round_info["id"], **data)
+        if body.opening.strip():
+            await db.create_parlor_turn(round_info["id"], agent_id="user", content=body.opening.strip(), is_user=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"round": await db.get_parlor_round(round_info["id"], include_children=True)}
+
+
+@extra_api.get("/parlor/rounds/{round_id}")
+async def get_parlor_round(round_id: str):
+    item = await db.get_parlor_round(round_id, include_children=True)
+    if not item:
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"round": item}
+
+
+@extra_api.patch("/parlor/rounds/{round_id}")
+async def update_parlor_round(round_id: str, body: ParlorRoundUpdate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    ok = await db.update_parlor_round(round_id, **updates)
+    if not ok:
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"round": await db.get_parlor_round(round_id, include_children=True)}
+
+
+@extra_api.delete("/parlor/rounds/{round_id}")
+async def delete_parlor_round(round_id: str):
+    ok = await db.delete_parlor_round(round_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"ok": True}
+
+
+@extra_api.post("/parlor/rounds/{round_id}/seats")
+async def add_parlor_seat(round_id: str, body: ParlorSeatPayload):
+    if not await db.get_parlor_round(round_id):
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"seat": await db.create_parlor_seat(round_id, **body.model_dump())}
+
+
+@extra_api.patch("/parlor/rounds/{round_id}/seats/{seat_id}")
+async def update_parlor_seat(round_id: str, seat_id: str, body: ParlorSeatUpdate):
+    ok = await db.update_parlor_seat(seat_id, **{k: v for k, v in body.model_dump().items() if v is not None})
+    if not ok:
+        raise HTTPException(status_code=404, detail="seat not found")
+    return {"round": await db.get_parlor_round(round_id, include_children=True)}
+
+
+@extra_api.delete("/parlor/rounds/{round_id}/seats/{seat_id}")
+async def delete_parlor_seat(round_id: str, seat_id: str):
+    ok = await db.delete_parlor_seat(seat_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="seat not found")
+    return {"round": await db.get_parlor_round(round_id, include_children=True)}
+
+
+@extra_api.get("/parlor/rounds/{round_id}/turns")
+async def list_parlor_turns(round_id: str, limit: int = Query(100, ge=1, le=300), offset: int = Query(0, ge=0)):
+    return {"turns": await db.list_parlor_turns(round_id, limit=limit, offset=offset)}
+
+
+@extra_api.post("/parlor/rounds/{round_id}/speak")
+async def speak_parlor_turn(round_id: str, body: ParlorSpeakPayload):
+    if not await db.get_parlor_round(round_id):
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"turn": await db.create_parlor_turn(round_id, agent_id="user", content=body.content, is_user=True)}
+
+
+@extra_api.post("/parlor/rounds/{round_id}/next")
+async def next_parlor_turn(round_id: str, body: ParlorNextPayload | None = None):
+    return {"turn": await _create_parlor_ai_turn(round_id, body.force_seat_id if body else None)}
+
+
+@extra_api.post("/parlor/rounds/{round_id}/run")
+async def run_parlor_round(round_id: str):
+    round_info = await db.get_parlor_round(round_id)
+    if not round_info:
+        raise HTTPException(status_code=404, detail="round not found")
+    seats = await db.list_parlor_seats(round_id)
+    turns = []
+    for seat in seats[: max(1, min(int(round_info.get("max_turns_per_session") or 6), 12))]:
+        turns.append(await _create_parlor_ai_turn(round_id, seat.get("id")))
+    return {"turns": turns}
+
+
+@extra_api.post("/parlor/rounds/{round_id}/pause")
+async def pause_parlor_round(round_id: str):
+    ok = await db.update_parlor_round(round_id, status="paused")
+    if not ok:
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"round": await db.get_parlor_round(round_id, include_children=True)}
+
+
+@extra_api.post("/parlor/rounds/{round_id}/resume")
+async def resume_parlor_round(round_id: str):
+    ok = await db.update_parlor_round(round_id, status="active")
+    if not ok:
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"round": await db.get_parlor_round(round_id, include_children=True)}
+
+
+@extra_api.post("/parlor/rounds/{round_id}/end")
+async def end_parlor_round(round_id: str):
+    turns = await db.list_parlor_turns(round_id, limit=300)
+    summary = {
+        "turns": len(turns),
+        "last_turn": turns[-1].get("content", "") if turns else "",
+        "ended_at": datetime.now(timezone.utc).isoformat(),
+    }
+    ok = await db.update_parlor_round(round_id, status="ended", summary=summary)
+    if not ok:
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"round": await db.get_parlor_round(round_id, include_children=True)}
+
+
+@extra_api.post("/parlor/rounds/{round_id}/leave")
+async def leave_parlor_round(round_id: str):
+    turns = await db.list_parlor_turns(round_id, limit=1, reverse=True)
+    last_n = int(turns[0].get("turn_number") or 0) if turns else 0
+    ok = await db.update_parlor_round(round_id, last_viewed_turn_n=last_n, left_at=db._now())
+    if not ok:
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"round": await db.get_parlor_round(round_id, include_children=True)}
+
+
+@extra_api.post("/parlor/rounds/{round_id}/visit")
+async def visit_parlor_round(round_id: str):
+    ok = await db.update_parlor_round(round_id, left_at="")
+    if not ok:
+        raise HTTPException(status_code=404, detail="round not found")
+    return {"round": await db.get_parlor_round(round_id, include_children=True)}
 
 # ── Memory Candidates (daily_loop → formal memory) ────────────────────────
 
