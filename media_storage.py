@@ -121,6 +121,20 @@ class R2Client:
             HttpMethod="GET",
         )
 
+    def put_object(
+        self,
+        storage_key: str,
+        data: bytes,
+        *,
+        mime_type: str = "application/octet-stream",
+    ) -> None:
+        self.client().put_object(
+            Bucket=settings.r2_bucket,
+            Key=storage_key,
+            Body=data,
+            ContentType=mime_type or "application/octet-stream",
+        )
+
     def delete_object(self, storage_key: str) -> None:
         self.client().delete_object(Bucket=settings.r2_bucket, Key=storage_key)
 
