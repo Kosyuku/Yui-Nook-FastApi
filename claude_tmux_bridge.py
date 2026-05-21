@@ -323,6 +323,39 @@ async def claude_tmux_reset(conversation_key: str) -> None:
         _delete_session_meta(key)
 
 
+def _claude_is_alive(session_name: str) -> bool:
+    """检查 tmux session 里 claude 是否还在等待输入（有 > 提示符）。"""
+    pane = _strip_ansi(_capture_pane(session_name))
+    lines = [l.strip() for l in pane.splitlines() if l.strip()]
+    # claude 等待输入时最后几行会有 > 提示符
+    recent = lines[-5:] if len(lines) >= 5 else lines
+    return any(re.match(r"^>\s*$", l) for l in recent)
+
+
+def keepalive_all_sessions() -> dict:
+    """
+    检查所有 cc_* session 里 claude 是否还活着。
+    如果 session 存在但 claude 已退出，重新启动 claude。
+    不发任何消息给 claude，不耗费额度。
+    """
+    meta_all = _read_meta()
+    results = {}
+    for key, raw in meta_all.items():
+        sname = raw.get("session_name", "")
+        if not sname or not _session_exists(sname):
+            results[key] = "session_missing"
+            continue
+        if _claude_is_alive(sname):
+            results[key] = "alive"
+        else:
+            # claude 挂了，重新启动
+            _tmux("send-keys", "-t", sname, "", "")  # 清空可能的残留输入
+            _tmux("send-keys", "-t", sname, f"cd {WORK_DIR} && claude", "Enter")
+            time.sleep(6)
+            results[key] = "restarted"
+    return results
+
+
 def list_active_sessions() -> list[dict]:
     """列出所有活跃的 cc_* tmux sessions 及其消息计数。"""
     r = _tmux("list-sessions", "-F", "#{session_name}")

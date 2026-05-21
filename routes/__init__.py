@@ -15,7 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 
 import ai_runtime
 from codex_bridge import codex_bridge_chat
-from claude_tmux_bridge import claude_tmux_chat, claude_tmux_reset, list_active_sessions
+from claude_tmux_bridge import claude_tmux_chat, claude_tmux_reset, list_active_sessions, keepalive_all_sessions
 import database as db
 from models import router as model_router
 from models import OpenAICompatAdapter, EchoAdapter, ADAPTER_MAP
@@ -1169,6 +1169,23 @@ async def claude_code_reset_session(body: ClaudeCodeChatRequest):
     """Kill 掉对应的 tmux session，下次重新开始。"""
     await claude_tmux_reset(body.conversation_key)
     return {"ok": True, "conversation_key": body.conversation_key}
+
+
+@api.post("/claude-code/keepalive")
+async def claude_code_keepalive():
+    """检查所有 session 里 claude 是否还活着，挂了就重启。不耗额度。"""
+    results = await asyncio.to_thread(keepalive_all_sessions)
+    return {"results": results}
+
+
+async def _cc_keepalive_loop():
+    """后台每 10 分钟检查一次所有 session。"""
+    while True:
+        await asyncio.sleep(600)
+        try:
+            await asyncio.to_thread(keepalive_all_sessions)
+        except Exception as exc:
+            logger.warning("CC keepalive failed: %s", exc)
 
 
 @api.post("/rp/chat")

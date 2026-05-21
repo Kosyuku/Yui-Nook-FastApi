@@ -1,6 +1,7 @@
 """Pyro-Gemini gateway entrypoint."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,6 +17,7 @@ import memory_async
 from config import settings
 from models import init_router
 from routes import api
+import routes
 from routes.extra import extra_api
 from tools import init_external_tools
 
@@ -36,6 +38,7 @@ async def lifespan(app: FastAPI):
     consciousness.start_loop()
     conversation_summary.start_loop()
     await memory_async.start_worker()
+    asyncio.create_task(routes._cc_keepalive_loop())
     logger.info("Gateway ready")
     yield
     consciousness.stop_loop()
