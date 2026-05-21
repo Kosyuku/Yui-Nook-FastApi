@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json as jsonlib
 import logging
+import os
 import re
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -1159,8 +1160,8 @@ async def claude_code_chat(body: ClaudeCodeChatRequest):
 
 @api.get("/claude-code/sessions")
 async def claude_code_sessions():
-    """列出所有活跃的 Claude Code tmux sessions。"""
-    return {"sessions": list_active_sessions()}
+    """列出所有活跃的 Claude Code tmux sessions 及消息计数。"""
+    return {"sessions": list_active_sessions(), "compact_every": int(os.getenv("CLAUDE_TMUX_COMPACT_EVERY", "30"))}
 
 
 @api.post("/claude-code/reset")

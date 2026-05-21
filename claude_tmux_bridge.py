@@ -9,14 +9,18 @@ Claude Code tmux bridge
 
 Session 命名规则：cc_<conversation_key>
 所有 session 都在 tmux server 里，FastAPI 重启不影响。
+
+Auto-compact：每隔 COMPACT_EVERY 条消息自动注入 /compact，
+Claude Code 自动压缩上下文，session 不中断，用户无感知。
 """
 
 import asyncio
+import json
 import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Claude Code 启动目录（VPS 上的项目根目录）
@@ -31,9 +35,14 @@ POLL_INTERVAL = 0.4
 # 输出稳定判定：连续 N 次 capture 内容相同则认为回复完毕
 STABLE_ROUNDS = 4
 
-# Claude Code 交互式提示符特征（回复结束后 claude 会重新显示输入区）
-# claude 的提示符是一个带颜色的 > 或者空行后的光标，用「esc[」ANSI 序列结尾
-PROMPT_PATTERN = re.compile(r"(\$\s*|\>\s*)$", re.MULTILINE)
+# 每隔多少条消息自动 /compact（0 = 关闭）
+COMPACT_EVERY = int(os.getenv("CLAUDE_TMUX_COMPACT_EVERY", "30"))
+
+# /compact 后等待压缩完成的最长时间（秒）
+COMPACT_TIMEOUT = int(os.getenv("CLAUDE_TMUX_COMPACT_TIMEOUT", "60"))
+
+# session 元数据存储路径
+META_PATH = Path(__file__).resolve().parent / "data" / "claude_tmux_meta.json"
 
 
 @dataclass
@@ -42,10 +51,62 @@ class TmuxBridgeResult:
     session_name: str
     reply: str
     raw_pane: str
+    compacted: bool = False  # 这次是否触发了 /compact
+
+
+@dataclass
+class SessionMeta:
+    session_name: str
+    message_count: int = 0
+    last_compact_at: int = 0  # compact 时的消息数
 
 
 _locks_guard = asyncio.Lock()
 _locks: dict[str, asyncio.Lock] = {}
+
+
+# ── 元数据持久化 ───────────────────────────────────────────────────────────────
+
+def _read_meta() -> dict[str, dict]:
+    if not META_PATH.exists():
+        return {}
+    try:
+        return json.loads(META_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_meta(data: dict[str, dict]) -> None:
+    META_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = META_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(META_PATH)
+
+
+def _get_session_meta(key: str) -> SessionMeta:
+    data = _read_meta()
+    raw = data.get(key, {})
+    return SessionMeta(
+        session_name=raw.get("session_name", f"cc_{re.sub(r'[^a-zA-Z0-9_-]', '_', key)}"),
+        message_count=int(raw.get("message_count", 0)),
+        last_compact_at=int(raw.get("last_compact_at", 0)),
+    )
+
+
+def _save_session_meta(key: str, meta: SessionMeta) -> None:
+    data = _read_meta()
+    data[key] = {
+        "session_name": meta.session_name,
+        "message_count": meta.message_count,
+        "last_compact_at": meta.last_compact_at,
+    }
+    _write_meta(data)
+
+
+def _delete_session_meta(key: str) -> None:
+    data = _read_meta()
+    data.pop(key, None)
+    _write_meta(data)
 
 
 # ── tmux 工具函数 ──────────────────────────────────────────────────────────────
@@ -72,10 +133,8 @@ def _create_session(name: str) -> None:
         "-s", name,
         "-x", "220", "-y", "50",
     )
-    # cd 到项目目录
     _tmux("send-keys", "-t", name, f"cd {WORK_DIR}", "Enter")
     time.sleep(0.5)
-    # 启动 claude 交互式
     _tmux("send-keys", "-t", name, "claude", "Enter")
     # 等 claude 启动（鉴权 + 加载需要几秒）
     time.sleep(6)
@@ -87,11 +146,10 @@ def _capture_pane(name: str) -> str:
 
 
 def _send_message(name: str, message: str) -> None:
-    """把消息注入 tmux session。多行消息逐行发送。"""
+    """把消息注入 tmux session（多行合并成单行）。"""
     lines = message.strip().splitlines()
     if not lines:
         return
-    # 把多行合并成单行发送（用空格连接），避免 Enter 提前触发
     single = " ".join(lines)
     _tmux("send-keys", "-t", name, single, "Enter")
 
@@ -102,14 +160,10 @@ def _strip_ansi(text: str) -> str:
 
 
 def _extract_reply(before: str, after: str) -> str:
-    """
-    从 capture-pane 前后内容的差异中提取 Claude 的回复。
-    策略：取 after 中比 before 多出的部分，去掉 ANSI，清理空行。
-    """
+    """从 capture-pane 前后差异中提取 Claude 的回复。"""
     after_clean = _strip_ansi(after)
     before_clean = _strip_ansi(before)
 
-    # 找到 before 最后一行在 after 中的位置，取之后的内容
     before_lines = [l for l in before_clean.splitlines() if l.strip()]
     after_lines = after_clean.splitlines()
 
@@ -123,18 +177,53 @@ def _extract_reply(before: str, after: str) -> str:
     else:
         new_lines = after_lines
 
-    # 过滤掉提示符行和空行
     reply_lines = []
     for line in new_lines:
         stripped = line.strip()
         if not stripped:
             continue
-        # 跳过 claude 的输入提示符行
         if re.match(r"^[>\$]\s*$", stripped):
             continue
         reply_lines.append(stripped)
 
     return "\n".join(reply_lines).strip()
+
+
+def _wait_stable(session_name: str, timeout: int) -> str:
+    """轮询 capture-pane 直到输出稳定，返回最终 pane 内容。"""
+    last_pane = ""
+    stable_count = 0
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        time.sleep(POLL_INTERVAL)
+        current = _capture_pane(session_name)
+        if _strip_ansi(current) == _strip_ansi(last_pane):
+            stable_count += 1
+            if stable_count >= STABLE_ROUNDS:
+                return current
+        else:
+            stable_count = 0
+            last_pane = current
+
+    return _capture_pane(session_name)
+
+
+# ── auto-compact ───────────────────────────────────────────────────────────────
+
+def _should_compact(meta: SessionMeta) -> bool:
+    if COMPACT_EVERY <= 0:
+        return False
+    messages_since_last = meta.message_count - meta.last_compact_at
+    return messages_since_last >= COMPACT_EVERY
+
+
+def _do_compact(session_name: str) -> None:
+    """注入 /compact 并等待 Claude Code 完成压缩。"""
+    _tmux("send-keys", "-t", session_name, "/compact", "Enter")
+    # /compact 需要一段时间处理，等待输出稳定
+    time.sleep(2)
+    _wait_stable(session_name, COMPACT_TIMEOUT)
 
 
 # ── 核心函数 ───────────────────────────────────────────────────────────────────
@@ -161,70 +250,80 @@ async def claude_tmux_chat(
     if not content.strip():
         raise ValueError("content is required")
 
-    session_name = f"cc_{re.sub(r'[^a-zA-Z0-9_-]', '_', key)}"
-
     lock = await _lock_for(key)
     async with lock:
-        # 如果要重置，先 kill session
+        meta = _get_session_meta(key)
+        session_name = meta.session_name
+
+        # 重置：kill session + 清元数据
         if reset and _session_exists(session_name):
             _tmux("kill-session", "-t", session_name)
+            meta.message_count = 0
+            meta.last_compact_at = 0
 
         # 确保 session 存在
         if not _session_exists(session_name):
             await asyncio.to_thread(_create_session, session_name)
 
-        # 记录发送消息前的 pane 内容
+        # ── auto-compact 检查 ──────────────────────────────────────────────────
+        compacted = False
+        if _should_compact(meta):
+            await asyncio.to_thread(_do_compact, session_name)
+            meta.last_compact_at = meta.message_count
+            compacted = True
+
+        # 记录发送前的 pane 内容
         before_pane = await asyncio.to_thread(_capture_pane, session_name)
 
         # 注入消息
         await asyncio.to_thread(_send_message, session_name, content)
 
-        # 等待回复（轮询直到输出稳定）
-        reply_pane = ""
-        last_pane = ""
-        stable_count = 0
-        deadline = time.time() + timeout_seconds
-
-        while time.time() < deadline:
-            await asyncio.sleep(POLL_INTERVAL)
-            current_pane = await asyncio.to_thread(_capture_pane, session_name)
-            clean = _strip_ansi(current_pane)
-
-            if clean == _strip_ansi(last_pane):
-                stable_count += 1
-                if stable_count >= STABLE_ROUNDS:
-                    reply_pane = current_pane
-                    break
-            else:
-                stable_count = 0
-                last_pane = current_pane
-        else:
-            # 超时，取现有内容
-            reply_pane = await asyncio.to_thread(_capture_pane, session_name)
+        # 等待回复稳定
+        reply_pane = await asyncio.to_thread(_wait_stable, session_name, timeout_seconds)
 
         reply = _extract_reply(before_pane, reply_pane)
         if not reply:
             reply = "（Claude 没有回复，可能还在思考中）"
+
+        # 更新消息计数
+        meta.message_count += 1
+        _save_session_meta(key, meta)
 
         return TmuxBridgeResult(
             conversation_key=key,
             session_name=session_name,
             reply=reply,
             raw_pane=reply_pane,
+            compacted=compacted,
         )
 
 
 async def claude_tmux_reset(conversation_key: str) -> None:
-    """Kill 掉对应的 tmux session，下次重新开始。"""
+    """Kill 掉对应的 tmux session 并清除元数据。"""
     key = conversation_key.strip()
-    session_name = f"cc_{re.sub(r'[^a-zA-Z0-9_-]', '_', key)}"
     lock = await _lock_for(key)
     async with lock:
-        if _session_exists(session_name):
-            _tmux("kill-session", "-t", session_name)
+        meta = _get_session_meta(key)
+        if _session_exists(meta.session_name):
+            _tmux("kill-session", "-t", meta.session_name)
+        _delete_session_meta(key)
 
 
-def list_active_sessions() -> list[str]:
-    """列出所有活跃的 cc_* tmux sessions。"""
+def list_active_sessions() -> list[dict]:
+    """列出所有活跃的 cc_* tmux sessions 及其消息计数。"""
     r = _tmux("list-sessions", "-F", "#{session_name}")
-    return [s for s in r.stdout.splitlines() if s.startswith("cc_")]
+    active = {s for s in r.stdout.splitlines() if s.startswith("cc_")}
+    meta_all = _read_meta()
+
+    result = []
+    for key, raw in meta_all.items():
+        sname = raw.get("session_name", "")
+        if sname in active:
+            result.append({
+                "conversation_key": key,
+                "session_name": sname,
+                "message_count": raw.get("message_count", 0),
+                "last_compact_at": raw.get("last_compact_at", 0),
+                "messages_since_compact": raw.get("message_count", 0) - raw.get("last_compact_at", 0),
+            })
+    return result
