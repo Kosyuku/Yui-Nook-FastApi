@@ -24,6 +24,25 @@ const F = {
   hand: '"Caveat", "Ma Shan Zheng", cursive',
 };
 
+function ParlorGlobalStyle() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Pinyon+Script&family=Allura&family=DM+Serif+Display:ital@0;1&family=Caveat:wght@400;500;600&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Noto+Serif+SC:wght@400;500;600;700&family=Ma+Shan+Zheng&display=swap');
+      @keyframes parlor-screen-in {
+        from { opacity: 0; transform: translateY(10px) scale(.992); filter: blur(2px); }
+        to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+      }
+      @keyframes parlor-press {
+        0% { transform: scale(1); }
+        50% { transform: scale(.96); }
+        100% { transform: scale(1); }
+      }
+      .parlor-screen-enter { animation: parlor-screen-in .32s cubic-bezier(.2,.7,.2,1) both; }
+      .parlor-button-press:active { animation: parlor-press .18s ease-out; }
+    `}</style>
+  );
+}
+
 const ROLES = {
   azheng: { display: "沈筭", stamp: "筭", role: "暖意型 · 先共情后给意见", model: "claude-sonnet-4", provider: "anthropic", seal: "#B84A3E", tint: T.rose },
   zhansi: { display: "湛司", stamp: "湛", role: "理性型 · 先算清账", model: "gpt-4o", provider: "openai", seal: "#5B7A6A", tint: T.sage },
@@ -196,7 +215,7 @@ function Hearth({ size = 32, intense = true }) {
 
 function IconButton({ children, title, onClick }) {
   return (
-    <button type="button" title={title} onClick={onClick} style={{
+    <button type="button" title={title} onClick={onClick} className="parlor-button-press" style={{
       width: 28,
       height: 28,
       borderRadius: "50%",
@@ -214,7 +233,7 @@ function IconButton({ children, title, onClick }) {
 
 function Chip({ label, emphasis, onClick }) {
   return (
-    <button type="button" onClick={onClick} style={{
+    <button type="button" onClick={onClick} className="parlor-button-press" style={{
       fontFamily: F.cn,
       fontSize: 10,
       letterSpacing: 1.5,
@@ -229,7 +248,7 @@ function Chip({ label, emphasis, onClick }) {
   );
 }
 
-function TopicBar({ round, onBack, onSummary }) {
+function TopicBar({ round, onBack, onSummary, onMore }) {
   const statusMap = {
     active: { color: T.ember, label: "进行中" },
     paused: { color: T.inkFaint, label: "暂停" },
@@ -260,7 +279,7 @@ function TopicBar({ round, onBack, onSummary }) {
         </div>
       </div>
       <IconButton title="纪要" onClick={onSummary}>☰</IconButton>
-      <IconButton title="更多">···</IconButton>
+      <IconButton title="更多" onClick={onMore}>···</IconButton>
     </div>
   );
 }
@@ -386,7 +405,7 @@ function ModeCard({ active, title, en, sub, onClick }) {
 
 function ScreenShell({ children, tone = "paper" }) {
   return (
-    <main className="phone-scroll" style={{
+    <main className="phone-scroll parlor-screen-enter" style={{
       width: "100%",
       height: "100%",
       background: tone === "summary" ? "#F1E9D8" : T.paper,
@@ -412,7 +431,7 @@ function ListScreen({ rounds, onOpen, onCreate }) {
           <div style={{ fontFamily: F.display, fontSize: 64, color: "#A98968", lineHeight: .9 }}>Parlor</div>
           <div style={{ fontFamily: F.cn, fontSize: 10, color: T.inkSoft, letterSpacing: 5, marginTop: 4 }}>围 · 炉</div>
         </div>
-        <button type="button" onClick={onCreate} style={{ padding: "8px 14px", borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 11, letterSpacing: 2, cursor: "pointer" }}>+ 新围炉</button>
+        <button type="button" onClick={onCreate} className="parlor-button-press" style={{ padding: "8px 14px", borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 11, letterSpacing: 2, cursor: "pointer" }}>+ 新围炉</button>
       </div>
       <div className="phone-scroll" style={{ flex: 1, overflow: "auto", padding: "0 20px 24px" }}>
         {active.length > 0 && <><SectionLabel cn="正在围着" en="round in session · 还没散" /><div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{active.map((round) => <RoundCard key={round.id} round={round} onClick={() => onOpen(round.id)} />)}</div></>}
@@ -459,7 +478,7 @@ function CreateScreen({ onCancel, onCreated, setError }) {
           <div style={{ fontFamily: F.display, fontSize: 56, color: "#A98968", lineHeight: .9 }}>new parlor</div>
           <div style={{ fontFamily: F.cn, fontSize: 10, color: T.inkSoft, letterSpacing: 5, marginTop: 4 }}>围 · 一点</div>
         </div>
-        <button type="button" onClick={onCancel} style={{ background: "transparent", border: "none", cursor: "pointer", fontFamily: F.en, fontStyle: "italic", fontWeight: 600, fontSize: 14, color: T.inkSoft, padding: 0 }}>取消</button>
+        <button type="button" onClick={onCancel} className="parlor-button-press" style={{ background: "transparent", border: "none", cursor: "pointer", fontFamily: F.en, fontStyle: "italic", fontWeight: 600, fontSize: 14, color: T.inkSoft, padding: 0 }}>取消</button>
       </div>
       <div className="phone-scroll" style={{ flex: 1, overflow: "auto", padding: "10px 20px 14px" }}>
         <Label num="一" cn="今天聊点什么" en="topic" />
@@ -472,7 +491,7 @@ function CreateScreen({ onCancel, onCreated, setError }) {
             const role = ROLES[id];
             const on = picked.includes(id);
             return (
-              <button key={id} type="button" onClick={() => setPicked((current) => on ? current.filter((item) => item !== id) : [...current, id])} style={{ textAlign: "left", background: on ? T.cream : "transparent", border: `0.5px solid ${on ? "#B0845888" : T.rule}`, borderRadius: 6, padding: "10px 11px", display: "flex", flexDirection: "column", gap: 5, cursor: "pointer" }}>
+              <button key={id} type="button" onClick={() => setPicked((current) => on ? current.filter((item) => item !== id) : [...current, id])} className="parlor-button-press" style={{ textAlign: "left", background: on ? T.cream : "transparent", border: `0.5px solid ${on ? "#B0845888" : T.rule}`, borderRadius: 6, padding: "10px 11px", display: "flex", flexDirection: "column", gap: 5, cursor: "pointer" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                   <WaxSeal agentId={id} size={26} />
                   <div style={{ minWidth: 0, flex: 1 }}>
@@ -500,7 +519,7 @@ function CreateScreen({ onCancel, onCreated, setError }) {
             ["interval-2h", "每 2 小时让他们自己聊一会儿"],
             ["interval-6h", "每 6 小时让他们自己聊一会儿"],
           ].map(([id, label]) => (
-            <button type="button" key={id} onClick={() => setAutoMode(id)} style={{ display: "flex", alignItems: "center", gap: 9, padding: "4px 0", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
+            <button type="button" key={id} onClick={() => setAutoMode(id)} className="parlor-button-press" style={{ display: "flex", alignItems: "center", gap: 9, padding: "4px 0", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
               <span style={{ width: 14, height: 14, borderRadius: "50%", border: `1.5px solid ${autoMode === id ? T.ink : T.inkFaint}`, background: autoMode === id ? T.ink : "transparent", boxShadow: autoMode === id ? `inset 0 0 0 3px ${T.cream}` : "none" }} />
               <span style={{ fontFamily: F.cn, fontSize: 12, color: T.ink, letterSpacing: .5 }}>{label}</span>
             </button>
@@ -518,7 +537,7 @@ function CreateScreen({ onCancel, onCreated, setError }) {
         <Hearth size={20} intense={false} />
         <span style={{ fontFamily: F.hand, fontSize: 15, color: T.ember }}>请火</span>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={() => createRound().catch((err) => setError(err.message))} style={{ padding: "11px 22px", borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 13, letterSpacing: 3, cursor: "pointer" }}>开始围炉</button>
+        <button type="button" onClick={() => createRound().catch((err) => setError(err.message))} className="parlor-button-press" style={{ padding: "11px 22px", borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 13, letterSpacing: 3, cursor: "pointer" }}>开始围炉</button>
       </div>
     </ScreenShell>
   );
@@ -538,6 +557,7 @@ const stepperBtn = {
 function RoomScreen({ round, onBack, onSummary, onRefresh, setError }) {
   const [draft, setDraft] = useState("");
   const [thinking, setThinking] = useState(false);
+  const [callIndex, setCallIndex] = useState(0);
   const currentSpeaker = thinking ? round.seats?.[0]?.agent_id : round.currentSpeaker;
 
   async function post(path, body) {
@@ -567,9 +587,22 @@ function RoomScreen({ round, onBack, onSummary, onRefresh, setError }) {
     }
   }
 
+  async function callSeat() {
+    const seats = round.seats || [];
+    if (!seats.length) return;
+    const seat = seats[callIndex % seats.length];
+    setCallIndex((value) => value + 1);
+    setThinking(true);
+    try {
+      await post("next", { force_seat_id: seat.id });
+    } finally {
+      setThinking(false);
+    }
+  }
+
   return (
     <ScreenShell>
-      <TopicBar round={round} onBack={onBack} onSummary={onSummary} />
+      <TopicBar round={round} onBack={onBack} onSummary={onSummary} onMore={() => setError("更多设置会跟席位编辑一起接上。")} />
       <SeatRing seats={round.seats} currentSpeaker={currentSpeaker} />
       <div className="phone-scroll" style={{ flex: 1, padding: "14px 16px 12px", display: "flex", flexDirection: "column", gap: 12, overflow: "auto", borderTop: `0.5px dashed ${T.rule}`, background: "linear-gradient(180deg, transparent 0%, rgba(243,236,226,.4) 100%)", marginTop: 6 }}>
         {round.turns.slice(-80).map((turn) => <Bubble key={turn.id || turn.turn_number} turn={turn} color={round.seats.find((seat) => seat.agent_id === turn.agent_id)?.color} />)}
@@ -578,14 +611,14 @@ function RoomScreen({ round, onBack, onSummary, onRefresh, setError }) {
       <div style={{ padding: "8px 12px 14px", background: T.paperDeep, borderTop: `0.5px solid ${T.rule}`, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", gap: 6, paddingLeft: 2 }}>
           <Chip label="醒醒" onClick={() => next().catch((err) => setError(err.message))} />
-          <Chip label="点名 ▾" />
+          <Chip label="点名 ▾" onClick={() => callSeat().catch((err) => setError(err.message))} />
           <Chip label={round.status === "paused" ? "继续" : "暂停"} onClick={() => post(round.status === "paused" ? "resume" : "pause").catch((err) => setError(err.message))} />
           <div style={{ flex: 1 }} />
           <Chip label="结束 · 出纪要" emphasis onClick={() => post("end").then(onSummary).catch((err) => setError(err.message))} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") send().catch((err) => setError(err.message)); }} placeholder="插一句...（直接打断当前讨论）" data-plain-input="true" style={{ flex: 1, padding: "10px 14px", borderRadius: 999, background: T.cream, border: `0.5px solid ${T.rule}`, fontFamily: F.cn, fontSize: 12, color: T.ink, outline: "none" }} />
-          <button type="button" onClick={() => send().catch((err) => setError(err.message))} style={{ width: 38, height: 38, borderRadius: "50%", background: T.ink, color: T.cream, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <button type="button" onClick={() => send().catch((err) => setError(err.message))} className="parlor-button-press" style={{ width: 38, height: 38, borderRadius: "50%", background: T.ink, color: T.cream, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <svg width="18" height="18" viewBox="0 0 20 20"><path d="M10 5 L10 16 M6 9 L10 5 L14 9" stroke={T.cream} strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
           </button>
         </div>
@@ -599,7 +632,7 @@ function ComeBackScreen({ round, onBack, onRoom }) {
   const tail = round.turns.filter((turn) => turn.turn_number >= lastSeen);
   return (
     <ScreenShell>
-      <TopicBar round={round} onBack={onBack} onSummary={onRoom} />
+      <TopicBar round={round} onBack={onBack} onSummary={onRoom} onMore={() => onRoom()} />
       <SeatRing seats={round.seats} currentSpeaker={null} />
       <div className="phone-scroll" style={{ flex: 1, padding: "14px 16px 12px", display: "flex", flexDirection: "column", gap: 12, overflow: "auto", borderTop: `0.5px dashed ${T.rule}`, background: "linear-gradient(180deg, transparent 0%, rgba(243,236,226,.4) 100%)", marginTop: 6 }}>
         <div style={{ alignSelf: "center", padding: "5px 12px", borderRadius: 999, background: `${T.ember}18`, border: `0.5px solid ${T.ember}55`, display: "flex", alignItems: "center", gap: 6, animation: "parlor-glow 2.4s ease-in-out infinite" }}>
@@ -615,7 +648,7 @@ function ComeBackScreen({ round, onBack, onRoom }) {
         {tail.slice(-4).map((turn) => <Bubble key={turn.id || turn.turn_number} turn={turn} color={round.seats.find((seat) => seat.agent_id === turn.agent_id)?.color} />)}
       </div>
       <div style={{ padding: "10px 12px 16px", background: T.paperDeep, borderTop: `0.5px solid ${T.rule}` }}>
-        <button type="button" onClick={onRoom} style={{ width: "100%", padding: "11px", borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 13, letterSpacing: 2, cursor: "pointer" }}>回到围炉</button>
+        <button type="button" onClick={onRoom} className="parlor-button-press" style={{ width: "100%", padding: "11px", borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 13, letterSpacing: 2, cursor: "pointer" }}>回到围炉</button>
       </div>
     </ScreenShell>
   );
@@ -627,7 +660,7 @@ function summaryText(round) {
   return round.summary.last_turn || round.summary.conclusion || `${round.summary.turns || round.turns_count || 0} 条发言`;
 }
 
-function SummaryScreen({ round, onBack }) {
+function SummaryScreen({ round, onBack, onNotice }) {
   const seats = round.seats || [];
   const bullets = seats.slice(0, 3).map((seat) => {
     const last = [...round.turns].reverse().find((turn) => turn.agent_id === seat.agent_id);
@@ -639,7 +672,13 @@ function SummaryScreen({ round, onBack }) {
         <IconButton title="返回" onClick={onBack}>‹</IconButton>
         <span style={{ fontFamily: F.display, fontSize: 26, color: "#A98968" }}>· minutes ·</span>
         <div style={{ flex: 1 }} />
-        <IconButton title="分享">↗</IconButton>
+        <IconButton title="分享" onClick={() => {
+          const text = `${round.title}\n${summaryText(round) || ""}`;
+          navigator.clipboard?.writeText(text).then(
+            () => onNotice("纪要已复制。"),
+            () => onNotice("当前环境不能写剪贴板。")
+          );
+        }}>↗</IconButton>
       </div>
       <div className="phone-scroll" style={{ flex: 1, overflow: "auto", padding: "22px 22px 16px" }}>
         <div style={{ textAlign: "center", marginBottom: 18 }}>
@@ -690,8 +729,8 @@ function SummaryScreen({ round, onBack }) {
         </div>
       </div>
       <div style={{ padding: "10px 18px 18px", display: "flex", gap: 8, borderTop: `0.5px solid ${T.rule}`, background: "rgba(241,233,216,.85)" }}>
-        <button type="button" style={{ flex: 1, padding: 10, borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 12, letterSpacing: 2 }}>存入 Amber 记忆</button>
-        <button type="button" onClick={onBack} style={{ padding: "10px 16px", borderRadius: 999, background: "transparent", color: T.inkSoft, border: `0.5px solid ${T.rule}`, fontFamily: F.cn, fontSize: 11, letterSpacing: 1.5 }}>下次再开</button>
+        <button type="button" onClick={() => onNotice("Amber 写入接口还没开，我先保留入口，不假装成功。")} className="parlor-button-press" style={{ flex: 1, padding: 10, borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 12, letterSpacing: 2 }}>存入 Amber 记忆</button>
+        <button type="button" onClick={onBack} className="parlor-button-press" style={{ padding: "10px 16px", borderRadius: 999, background: "transparent", color: T.inkSoft, border: `0.5px solid ${T.rule}`, fontFamily: F.cn, fontSize: 11, letterSpacing: 1.5 }}>下次再开</button>
       </div>
     </ScreenShell>
   );
@@ -741,6 +780,7 @@ export default function ParlorApp() {
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
+      <ParlorGlobalStyle />
       {view === "create" ? (
         <CreateScreen
           onCancel={() => setView("list")}
@@ -752,7 +792,7 @@ export default function ParlorApp() {
           }}
         />
       ) : view === "summary" ? (
-        <SummaryScreen round={active} onBack={() => setView(active.status === "ended" ? "list" : "room")} />
+        <SummaryScreen round={active} onBack={() => setView(active.status === "ended" ? "list" : "room")} onNotice={setError} />
       ) : view === "comeback" ? (
         <ComeBackScreen round={active} onBack={() => setView("list")} onRoom={() => setView("room")} />
       ) : view === "room" ? (
