@@ -177,12 +177,26 @@ def _extract_reply(before: str, after: str) -> str:
     else:
         new_lines = after_lines
 
+    # 优先提取 ● 开头的行（Claude Code 回复标记）
+    bullet_lines = []
+    for line in new_lines:
+        stripped = line.strip()
+        if re.match(r"^●\s*", stripped):
+            bullet_lines.append(re.sub(r"^●\s*", "", stripped))
+
+    if bullet_lines:
+        return "\n".join(bullet_lines).strip()
+
+    # fallback：过滤提示符和状态行
     reply_lines = []
     for line in new_lines:
         stripped = line.strip()
         if not stripped:
             continue
         if re.match(r"^[>\$]\s*$", stripped):
+            continue
+        # 跳过状态行（* Worked for Xs、* Sautéed for Xs 等）
+        if re.match(r"^\*\s+\w", stripped):
             continue
         reply_lines.append(stripped)
 
