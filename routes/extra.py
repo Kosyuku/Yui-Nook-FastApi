@@ -1195,6 +1195,7 @@ async def get_activity_event_shortcut_template():
         "required": ["eventType", "eventValue or content"],
         "optional": ["url", "occurredAt", "source", "dedupeKey"],
         "source": "ios_shortcuts",
+        "scope": "用户活动是全局短期上下文，所有 AI 都能作为近期活动看到。",
         "dedupe": "同类 eventType + eventValue + content 在 5 分钟内只保留一条。",
         "gate": "新事件会进入 event_gate，回写 should_handle / should_notify_llm / message_hint。",
         "examples": ACTIVITY_EVENT_SHORTCUT_EXAMPLES,
@@ -1240,8 +1241,16 @@ async def create_activity_event(body: ActivityEventPayload):
 
 
 @extra_api.get("/activity-events/recent")
-async def get_recent_activity_events(hours: float = 6, limit: int = 10, only_relevant: bool = False):
-    events = await db.list_recent_activity_events(hours=hours, limit=limit, only_relevant=only_relevant)
+async def get_recent_activity_events(
+    hours: float = 6,
+    limit: int = 10,
+    only_relevant: bool = False,
+):
+    events = await db.list_recent_activity_events(
+        hours=hours,
+        limit=limit,
+        only_relevant=only_relevant,
+    )
     return {"events": events}
 
 
@@ -1651,17 +1660,15 @@ async def discover_provider_models(body: ProviderDiscoverPayload):
 def _sanitize_discovered_model_id(value: Any) -> str:
     if not isinstance(value, str):
         return ""
-    text = value.strip()
-    if not text or len(text) > 120:
+    text = re.sub(r" +", " ", value.strip())
+    if not text or len(text) > 180:
         return ""
     lowered = text.lower()
     if "<" in text or ">" in text:
         return ""
     if any(token in lowered for token in ("<!doctype", "<html", "</div", "</body")):
         return ""
-    if re.search(r"[\x00-\x1f\x7f]|\s", text):
-        return ""
-    if not re.fullmatch(r"[A-Za-z0-9._:/@+\-]+", text):
+    if re.search(r"[\x00-\x1f\x7f]", text):
         return ""
     return text
 

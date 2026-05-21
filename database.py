@@ -7008,7 +7008,12 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
     return parsed
 
 
-def _activity_dedupe_key(event_type: str, event_value: str, content: str, explicit: str | None = None) -> str:
+def _activity_dedupe_key(
+    event_type: str,
+    event_value: str,
+    content: str,
+    explicit: str | None = None,
+) -> str:
     raw = str(explicit or "").strip()
     if raw:
         return raw
@@ -7242,7 +7247,11 @@ async def get_recent_activity(
     *,
     only_relevant: bool = False,
 ) -> list[dict[str, Any]]:
-    return await list_recent_activity_events(hours=hours, limit=limit, only_relevant=only_relevant)
+    return await list_recent_activity_events(
+        hours=hours,
+        limit=limit,
+        only_relevant=only_relevant,
+    )
 
 
 def format_recent_activity_block(events: list[dict[str, Any]]) -> str:
