@@ -50,6 +50,40 @@ const ROLES = {
   asi: { display: "阿斯", stamp: "斯", role: "务实型 · 先去做再说", model: "deepseek-v3", provider: "deepseek", seal: "#B08458", tint: T.butter },
 };
 
+const fallbackAgentOptions = Object.entries(ROLES).map(([agent_id, role]) => ({
+  agent_id,
+  display_name: role.display,
+  role: role.role,
+  model: role.model,
+  provider: role.provider,
+  stamp: role.stamp,
+  seal: role.seal,
+  tint: role.tint,
+  isFallback: true,
+}));
+
+const palette = [T.rose, T.sage, T.mauve, T.butter, "#DDD6E6", "#F4DCC4"];
+const sealPalette = ["#B84A3E", "#5B7A6A", "#8B6788", "#B08458", "#7E6A9A", "#B86E4B"];
+
+function normalizeAgentOption(agent, index = 0) {
+  const fallback = fallbackAgentOptions[index % fallbackAgentOptions.length] || fallbackAgentOptions[0];
+  const metadata = agent?.metadata && typeof agent.metadata === "object" ? agent.metadata : {};
+  const agentId = String(agent?.agent_id || agent?.id || "").trim();
+  const display = String(agent?.display_name || agent?.name || agentId || fallback.display_name).trim();
+  return {
+    agent_id: agentId || fallback.agent_id,
+    display_name: display,
+    role: String(agent?.description || agent?.persona || fallback.role || "").trim(),
+    model: String(metadata.model || agent?.model || fallback.model || "").trim(),
+    provider: String(metadata.provider || agent?.provider || agent?.source || fallback.provider || "").trim(),
+    stamp: String(metadata.stamp || display.slice(0, 1) || fallback.stamp).trim(),
+    seal: String(metadata.seal || metadata.sealColor || sealPalette[index % sealPalette.length] || fallback.seal).trim(),
+    tint: String(metadata.tint || palette[index % palette.length] || fallback.tint).trim(),
+    avatar: agent?.avatar || "",
+    isFallback: false,
+  };
+}
+
 const demoRound = {
   id: "demo",
   title: "我是不是该辞职去开一家小店",
@@ -145,14 +179,15 @@ function normalizeRound(row) {
   };
 }
 
-function WaxSeal({ agentId, size = 30 }) {
+function WaxSeal({ agentId, size = 30, option = null }) {
   const role = ROLES[agentId] || ROLES.azheng;
+  const label = option?.display_name || role.display || agentId || "";
   return (
     <div style={{
       width: size,
       height: size,
       borderRadius: "50%",
-      background: role.seal,
+      background: option?.seal || role.seal,
       color: T.cream,
       display: "flex",
       alignItems: "center",
@@ -161,7 +196,7 @@ function WaxSeal({ agentId, size = 30 }) {
       fontSize: size * 0.42,
       fontWeight: 600,
       boxShadow: "inset 0 -1px 2px rgba(0,0,0,.28), 0 2px 5px rgba(40,30,20,.16)",
-    }}>{role.stamp}</div>
+    }}>{option?.stamp || role.stamp || label.slice(0, 1)}</div>
   );
 }
 
@@ -419,8 +454,26 @@ function ScreenShell({ children, tone = "paper" }) {
   );
 }
 
-function ListScreen({ rounds, onOpen, onCreate }) {
-  const all = rounds.length ? rounds : [demoRound, demoPaused, demoEnded];
+function EmptyParlorState({ onCreate }) {
+  return (
+    <div style={{
+      marginTop: 28,
+      padding: "26px 18px",
+      borderRadius: 7,
+      border: `0.5px dashed ${T.gold}88`,
+      background: "rgba(255,251,244,.65)",
+      textAlign: "center",
+    }}>
+      <Hearth size={24} intense={false} />
+      <div style={{ fontFamily: F.cn, fontSize: 14, fontWeight: 600, color: T.ink, letterSpacing: 1, marginTop: 8 }}>还没有围炉</div>
+      <div style={{ fontFamily: F.cn, fontSize: 11, color: T.inkSoft, lineHeight: 1.8, margin: "6px 0 14px" }}>真数据为空时不会塞假卡片。想开一场就请火。</div>
+      <button type="button" onClick={onCreate} className="parlor-button-press" style={{ padding: "9px 16px", borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 12, letterSpacing: 2, cursor: "pointer" }}>+ 新围炉</button>
+    </div>
+  );
+}
+
+function ListScreen({ rounds, onOpen, onCreate, usingDemo }) {
+  const all = rounds;
   const active = all.filter((round) => round.status === "active");
   const paused = all.filter((round) => round.status === "paused");
   const ended = all.filter((round) => round.status === "ended");
@@ -434,6 +487,12 @@ function ListScreen({ rounds, onOpen, onCreate }) {
         <button type="button" onClick={onCreate} className="parlor-button-press" style={{ padding: "8px 14px", borderRadius: 999, background: T.ink, color: T.cream, border: "none", fontFamily: F.cn, fontSize: 11, letterSpacing: 2, cursor: "pointer" }}>+ 新围炉</button>
       </div>
       <div className="phone-scroll" style={{ flex: 1, overflow: "auto", padding: "0 20px 24px" }}>
+        {usingDemo && (
+          <div style={{ marginTop: 8, padding: "6px 10px", borderRadius: 999, background: `${T.ember}14`, color: T.ember, fontFamily: F.cn, fontSize: 10, letterSpacing: 1.2 }}>
+            后端没回话，下面是样稿，不会入库
+          </div>
+        )}
+        {!all.length && <EmptyParlorState onCreate={onCreate} />}
         {active.length > 0 && <><SectionLabel cn="正在围着" en="round in session · 还没散" /><div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{active.map((round) => <RoundCard key={round.id} round={round} onClick={() => onOpen(round.id)} />)}</div></>}
         {paused.length > 0 && <><SectionLabel cn="先放着" en="paused" /><div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{paused.map((round) => <RoundCard key={round.id} round={round} onClick={() => onOpen(round.id)} />)}</div></>}
         {ended.length > 0 && <><SectionLabel cn="已散席" en="closed" /><div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{ended.map((round) => <RoundCard key={round.id} round={round} onClick={() => onOpen(round.id)} />)}</div></>}
@@ -442,25 +501,35 @@ function ListScreen({ rounds, onOpen, onCreate }) {
   );
 }
 
-function CreateScreen({ onCancel, onCreated, setError }) {
+function CreateScreen({ onCancel, onCreated, setError, agentOptions, agentsAreFallback }) {
   const [topic, setTopic] = useState("我是不是该辞职去开一家小店");
-  const [picked, setPicked] = useState(["azheng", "zhansi", "ayan", "asi"]);
+  const [picked, setPicked] = useState(() => agentOptions.slice(0, 4).map((agent) => agent.agent_id));
   const [mode, setMode] = useState("free");
   const [autoMode, setAutoMode] = useState("manual");
   const [maxTurns, setMaxTurns] = useState(20);
-  const all = Object.keys(ROLES);
+  const all = agentOptions.length ? agentOptions : fallbackAgentOptions;
+  useEffect(() => {
+    setPicked((current) => {
+      const valid = current.filter((id) => all.some((agent) => agent.agent_id === id));
+      return valid.length ? valid : all.slice(0, 4).map((agent) => agent.agent_id);
+    });
+  }, [all]);
 
   async function createRound() {
     const title = topic.trim();
     if (!title || picked.length === 0) return;
-    const seats = picked.map((agent_id, index) => ({
+    const seats = picked.map((agent_id, index) => {
+      const agent = all.find((item) => item.agent_id === agent_id) || fallbackAgentOptions[index % fallbackAgentOptions.length];
+      return {
       agent_id,
-      display_name: ROLES[agent_id].display,
-      model: ROLES[agent_id].model,
-      provider: ROLES[agent_id].provider,
-      color: ROLES[agent_id].tint,
+      display_name: agent.display_name,
+      model: agent.model,
+      provider: agent.provider,
+      system_prompt: agent.role,
+      color: agent.tint,
       seat_order: index,
-    }));
+      };
+    });
     const response = await fetch(apiUrl("/api/parlor/rounds"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -485,22 +554,22 @@ function CreateScreen({ onCancel, onCreated, setError }) {
         <textarea value={topic} onChange={(event) => setTopic(event.target.value.slice(0, 120))} data-plain-input="true" style={{ width: "100%", minHeight: 72, resize: "none", outline: "none", background: T.cream, borderRadius: 6, padding: "12px 14px", border: `0.5px solid ${T.rule}`, fontFamily: F.cn, fontSize: 13.5, color: T.ink, lineHeight: 1.6 }} />
         <div style={{ marginTop: 6, fontFamily: F.cn, fontSize: 10, color: T.inkFaint, lineHeight: 1.7 }}>可以补一两句背景 · 让大家不那么虚地聊</div>
 
-        <Label num="二" cn="请谁来围炉" en="seats" hint={`已选 ${picked.length} 位`} />
+        <Label num="二" cn="请谁来围炉" en="seats" hint={agentsAreFallback ? "agent 接口没回话 · 暂用样稿" : `已选 ${picked.length} 位`} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          {all.map((id) => {
-            const role = ROLES[id];
+          {all.map((agent) => {
+            const id = agent.agent_id;
             const on = picked.includes(id);
             return (
               <button key={id} type="button" onClick={() => setPicked((current) => on ? current.filter((item) => item !== id) : [...current, id])} className="parlor-button-press" style={{ textAlign: "left", background: on ? T.cream : "transparent", border: `0.5px solid ${on ? "#B0845888" : T.rule}`, borderRadius: 6, padding: "10px 11px", display: "flex", flexDirection: "column", gap: 5, cursor: "pointer" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                  <WaxSeal agentId={id} size={26} />
+                  <WaxSeal agentId={id} option={agent} size={26} />
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontFamily: F.cn, fontSize: 12, fontWeight: 600, color: T.ink, letterSpacing: 1 }}>{role.display}</div>
-                    <div style={{ fontFamily: F.en, fontStyle: "italic", fontWeight: 600, fontSize: 10, color: T.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{role.model}</div>
+                    <div style={{ fontFamily: F.cn, fontSize: 12, fontWeight: 600, color: T.ink, letterSpacing: 1 }}>{agent.display_name}</div>
+                    <div style={{ fontFamily: F.en, fontStyle: "italic", fontWeight: 600, fontSize: 10, color: T.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{agent.model || agent.provider || agent.agent_id}</div>
                   </div>
                   <div style={{ width: 16, height: 16, borderRadius: "50%", border: on ? "none" : `1px solid ${T.rule}`, background: on ? T.ink : "transparent", color: T.cream, fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>{on && "✓"}</div>
                 </div>
-                <div style={{ fontFamily: F.cn, fontSize: 9.5, color: T.inkSoft, lineHeight: 1.5 }}>{role.role}</div>
+                <div style={{ fontFamily: F.cn, fontSize: 9.5, color: T.inkSoft, lineHeight: 1.5 }}>{agent.role || "没有角色备注"}</div>
               </button>
             );
           })}
@@ -738,6 +807,9 @@ function SummaryScreen({ round, onBack, onNotice }) {
 
 export default function ParlorApp() {
   const [rounds, setRounds] = useState([]);
+  const [usingDemo, setUsingDemo] = useState(false);
+  const [agentOptions, setAgentOptions] = useState(fallbackAgentOptions);
+  const [agentsAreFallback, setAgentsAreFallback] = useState(true);
   const [view, setView] = useState("list");
   const [activeId, setActiveId] = useState("");
   const [error, setError] = useState("");
@@ -760,16 +832,42 @@ export default function ParlorApp() {
       if (!response.ok) throw new Error(await response.text());
       const data = await response.json();
       const rows = Array.isArray(data.items) ? data.items : Array.isArray(data.rounds) ? data.rounds : [];
-      const next = rows.length ? rows.map(normalizeRound) : [demoRound, demoPaused, demoEnded].map(normalizeRound);
+      const next = rows.map(normalizeRound);
       setRounds(next);
+      setUsingDemo(false);
       setActiveId((current) => current || next[0]?.id || "");
     } catch (err) {
       setRounds([demoRound, demoPaused, demoEnded].map(normalizeRound));
+      setUsingDemo(true);
       setError(`Parlor 后端没回话，先给你看样稿：${err.message}`);
     }
   }
 
-  useEffect(() => { loadRounds(); }, []);
+  async function loadAgents() {
+    try {
+      const response = await fetch(apiUrl("/api/agents?include_inactive=false"));
+      if (!response.ok) throw new Error(await response.text());
+      const data = await response.json();
+      const rows = Array.isArray(data.agents) ? data.agents : [];
+      const next = rows.map(normalizeAgentOption).filter((agent) => agent.agent_id);
+      if (next.length) {
+        setAgentOptions(next);
+        setAgentsAreFallback(false);
+      } else {
+        setAgentOptions(fallbackAgentOptions);
+        setAgentsAreFallback(true);
+      }
+    } catch (err) {
+      setAgentOptions(fallbackAgentOptions);
+      setAgentsAreFallback(true);
+      setError(`Agent 列表没拉到，邀请页暂用样稿：${err.message}`);
+    }
+  }
+
+  useEffect(() => {
+    loadRounds();
+    loadAgents();
+  }, []);
 
   function openRound(id) {
     setActiveId(id);
@@ -784,6 +882,8 @@ export default function ParlorApp() {
       {view === "create" ? (
         <CreateScreen
           onCancel={() => setView("list")}
+          agentOptions={agentOptions}
+          agentsAreFallback={agentsAreFallback}
           setError={setError}
           onCreated={(round) => {
             setRounds((current) => [round, ...current.filter((item) => !item.id.startsWith("demo"))]);
@@ -798,7 +898,7 @@ export default function ParlorApp() {
       ) : view === "room" ? (
         <RoomScreen round={active} onBack={() => setView("list")} onSummary={() => setView("summary")} onRefresh={refreshActive} setError={setError} />
       ) : (
-        <ListScreen rounds={rounds} onOpen={openRound} onCreate={() => setView("create")} />
+        <ListScreen rounds={rounds} usingDemo={usingDemo} onOpen={openRound} onCreate={() => setView("create")} />
       )}
       {error && (
         <div style={{ position: "absolute", left: 16, right: 16, bottom: 18, padding: "8px 11px", borderRadius: 10, background: T.cream, border: `0.5px solid ${T.rule}`, color: T.inkSoft, fontFamily: F.cn, fontSize: 11, boxShadow: "0 8px 24px rgba(80,50,30,.12)" }}>
