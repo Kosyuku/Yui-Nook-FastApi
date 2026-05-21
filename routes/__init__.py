@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json as jsonlib
 import logging
+import os
 import re
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -13,6 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 
 import ai_runtime
 from codex_bridge import codex_bridge_chat
+from claude_tmux_bridge import claude_tmux_chat, claude_tmux_reset, list_active_sessions
 import database as db
 from models import router as model_router
 from models import OpenAICompatAdapter, EchoAdapter, ADAPTER_MAP
@@ -320,6 +323,73 @@ class CodexChatRequest(BaseModel):
     content: str
     reset: bool = False
     timeout_seconds: Optional[int] = None
+    agent_id: Optional[str] = None
+    persona: Optional[str] = None
+
+
+class ClaudeCodeChatRequest(BaseModel):
+    conversation_key: str
+    content: str
+    reset: bool = False
+    timeout_seconds: Optional[int] = None
+    agent_id: Optional[str] = None
+
+
+def _codex_prompt_from_built_messages(messages: list[dict]) -> str:
+    parts: list[str] = [
+        "You are answering inside YUI Nook through the Codex bridge.",
+        "Use the context below as your active chat prompt. Reply only to the latest user message.",
+        "Do not mention implementation details unless the user asks.",
+    ]
+    for message in messages:
+        role = str(message.get("role") or "user").strip() or "user"
+        content = str(message.get("content") or "").strip()
+        if content:
+            parts.append(f"\n\n<{role}>\n{content}\n</{role}>")
+    return "\n".join(parts).strip()
+
+
+async def _run_codex_aftercare(
+    *,
+    session_id: str,
+    agent_id: str,
+    user_message_row: dict,
+    assistant_message_row: dict,
+) -> None:
+    try:
+        if settings.conversation_partitions_enabled:
+            try:
+                await append_committed_turn(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    rp_room_id="",
+                    mode="chat",
+                    user_message=user_message_row,
+                    assistant_message=assistant_message_row,
+                )
+            except Exception as exc:
+                logger.warning("Conversation partition write failed(codex): %s", exc)
+
+        try:
+            await db.ensure_context_summary(
+                session_id=session_id,
+                trigger_messages=max(8, settings.summary_trigger_messages),
+                keep_recent_messages=max(4, settings.summary_keep_recent_messages),
+                min_batch_messages=max(2, settings.summary_min_batch_messages),
+                agent_id=agent_id,
+            )
+        except Exception as exc:
+            logger.warning("Codex context summary failed: %s", exc)
+
+        try:
+            import consciousness
+            await consciousness.phase2_produce_snapshot(agent_id=agent_id)
+            await consciousness.phase3_extract_memories(agent_id=agent_id)
+            await consciousness.run_daily_loop_once(agent_id=agent_id)
+        except Exception as exc:
+            logger.warning("Codex consciousness aftercare failed: %s", exc)
+    except Exception:
+        logger.exception("Codex aftercare crashed")
 
 
 class RPChatRequest(BaseModel):
@@ -906,10 +976,73 @@ async def codex_chat(body: CodexChatRequest):
 
     Same conversation_key from YUI Nook and Discord resumes the same Codex thread.
     """
+    raw_agent_id = (body.agent_id or body.conversation_key.rsplit(":", 1)[-1] or "").strip()
+    agent_id = db.normalize_agent_id_value(raw_agent_id)
+    session_title = f"Codex bridge: {body.conversation_key.strip()}"
+
     try:
+        session = await db.get_latest_session_for_agent_source(
+            agent_id=agent_id,
+            source_app="codex_bridge",
+            title=session_title,
+        )
+        if not session:
+            session = await db.create_session(
+                title=session_title,
+                model="codex",
+                source_app="codex_bridge",
+                agent_id=agent_id,
+            )
+        if body.reset:
+            await db.update_session(session["id"], last_summarized_message_id="")
+    except Exception as exc:
+        logger.exception("Codex bridge session setup failed")
+        raise HTTPException(status_code=502, detail=f"Codex session setup failed: {exc}") from exc
+
+    try:
+        user_message = await db.add_message(
+            session["id"],
+            "user",
+            body.content,
+            model="codex",
+            agent_id=agent_id,
+        )
+    except Exception as exc:
+        logger.exception("Codex bridge user persistence failed")
+        raise HTTPException(status_code=502, detail=f"Codex failed to save user message: {exc}") from exc
+
+    try:
+        await _auto_capture_memory_from_user_text(body.content, agent_id)
+    except Exception as exc:
+        logger.warning("Codex auto memory capture failed: %s", exc)
+    try:
+        await db.ensure_context_summary(
+            session_id=session["id"],
+            trigger_messages=max(8, settings.summary_trigger_messages),
+            keep_recent_messages=max(4, settings.summary_keep_recent_messages),
+            min_batch_messages=max(2, settings.summary_min_batch_messages),
+            agent_id=agent_id,
+        )
+    except Exception as exc:
+        logger.warning("Codex context summary before prompt failed: %s", exc)
+
+    built_prompt = None
+    try:
+        built_prompt = await build_chat_prompt(
+            session_id=session["id"],
+            agent_id=agent_id,
+            latest_user_text=body.content,
+            override_persona=(body.persona or "").strip() or None,
+            provider="codex",
+            model="codex",
+            tool_profile="chat",
+        )
+        if settings.prompt_debug:
+            logger.info("Codex prompt debug: %s", _prompt_debug_payload(built_prompt.debug))
         result = await codex_bridge_chat(
             conversation_key=body.conversation_key,
             content=body.content,
+            prompt=_codex_prompt_from_built_messages(built_prompt.messages),
             reset=body.reset,
             timeout_seconds=body.timeout_seconds or 180,
         )
@@ -917,11 +1050,125 @@ async def codex_chat(body: CodexChatRequest):
         logger.exception("Codex bridge failed")
         raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
 
+    try:
+        assistant_message = await db.add_message(
+            session["id"],
+            "assistant",
+            result.reply,
+            model="codex",
+            agent_id=agent_id,
+        )
+    except Exception as exc:
+        logger.exception("Codex bridge persistence failed")
+        raise HTTPException(status_code=502, detail=f"Codex replied but failed to save messages: {exc}") from exc
+
+    asyncio.create_task(_run_codex_aftercare(
+        session_id=session["id"],
+        agent_id=agent_id,
+        user_message_row=user_message,
+        assistant_message_row=assistant_message,
+    ))
+
     return {
         "conversation_key": result.conversation_key,
         "thread_id": result.thread_id,
         "reply": result.reply,
+        "user_message": user_message,
+        "assistant_message": assistant_message,
+        "prompt_debug": built_prompt.debug if (settings.prompt_debug and built_prompt) else None,
     }
+
+
+@api.post("/claude-code/chat")
+async def claude_code_chat(body: ClaudeCodeChatRequest):
+    """
+    Bridge a client conversation into a persistent interactive Claude Code tmux session.
+    Uses Claude subscription quota (not API billing).
+    Each conversation_key gets its own tmux session on the VPS.
+    """
+    raw_agent_id = (body.agent_id or body.conversation_key.rsplit(":", 1)[-1] or "").strip()
+    agent_id = db.normalize_agent_id_value(raw_agent_id)
+    session_title = f"Claude Code bridge: {body.conversation_key.strip()}"
+
+    try:
+        session = await db.get_latest_session_for_agent_source(
+            agent_id=agent_id,
+            source_app="claude_code_bridge",
+            title=session_title,
+        )
+        if not session:
+            session = await db.create_session(
+                title=session_title,
+                model="claude-code",
+                source_app="claude_code_bridge",
+                agent_id=agent_id,
+            )
+        if body.reset:
+            await db.update_session(session["id"], last_summarized_message_id="")
+    except Exception as exc:
+        logger.exception("Claude Code bridge session setup failed")
+        raise HTTPException(status_code=502, detail=f"Claude Code session setup failed: {exc}") from exc
+
+    try:
+        user_message = await db.add_message(
+            session["id"],
+            "user",
+            body.content,
+            model="claude-code",
+            agent_id=agent_id,
+        )
+    except Exception as exc:
+        logger.exception("Claude Code bridge user persistence failed")
+        raise HTTPException(status_code=502, detail=f"Claude Code failed to save user message: {exc}") from exc
+
+    try:
+        await _auto_capture_memory_from_user_text(body.content, agent_id)
+    except Exception as exc:
+        logger.warning("Claude Code auto memory capture failed: %s", exc)
+
+    try:
+        result = await claude_tmux_chat(
+            conversation_key=body.conversation_key,
+            content=body.content,
+            reset=body.reset,
+            timeout_seconds=body.timeout_seconds or 120,
+        )
+    except Exception as exc:
+        logger.exception("Claude Code tmux bridge failed")
+        raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
+
+    try:
+        assistant_message = await db.add_message(
+            session["id"],
+            "assistant",
+            result.reply,
+            model="claude-code",
+            agent_id=agent_id,
+        )
+    except Exception as exc:
+        logger.exception("Claude Code bridge persistence failed")
+        raise HTTPException(status_code=502, detail=f"Claude Code replied but failed to save messages: {exc}") from exc
+
+    return {
+        "conversation_key": result.conversation_key,
+        "session_name": result.session_name,
+        "reply": result.reply,
+        "user_message": user_message,
+        "assistant_message": assistant_message,
+    }
+
+
+@api.get("/claude-code/sessions")
+async def claude_code_sessions():
+    """列出所有活跃的 Claude Code tmux sessions 及消息计数。"""
+    return {"sessions": list_active_sessions(), "compact_every": int(os.getenv("CLAUDE_TMUX_COMPACT_EVERY", "30"))}
+
+
+@api.post("/claude-code/reset")
+async def claude_code_reset_session(body: ClaudeCodeChatRequest):
+    """Kill 掉对应的 tmux session，下次重新开始。"""
+    await claude_tmux_reset(body.conversation_key)
+    return {"ok": True, "conversation_key": body.conversation_key}
 
 
 @api.post("/rp/chat")

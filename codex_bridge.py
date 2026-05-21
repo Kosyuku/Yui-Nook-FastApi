@@ -125,6 +125,7 @@ async def codex_bridge_chat(
     *,
     conversation_key: str,
     content: str,
+    prompt: str | None = None,
     reset: bool = False,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> CodexBridgeResult:
@@ -169,7 +170,7 @@ async def codex_bridge_chat(
                 "-",
             ]
 
-        stdout, stderr, returncode = await _run_codex(args, content, timeout_seconds)
+        stdout, stderr, returncode = await _run_codex(args, prompt if prompt is not None else content, timeout_seconds)
         events, new_thread_id, parsed_reply = _parse_json_events(stdout)
 
         reply = parsed_reply

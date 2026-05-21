@@ -531,6 +531,53 @@ CREATE INDEX IF NOT EXISTS idx_artifact_items_is_pinned
     ON artifact_items(is_pinned);
 CREATE INDEX IF NOT EXISTS idx_artifact_items_created_at
     ON artifact_items(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS parlor_rounds (
+    id                    TEXT PRIMARY KEY,
+    title                 TEXT NOT NULL,
+    description           TEXT NOT NULL DEFAULT '',
+    status                TEXT NOT NULL DEFAULT 'active',
+    created_by            TEXT NOT NULL DEFAULT 'user',
+    mode                  TEXT NOT NULL DEFAULT 'free',
+    auto_mode             TEXT NOT NULL DEFAULT 'manual',
+    max_turns_per_session INTEGER NOT NULL DEFAULT 20,
+    summary               TEXT NOT NULL DEFAULT '{}',
+    last_viewed_turn_n    INTEGER NOT NULL DEFAULT 0,
+    left_at               TEXT NOT NULL DEFAULT '',
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_parlor_rounds_status
+    ON parlor_rounds(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS parlor_seats (
+    id            TEXT PRIMARY KEY,
+    round_id      TEXT NOT NULL,
+    agent_id      TEXT NOT NULL,
+    display_name  TEXT NOT NULL DEFAULT '',
+    model         TEXT NOT NULL DEFAULT '',
+    provider      TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    color         TEXT NOT NULL DEFAULT '',
+    seat_order    INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_parlor_seats_round_id
+    ON parlor_seats(round_id, seat_order);
+
+CREATE TABLE IF NOT EXISTS parlor_turns (
+    id          TEXT PRIMARY KEY,
+    round_id    TEXT NOT NULL,
+    seat_id     TEXT NOT NULL DEFAULT '',
+    agent_id    TEXT NOT NULL DEFAULT '',
+    content     TEXT NOT NULL DEFAULT '',
+    turn_number INTEGER NOT NULL DEFAULT 0,
+    is_user     INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_parlor_turns_round_id
+    ON parlor_turns(round_id, turn_number);
 """
 
 
@@ -3929,6 +3976,45 @@ async def get_session(session_id: str) -> dict[str, Any] | None:
     return _normalize_session_row(dict(row) if row else None)
 
 
+async def get_latest_session_for_agent_source(
+    *,
+    agent_id: str | None,
+    source_app: str | None,
+    title: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_agent_id = normalize_agent_id_value(agent_id)
+    normalized_source_app = normalize_source_app(source_app)
+    if not normalized_agent_id:
+        return None
+    if _use_supabase_data():
+        filters = {
+            "agent_id": f"eq.{normalized_agent_id}",
+            "source_app": f"eq.{normalized_source_app}",
+        }
+        if title is not None:
+            filters["title"] = f"eq.{title}"
+        rows = await _supabase_select(
+            settings.supabase_sessions_table,
+            filters=filters,
+            order="updated_at.desc",
+            limit=1,
+        )
+        return _normalize_session_row(rows[0] if rows else None)
+    db = await get_db()
+    if title is None:
+        cursor = await db.execute(
+            "SELECT * FROM sessions WHERE agent_id = ? AND source_app = ? ORDER BY updated_at DESC LIMIT 1",
+            (normalized_agent_id, normalized_source_app),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT * FROM sessions WHERE agent_id = ? AND source_app = ? AND title = ? ORDER BY updated_at DESC LIMIT 1",
+            (normalized_agent_id, normalized_source_app, title),
+        )
+    row = await cursor.fetchone()
+    return _normalize_session_row(dict(row) if row else None)
+
+
 async def update_session(session_id: str, **kwargs) -> bool:
     if "source_app" in kwargs:
         kwargs["source_app"] = normalize_source_app(kwargs.get("source_app"))
@@ -6922,7 +7008,12 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
     return parsed
 
 
-def _activity_dedupe_key(event_type: str, event_value: str, content: str, explicit: str | None = None) -> str:
+def _activity_dedupe_key(
+    event_type: str,
+    event_value: str,
+    content: str,
+    explicit: str | None = None,
+) -> str:
     raw = str(explicit or "").strip()
     if raw:
         return raw
@@ -7156,7 +7247,11 @@ async def get_recent_activity(
     *,
     only_relevant: bool = False,
 ) -> list[dict[str, Any]]:
-    return await list_recent_activity_events(hours=hours, limit=limit, only_relevant=only_relevant)
+    return await list_recent_activity_events(
+        hours=hours,
+        limit=limit,
+        only_relevant=only_relevant,
+    )
 
 
 def format_recent_activity_block(events: list[dict[str, Any]]) -> str:
@@ -7751,3 +7846,308 @@ async def delete_artifact_item(item_id: str) -> bool:
     result = await db.execute("DELETE FROM artifact_items WHERE id = ?", (item_id,))
     await db.commit()
     return result.rowcount > 0
+
+# ==================== Parlor ====================
+
+PARLOR_ROUND_STATUSES = {"active", "paused", "ended"}
+PARLOR_MODES = {"free", "round-robin"}
+PARLOR_AUTO_MODES = {"manual", "interval-2h", "interval-6h"}
+
+
+def _parlor_summary(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _normalize_parlor_round(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    item["summary"] = _parlor_summary(item.get("summary"))
+    for key in ("max_turns_per_session", "last_viewed_turn_n"):
+        try:
+            item[key] = int(item.get(key) or 0)
+        except Exception:
+            item[key] = 0
+    return item
+
+
+def _normalize_parlor_seat(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    try:
+        item["seat_order"] = int(item.get("seat_order") or item.get("order") or 0)
+    except Exception:
+        item["seat_order"] = 0
+    item["order"] = item["seat_order"]
+    return item
+
+
+def _normalize_parlor_turn(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    item = dict(row)
+    try:
+        item["turn_number"] = int(item.get("turn_number") or 0)
+    except Exception:
+        item["turn_number"] = 0
+    item["is_user"] = bool(item.get("is_user"))
+    return item
+
+
+def _parlor_round_payload(
+    *,
+    title: str,
+    description: str = "",
+    status: str = "active",
+    created_by: str = "user",
+    mode: str = "free",
+    auto_mode: str = "manual",
+    max_turns_per_session: int = 20,
+    summary: dict | None = None,
+    last_viewed_turn_n: int = 0,
+    left_at: str = "",
+    item_id: str | None = None,
+) -> dict[str, Any]:
+    title = str(title or "").strip()
+    if not title:
+        raise ValueError("title is required")
+    status = str(status or "active").strip().lower()
+    if status not in PARLOR_ROUND_STATUSES:
+        raise ValueError("status must be active, paused, or ended")
+    mode = str(mode or "free").strip().lower()
+    if mode not in PARLOR_MODES:
+        mode = "free"
+    auto_mode = str(auto_mode or "manual").strip().lower()
+    if auto_mode not in PARLOR_AUTO_MODES:
+        auto_mode = "manual"
+    try:
+        max_turns = max(5, min(50, int(max_turns_per_session or 20)))
+    except Exception:
+        max_turns = 20
+    now = _now()
+    return {
+        "id": item_id or _new_id(),
+        "title": title,
+        "description": str(description or "").strip(),
+        "status": status,
+        "created_by": str(created_by or "user").strip() or "user",
+        "mode": mode,
+        "auto_mode": auto_mode,
+        "max_turns_per_session": max_turns,
+        "summary": summary or {},
+        "last_viewed_turn_n": int(last_viewed_turn_n or 0),
+        "left_at": str(left_at or ""),
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+async def create_parlor_round(**kwargs) -> dict[str, Any]:
+    payload = _parlor_round_payload(**kwargs)
+    db_payload = {**payload, "summary": json.dumps(payload["summary"], ensure_ascii=False)}
+    if _use_supabase_data():
+        supabase_payload = {**payload, "left_at": payload["left_at"] or None}
+        row = await _supabase_insert_verified("parlor_rounds", supabase_payload)
+        return _normalize_parlor_round(row) or payload
+    db = await get_db()
+    await db.execute(
+        """INSERT INTO parlor_rounds
+        (id, title, description, status, created_by, mode, auto_mode, max_turns_per_session, summary, last_viewed_turn_n, left_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            db_payload["id"], db_payload["title"], db_payload["description"], db_payload["status"],
+            db_payload["created_by"], db_payload["mode"], db_payload["auto_mode"],
+            db_payload["max_turns_per_session"], db_payload["summary"], db_payload["last_viewed_turn_n"],
+            db_payload["left_at"], db_payload["created_at"], db_payload["updated_at"],
+        ),
+    )
+    await db.commit()
+    return payload
+
+
+async def list_parlor_rounds(status: str | None = None, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit or 50), 100))
+    offset = max(0, int(offset or 0))
+    if _use_supabase_data():
+        filters = {"status": f"eq.{status}"} if status else None
+        rows = await _supabase_select("parlor_rounds", filters=filters, order="updated_at.desc", limit=limit)
+        return [item for item in (_normalize_parlor_round(row) for row in rows[offset:]) if item]
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.extend([limit, offset])
+    db = await get_db()
+    cursor = await db.execute(f"SELECT * FROM parlor_rounds {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?", params)
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_parlor_round(dict(row)) for row in rows) if item]
+
+
+async def get_parlor_round(round_id: str, *, include_children: bool = False) -> dict[str, Any] | None:
+    round_id = str(round_id or "").strip()
+    if not round_id:
+        return None
+    if _use_supabase_data():
+        rows = await _supabase_select("parlor_rounds", filters={"id": f"eq.{round_id}"}, limit=1)
+        item = _normalize_parlor_round(rows[0]) if rows else None
+    else:
+        db = await get_db()
+        cursor = await db.execute("SELECT * FROM parlor_rounds WHERE id = ?", (round_id,))
+        row = await cursor.fetchone()
+        item = _normalize_parlor_round(dict(row)) if row else None
+    if item and include_children:
+        item["seats"] = await list_parlor_seats(round_id)
+        item["turns"] = await list_parlor_turns(round_id, limit=200)
+    return item
+
+
+async def update_parlor_round(round_id: str, **kwargs) -> bool:
+    allowed = {"title", "description", "status", "mode", "auto_mode", "max_turns_per_session", "summary", "last_viewed_turn_n", "left_at"}
+    updates = {key: value for key, value in kwargs.items() if key in allowed and value is not None}
+    if not updates:
+        return False
+    if "summary" in updates and not isinstance(updates["summary"], dict):
+        updates["summary"] = {}
+    updates["updated_at"] = _now()
+    if _use_supabase_data():
+        if "left_at" in updates and not updates["left_at"]:
+            updates["left_at"] = None
+        rows = await _supabase_update("parlor_rounds", {"id": f"eq.{round_id}"}, updates)
+        return len(rows) > 0
+    if "summary" in updates:
+        updates["summary"] = json.dumps(updates["summary"], ensure_ascii=False)
+    sets = ", ".join(f"{key} = ?" for key in updates)
+    db = await get_db()
+    result = await db.execute(f"UPDATE parlor_rounds SET {sets} WHERE id = ?", [*updates.values(), round_id])
+    await db.commit()
+    return result.rowcount > 0
+
+
+async def delete_parlor_round(round_id: str) -> bool:
+    if _use_supabase_data():
+        await _supabase_delete("parlor_turns", {"round_id": f"eq.{round_id}"})
+        await _supabase_delete("parlor_seats", {"round_id": f"eq.{round_id}"})
+        return len(await _supabase_delete("parlor_rounds", {"id": f"eq.{round_id}"})) > 0
+    db = await get_db()
+    await db.execute("DELETE FROM parlor_turns WHERE round_id = ?", (round_id,))
+    await db.execute("DELETE FROM parlor_seats WHERE round_id = ?", (round_id,))
+    result = await db.execute("DELETE FROM parlor_rounds WHERE id = ?", (round_id,))
+    await db.commit()
+    return result.rowcount > 0
+
+
+async def create_parlor_seat(round_id: str, **kwargs) -> dict[str, Any]:
+    now = _now()
+    payload = {
+        "id": kwargs.get("id") or _new_id(),
+        "round_id": round_id,
+        "agent_id": str(kwargs.get("agent_id") or "").strip(),
+        "display_name": str(kwargs.get("display_name") or "").strip(),
+        "model": str(kwargs.get("model") or "").strip(),
+        "provider": str(kwargs.get("provider") or "").strip(),
+        "system_prompt": str(kwargs.get("system_prompt") or "").strip(),
+        "color": str(kwargs.get("color") or "").strip(),
+        "seat_order": int(kwargs.get("seat_order", kwargs.get("order", 0)) or 0),
+        "created_at": now,
+        "updated_at": now,
+    }
+    if not payload["agent_id"]:
+        raise ValueError("agent_id is required")
+    if _use_supabase_data():
+        return _normalize_parlor_seat(await _supabase_insert_verified("parlor_seats", payload)) or payload
+    db = await get_db()
+    await db.execute(
+        """INSERT INTO parlor_seats (id, round_id, agent_id, display_name, model, provider, system_prompt, color, seat_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        tuple(payload[key] for key in ("id", "round_id", "agent_id", "display_name", "model", "provider", "system_prompt", "color", "seat_order", "created_at", "updated_at")),
+    )
+    await db.commit()
+    return payload
+
+
+async def list_parlor_seats(round_id: str) -> list[dict[str, Any]]:
+    if _use_supabase_data():
+        rows = await _supabase_select("parlor_seats", filters={"round_id": f"eq.{round_id}"}, order="seat_order.asc")
+        return [item for item in (_normalize_parlor_seat(row) for row in rows) if item]
+    db = await get_db()
+    cursor = await db.execute("SELECT * FROM parlor_seats WHERE round_id = ? ORDER BY seat_order ASC", (round_id,))
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_parlor_seat(dict(row)) for row in rows) if item]
+
+
+async def update_parlor_seat(seat_id: str, **kwargs) -> bool:
+    allowed = {"display_name", "model", "provider", "system_prompt", "color", "seat_order"}
+    updates = {key: value for key, value in kwargs.items() if key in allowed and value is not None}
+    if not updates:
+        return False
+    updates["updated_at"] = _now()
+    if _use_supabase_data():
+        return len(await _supabase_update("parlor_seats", {"id": f"eq.{seat_id}"}, updates)) > 0
+    sets = ", ".join(f"{key} = ?" for key in updates)
+    db = await get_db()
+    result = await db.execute(f"UPDATE parlor_seats SET {sets} WHERE id = ?", [*updates.values(), seat_id])
+    await db.commit()
+    return result.rowcount > 0
+
+
+async def delete_parlor_seat(seat_id: str) -> bool:
+    if _use_supabase_data():
+        return len(await _supabase_delete("parlor_seats", {"id": f"eq.{seat_id}"})) > 0
+    db = await get_db()
+    result = await db.execute("DELETE FROM parlor_seats WHERE id = ?", (seat_id,))
+    await db.commit()
+    return result.rowcount > 0
+
+
+async def create_parlor_turn(round_id: str, *, seat_id: str = "", agent_id: str = "", content: str = "", is_user: bool = False, turn_number: int | None = None) -> dict[str, Any]:
+    if turn_number is None:
+        turns = await list_parlor_turns(round_id, limit=1, reverse=True)
+        turn_number = (turns[0]["turn_number"] + 1) if turns else 0
+    payload = {
+        "id": _new_id(),
+        "round_id": round_id,
+        "seat_id": seat_id,
+        "agent_id": agent_id or ("user" if is_user else ""),
+        "content": str(content or ""),
+        "turn_number": int(turn_number or 0),
+        "is_user": bool(is_user),
+        "created_at": _now(),
+    }
+    if _use_supabase_data():
+        supabase_payload = {**payload, "seat_id": payload["seat_id"] or None}
+        row = await _supabase_insert_verified("parlor_turns", supabase_payload)
+        await update_parlor_round(round_id)
+        return _normalize_parlor_turn(row) or payload
+    db = await get_db()
+    await db.execute(
+        "INSERT INTO parlor_turns (id, round_id, seat_id, agent_id, content, turn_number, is_user, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (payload["id"], payload["round_id"], payload["seat_id"], payload["agent_id"], payload["content"], payload["turn_number"], 1 if payload["is_user"] else 0, payload["created_at"]),
+    )
+    await db.commit()
+    await update_parlor_round(round_id)
+    return payload
+
+
+async def list_parlor_turns(round_id: str, limit: int = 100, offset: int = 0, reverse: bool = False) -> list[dict[str, Any]]:
+    order = "turn_number.desc" if reverse else "turn_number.asc"
+    limit = max(1, min(int(limit or 100), 300))
+    if _use_supabase_data():
+        rows = await _supabase_select("parlor_turns", filters={"round_id": f"eq.{round_id}"}, order=order, limit=limit)
+        return [item for item in (_normalize_parlor_turn(row) for row in rows[offset:]) if item]
+    direction = "DESC" if reverse else "ASC"
+    db = await get_db()
+    cursor = await db.execute(f"SELECT * FROM parlor_turns WHERE round_id = ? ORDER BY turn_number {direction} LIMIT ? OFFSET ?", (round_id, limit, offset))
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_parlor_turn(dict(row)) for row in rows) if item]
+

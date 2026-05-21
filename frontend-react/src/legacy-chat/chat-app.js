@@ -1565,6 +1565,21 @@
         return String(value || '').trim().replace(/^@+/, '').toLowerCase();
     }
 
+    const CODEX_TOGGLE_CONTACT_IDS = new Set(['zhansi']);
+
+    function canToggleCodexForContact(contact = {}) {
+        const ids = [
+            contact?.id,
+            contact?.agent_id,
+            contact?.handle,
+        ].map(normalizeNewContactAgentId).filter(Boolean);
+        return ids.some((id) => CODEX_TOGGLE_CONTACT_IDS.has(id));
+    }
+
+    function isCodexEnabledForContact(contact = {}) {
+        return canToggleCodexForContact(contact) && !!contact?.settings?.codexEnabled;
+    }
+
     function contactDefaults(contact = {}) {
         const id = String(contact.id || '').trim() || `c${Date.now()}`;
         const chatTheme = getContactChatThemeKey(contact);
@@ -1840,7 +1855,8 @@
         const c = byId(state.currentContactId) || state.contacts[0];
         const quoteMoment = state.quoteMomentId ? getMoment(state.quoteMomentId) : null;
         const quoteMessage = state.quoteMessageId ? c.messages.find((item) => item.id === state.quoteMessageId) : null;
-        const codexActive = !!c.settings?.codexEnabled;
+        const codexAllowed = canToggleCodexForContact(c);
+        const codexActive = isCodexEnabledForContact(c);
         return `
       <section class="room-page room-theme-${c.theme}">
         <div class="messages-panel">
@@ -1853,7 +1869,7 @@
             <div class="composer-input-wrap">
               <input class="chat-input" placeholder="\u8f93\u5165\u6d88\u606f..." value="" />
             </div>
-            <button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" type="button" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">Cx</button>
+            ${codexAllowed ? `<button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>` : ''}
             <button class="icon-btn icon-circle soft-mini" data-action="expand-actions" aria-label="\u9644\u4ef6">${icon('attach')}</button>
             ${state.streamingAbortController
                 ? `<button class="icon-btn send-round send-stop-active" data-action="fake-send" aria-label="\u505c\u6b62">${icon('stop')}</button>`
@@ -3325,7 +3341,7 @@
                 state.streamingAbortController.abort();
                 state.streamingAbortController = null;
                 render(); // immediately revert button without waiting for catch block
-            } else if (state.currentView !== 'rpRoom' && byId(state.currentContactId)?.settings?.codexEnabled) {
+            } else if (state.currentView !== 'rpRoom' && isCodexEnabledForContact(byId(state.currentContactId))) {
                 doSendCodexMessage();
             } else {
                 doSendMessage();
@@ -3333,6 +3349,12 @@
         });
         const attachBtn = mount.querySelector('.soft-mini');
         if (attachBtn) attachBtn.addEventListener('click', (e) => { e.stopPropagation(); state.showAttach = !state.showAttach; render(); });
+        const codexBtn = mount.querySelector('.codex-toggle');
+        if (codexBtn) codexBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleCurrentCodexMode();
+        });
         const contactRows = mount.querySelectorAll('.chat-list-item[data-contact-id]');
         contactRows.forEach((row) => {
             row.addEventListener('click', (e) => {
@@ -3347,7 +3369,7 @@
             chatInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    if (state.currentView !== 'rpRoom' && byId(state.currentContactId)?.settings?.codexEnabled) {
+                    if (state.currentView !== 'rpRoom' && isCodexEnabledForContact(byId(state.currentContactId))) {
                         doSendCodexMessage();
                     } else {
                         doSendMessage();
@@ -3357,6 +3379,24 @@
             // Auto focus
             if (['room', 'rpRoom'].includes(state.currentView)) chatInput.focus();
         }
+    }
+
+    function toggleCurrentCodexMode(contactId = state.currentContactId) {
+        const c = byId(contactId) || byId(state.currentContactId);
+        if (!c) return;
+        state.currentContactId = c.id;
+        if (!canToggleCodexForContact(c)) {
+            c.settings = { ...(c.settings || {}), codexEnabled: false };
+            state.toast = '只有阿湛能切 Codex';
+            render();
+            window.setTimeout(() => { state.toast = ''; render(); }, 1200);
+            return;
+        }
+        c.settings = { ...(c.settings || {}), codexEnabled: !c.settings?.codexEnabled };
+        state.toast = c.settings.codexEnabled ? 'Codex 已接管这个窗口' : 'Codex 已关闭';
+        queueLocalSyncIfChanged(120);
+        render();
+        window.setTimeout(() => { state.toast = ''; render(); }, 1200);
     }
 
     async function handleClick(event) {
@@ -4189,11 +4229,7 @@
         }
 
         if (action === 'toggle-codex-mode') {
-            const c = byId(state.currentContactId);
-            if (!c) return;
-            c.settings = { ...(c.settings || {}), codexEnabled: !c.settings?.codexEnabled };
-            queueLocalSyncIfChanged(120);
-            render();
+            toggleCurrentCodexMode(target.dataset.contactId);
             return;
         }
 
@@ -4206,7 +4242,7 @@
             }
             if (state.currentView === 'rpRoom') {
                 doSendRpMessage();
-            } else if (byId(state.currentContactId)?.settings?.codexEnabled) {
+            } else if (isCodexEnabledForContact(byId(state.currentContactId))) {
                 doSendCodexMessage();
             } else {
                 doSendMessage();
@@ -4513,6 +4549,7 @@
         const role = String(message.role || '').toLowerCase() === 'user' ? 'user' : 'ai';
         const createdAt = String(message.created_at || '');
         const content = String(message.content || '');
+        const model = String(message.model || '');
         return normalizeStoredMessage({
             id: message.id || `${contactId}|${role}|${createdAt}|${content}`,
             session_id: message.session_id || '',
@@ -4522,7 +4559,8 @@
             text: content,
             created_at: createdAt,
             time: createdAt ? formatDisplayTime(createdAt, { fallback: '' }) : '',
-            model: message.model || '',
+            model,
+            ...(model.toLowerCase() === 'codex' ? { source: 'codex', provider: 'codex' } : {}),
         });
     }
 
@@ -5366,6 +5404,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     conversation_key: `yui:${c.id}`,
+                    agent_id: c.id,
                     content: text,
                     reset: false,
                 }),
@@ -5375,17 +5414,32 @@
             if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
 
             const reply = String(data.reply || '').trim() || '\u2026';
+            const persistedUser = data.user_message && typeof data.user_message === 'object'
+                ? murmurHistoryMessageToStored(data.user_message, c.id)
+                : null;
+            const persistedAssistant = data.assistant_message && typeof data.assistant_message === 'object'
+                ? {
+                    ...murmurHistoryMessageToStored(data.assistant_message, c.id),
+                    source: 'codex',
+                    provider: 'codex',
+                }
+                : null;
+            const userIdx = c.messages.findIndex((m) => m.id === msgId);
+            if (userIdx !== -1 && persistedUser) {
+                c.messages[userIdx] = contactMessageFromStored(persistedUser);
+            }
             const idx = c.messages.findIndex((m) => m.id === aiId);
             if (idx !== -1) {
                 c.messages[idx] = {
-                    id: aiId,
+                    ...(persistedAssistant ? contactMessageFromStored(persistedAssistant) : {}),
+                    id: persistedAssistant?.id || aiId,
                     role: 'ai',
                     text: reply,
                     content: reply,
                     source: 'codex',
                     provider: 'codex',
-                    time: nowTimeStr(),
-                    created_at: new Date().toISOString(),
+                    time: persistedAssistant?.time || nowTimeStr(),
+                    created_at: persistedAssistant?.created_at || new Date().toISOString(),
                     typing: false,
                 };
             }
@@ -8406,6 +8460,29 @@
         if (quickGesture.mode === 'drag') finishQuickDrag();
         resetQuickGesture();
     }, { passive: true });
+
+    let lastCodexToggleEventAt = 0;
+
+    function handleCodexTogglePress(event) {
+        const target = event.target?.closest?.('.codex-toggle');
+        if (!target) return;
+        const now = Date.now();
+        if (now - lastCodexToggleEventAt < 320) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation?.();
+            return;
+        }
+        lastCodexToggleEventAt = now;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        toggleCurrentCodexMode(target.dataset.contactId);
+    }
+
+    ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach((eventName) => {
+        document.addEventListener(eventName, handleCodexTogglePress, true);
+    });
 
     document.addEventListener('mousedown', (event) => {
         if (isEditableTarget(event.target)) return;
