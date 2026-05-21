@@ -19,7 +19,7 @@ import "./settings-love-stage/tokens.jsx";
 import "./settings-love-stage/widgets.jsx";
 import { listMediaItems, mediaUploadProvider, withMediaUrls } from "./mediaApi.js";
 
-const RICH_TEXT_SELECTOR = 'input:not([type="file"]):not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([readonly]), textarea:not([readonly])';
+const RICH_TEXT_SELECTOR = 'input:not([type="file"]):not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="password"]):not([data-plain-input="true"]):not([readonly]), textarea:not([data-plain-input="true"]):not([readonly])';
 const RICH_TEXT_SKIP_SELECTOR = [
   ".chat-app",
   ".custom-dialog-card",
@@ -27,6 +27,8 @@ const RICH_TEXT_SKIP_SELECTOR = [
 
 function shouldEnhanceRichInput(input) {
   if (!input) return false;
+  if (input.dataset?.plainInput === "true") return false;
+  if (String(input.type || "").toLowerCase() === "password") return false;
   if (input.closest(".chat-app")) return false;
   return !input.closest(RICH_TEXT_SKIP_SELECTOR);
 }
@@ -115,10 +117,14 @@ function plainTextFromHtml(html) {
 function syncRichProxy(editor, input) {
   const plain = (editor.innerText || "").replace(/\u00a0/g, " ");
   const normalized = input.tagName === "INPUT" ? plain.replace(/\r?\n/g, " ") : plain;
+  const previousValue = input.value;
+  const previousHtml = input.dataset.richHtml || "";
   setNativeInputValue(input, normalized);
   input.dataset.richHtml = normalizeRichHtml(editor.innerHTML);
   input.dataset.richPlain = normalized;
-  dispatchNativeInput(input);
+  if (previousValue !== normalized || previousHtml !== input.dataset.richHtml) {
+    dispatchNativeInput(input);
+  }
   editor.classList.toggle("is-empty", !editor.textContent?.trim());
 }
 
@@ -128,6 +134,16 @@ function flushRichTextInputs(rootNode = document) {
     const input = wrapper.querySelector(".rich-text-source");
     if (editor && input) syncRichProxy(editor, input);
   });
+}
+
+function flushActiveRichTextInput() {
+  const editor = document.activeElement;
+  if (!(editor instanceof HTMLElement) || !editor.classList.contains("rich-text-proxy")) return;
+  const wrapper = editor.closest(".rich-text-proxy-wrap");
+  const input = wrapper?.querySelector(".rich-text-source");
+  if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+    syncRichProxy(editor, input);
+  }
 }
 
 function paintRichProxy(editor, input) {
@@ -256,7 +272,7 @@ const builtinApps = [
   { id: "folio", label: "Folio", glyph: "书", type: "应用" },
   { id: "inbox", label: "Glean", glyph: "拾", type: "应用" },
   { id: "curio", label: "Curio", glyph: "匣", type: "应用" },
-  { id: "parlor", label: "Parlor", glyph: "炉", type: "应用" },
+  { id: "parlor", label: "Parlor", glyph: "炉", type: "应用", iconSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60"><rect width="60" height="60" rx="14" fill="#FEF0E4"/><path d="M30 12 C26 19 20 24 22 32 C23 37 26 41 30 41 C34 41 37 37 38 32 C40 24 34 19 30 12Z" stroke="#E07840" stroke-width="2.5" stroke-linejoin="round" fill="#FEF0E4"/><path d="M30 23 C28 26 27 30 28 33 C29 35 30 37 30 37" stroke="#E07840" stroke-width="2" stroke-linecap="round" fill="none"/><line x1="16" y1="46" x2="44" y2="44" stroke="#C4784A" stroke-width="3.5" stroke-linecap="round"/><line x1="19" y1="50" x2="41" y2="50" stroke="#C4784A" stroke-width="3.5" stroke-linecap="round"/></svg>` },
 ];
 
 const appTitles = Object.fromEntries(builtinApps.map((app) => [app.id, app.label]));
@@ -654,6 +670,8 @@ function calcLoveDays(startDate) {
 function LoveWidget() {
   const [config, setConfig] = useState(() => readLoveWidgetConfig());
   const [showWhisper, setShowWhisper] = useState(false);
+  const [whisperAnchor, setWhisperAnchor] = useState(null);
+  const wrapRef = useRef(null);
   useEffect(() => {
     const update = (event) => setConfig(event?.detail || readLoveWidgetConfig());
     window.addEventListener("storage", update);
@@ -669,14 +687,34 @@ function LoveWidget() {
   const aiLabel = String(config.aiLabel || info.rightName || "彦").slice(0, 1);
   const whisperText = info.aiMessage || "偷偷说：今天也想你。";
   function handleLoveWidgetClick(event) {
-    if (!event.target.closest?.('[data-love-avatar="right"]')) return;
+    const avatar = event.target.closest?.('[data-love-avatar="right"]');
+    if (!avatar) return;
+    const wrap = wrapRef.current;
+    // Use offsetLeft/offsetTop traversal — unaffected by CSS transforms (click animations)
+    let el = avatar;
+    let left = 0;
+    let top = 0;
+    while (el && el !== wrap) {
+      left += el.offsetLeft;
+      top += el.offsetTop;
+      el = el.offsetParent;
+    }
+    const avatarCenterX = left + avatar.offsetWidth / 2;
+    const avatarCenterY = top + avatar.offsetHeight / 2;
+    const placeLeft = wrap ? avatarCenterX > wrap.offsetWidth / 2 : true;
+    setWhisperAnchor({
+      side: placeLeft ? "left" : "right",
+      left: placeLeft ? left - 10 : left + avatar.offsetWidth + 10,
+      top: avatarCenterY,
+    });
     setShowWhisper((value) => !value);
   }
   if (Widget) {
     return (
       <div
-        className="love-widget love-widget-rendered liquid-card"
+        className="love-widget love-widget-rendered"
         role="button"
+        ref={wrapRef}
         tabIndex={0}
         aria-label="恋爱小组件"
         onClick={handleLoveWidgetClick}
@@ -687,7 +725,20 @@ function LoveWidget() {
           }
         }}
       >
-        {showWhisper && <div className="love-widget-whisper">{whisperText}</div>}
+        {showWhisper && (
+          <div
+            className="love-widget-whisper"
+            style={whisperAnchor ? {
+              left: whisperAnchor.left,
+              top: whisperAnchor.top,
+              right: "auto",
+              width: 192,
+              transform: whisperAnchor.side === "left" ? "translate(-100%, -50%)" : "translateY(-50%)",
+            } : undefined}
+          >
+            {whisperText}
+          </div>
+        )}
         <Widget
           size={config.size || "M"}
           days={calcLoveDays(info.startDate)}
@@ -1885,7 +1936,6 @@ function AlbumApp() {
   const [items, setItems] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
-  const fileRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -1909,41 +1959,39 @@ function AlbumApp() {
     savePhoneState("album", { items }).catch((err) => setError(`相册保存失败�?{err.message}`));
   }, [items, loaded]);
 
-  function uploadPhotos() {
-    const input = fileRef.current;
-    if (!input) return;
-    input.onchange = () => {
-      const files = Array.from(input.files || []);
-      files.forEach((file) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          setItems((current) => [
-            {
-              id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-              name: file.name,
-              src: String(reader.result),
-              createdAt: new Date().toISOString(),
-            },
-            ...current,
-          ]);
-        };
-        reader.readAsDataURL(file);
-      });
-      input.value = "";
-    };
-    input.click();
+  function handlePhotoFiles(event) {
+    const input = event.currentTarget;
+    const files = Array.from(input.files || []);
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setItems((current) => [
+          {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            name: file.name,
+            src: String(reader.result),
+            createdAt: new Date().toISOString(),
+          },
+          ...current,
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+    input.value = "";
   }
 
   return (
     <main className="album-app">
-      <input ref={fileRef} type="file" accept="image/*" multiple hidden />
       <section className="album-hero liquid-card">
         <div>
           <p className="section-label">Photo Library</p>
           <h2>相册</h2>
           <span>{items.length ? `${items.length} 张照片` : "还没有照片"}</span>
         </div>
-        <button className="soft-button" type="button" onClick={uploadPhotos}>上传图片</button>
+        <label className="soft-button file-pick-button">
+          上传图片
+          <input type="file" accept="image/*" multiple onChange={handlePhotoFiles} />
+        </label>
       </section>
       {error && <div className="chat-system-note error">{error}</div>}
       <section className="album-grid-panel">
@@ -2229,7 +2277,7 @@ export default function App() {
     const flushBeforeAction = (event) => {
       if (!(event.target instanceof Element)) return;
       if (!event.target.closest("button, [role='button'], input[type='submit'], input[type='button']")) return;
-      flushRichTextInputs(document);
+      flushActiveRichTextInput();
     };
     document.addEventListener("pointerdown", flushBeforeAction, true);
     document.addEventListener("click", flushBeforeAction, true);
