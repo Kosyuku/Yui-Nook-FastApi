@@ -173,6 +173,7 @@ def _extract_reply(before: str, after: str) -> str:
         for i, line in enumerate(after_lines):
             if last_before in line:
                 cut = i + 1
+                break  # 用第一个匹配，避免把回复内容截掉
         new_lines = after_lines[cut:]
     else:
         new_lines = after_lines
