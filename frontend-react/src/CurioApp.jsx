@@ -112,6 +112,16 @@ function normalizeItem(row) {
   };
 }
 
+function sanitizeArtifactHtml(html) {
+  const source = String(html || "");
+  if (!source) return source;
+  return source
+    .replace(/^\s*```(?:html)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .replace(/<!\[CDATA\[/g, "")
+    .replace(/\]\]>/g, "");
+}
+
 function WaxSeal({ agent, size = 28 }) {
   const a = AGENTS[agent] || AGENTS.azheng;
   return (
@@ -204,20 +214,43 @@ function CurioCard({ item, onOpen }) {
 }
 
 function PreviewModal({ item, onClose, onTogglePin, onToggleSurprise }) {
+  const [r2PreviewUrl, setR2PreviewUrl] = useState("");
+  const isR2 = item?.storage_mode === "r2";
+  useEffect(() => {
+    let alive = true;
+    let blobUrl = "";
+    async function loadR2Preview() {
+      setR2PreviewUrl("");
+      if (!isR2 || !item?.srcUrl) return;
+      try {
+        const response = await fetch(item.srcUrl);
+        if (!response.ok) throw new Error(String(response.status));
+        const text = await response.text();
+        blobUrl = URL.createObjectURL(new Blob([sanitizeArtifactHtml(text)], { type: "text/html;charset=utf-8" }));
+        if (alive) setR2PreviewUrl(blobUrl);
+      } catch {
+        if (alive) setR2PreviewUrl(item.srcUrl);
+      }
+    }
+    loadR2Preview();
+    return () => {
+      alive = false;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [isR2, item?.id, item?.srcUrl]);
   if (!item) return null;
   const agent = AGENTS[item.agent_id] || AGENTS.azheng;
-  const isR2 = item.storage_mode === "r2";
-  const srcdoc = item.srcdoc || `<!doctype html><meta charset=utf-8><body style="font-family:serif;padding:24px;color:#2B2420;background:#FBF7F2">正在打开 R2 artifact...</body>`;
+  const srcdoc = sanitizeArtifactHtml(item.srcdoc) || `<!doctype html><meta charset=utf-8><body style="font-family:serif;padding:24px;color:#2B2420;background:#FBF7F2">正在打开 R2 artifact...</body>`;
   const openPreview = () => {
     if (isR2 && item.srcUrl) {
-      window.open(item.srcUrl, "_blank", "noopener,noreferrer");
+      window.open(r2PreviewUrl || item.srcUrl, "_blank", "noopener,noreferrer");
       return;
     }
     window.open(`data:text/html;charset=utf-8,${encodeURIComponent(srcdoc)}`, "_blank");
   };
   return (
     <div style={{ position: "absolute", inset: 0, zIndex: 100, background: "rgba(40,30,20,.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
-      <div onClick={(event) => event.stopPropagation()} style={{ width: "100%", maxHeight: "92%", background: TOKENS.cream, borderRadius: 8, overflow: "hidden", boxShadow: "0 30px 60px rgba(40,30,20,.4)", display: "flex", flexDirection: "column", position: "relative" }}>
+      <div onClick={(event) => event.stopPropagation()} style={{ width: "100%", height: "92%", maxHeight: 760, background: TOKENS.cream, borderRadius: 8, overflow: "hidden", boxShadow: "0 30px 60px rgba(40,30,20,.4)", display: "flex", flexDirection: "column", position: "relative" }}>
         <div style={{ padding: "12px 14px 10px", display: "flex", alignItems: "center", gap: 10, borderBottom: `0.5px solid ${TOKENS.rule}`, background: TOKENS.paperDeep }}>
           <WaxSeal agent={item.agent_id} size={26} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -227,8 +260,8 @@ function PreviewModal({ item, onClose, onTogglePin, onToggleSurprise }) {
           <button style={iconBtn} title="全屏" onClick={openPreview}>⤢</button>
           <button onClick={onClose} style={iconBtn} title="关闭">×</button>
         </div>
-        <div style={{ padding: 10, background: TOKENS.paperDeep, display: "flex" }}>
-          <iframe sandbox="allow-scripts allow-forms allow-popups" src={isR2 ? item.srcUrl : undefined} srcDoc={isR2 ? undefined : srcdoc} style={{ width: "100%", height: 460, border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 4px 14px rgba(40,30,20,.12)", display: "block" }} />
+        <div style={{ padding: 10, background: TOKENS.paperDeep, display: "flex", flex: 1, minHeight: 0 }}>
+          <iframe sandbox="allow-scripts allow-forms allow-popups" src={isR2 ? (r2PreviewUrl || item.srcUrl) : undefined} srcDoc={isR2 ? undefined : srcdoc} style={{ width: "100%", height: "100%", border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 4px 14px rgba(40,30,20,.12)", display: "block" }} />
         </div>
         <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 8, borderTop: `0.5px solid ${TOKENS.rule}`, background: TOKENS.cream }}>
           <button type="button" style={pillBtn(item.is_pinned ? TOKENS.stamp : null)} onClick={() => onTogglePin(item)}>{item.is_pinned ? "★ 已置顶" : "☆ 置顶"}</button>
