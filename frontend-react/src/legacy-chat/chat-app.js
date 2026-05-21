@@ -4407,6 +4407,11 @@
             return;
         }
 
+        if (action === 'toggle-cc-mode') {
+            toggleCurrentCCMode(target.dataset.contactId);
+            return;
+        }
+
         if (action === 'quick-action') {
             const actionId = target.dataset.id;
             const input = root()?.querySelector('.chat-input');
