@@ -354,6 +354,16 @@
         return cleaned;
     }
 
+    function appendThinkingChunk(existingThinking = '', chunk = '') {
+        const prev = coerceSseText(existingThinking);
+        const next = coerceSseText(chunk);
+        if (!next) return prev;
+        if (!prev) return next;
+        if (/[\s\n]$/.test(prev) || /^[\s\n，。！？、；：,.!?;:）】》]/.test(next)) return prev + next;
+        if (/[\x00-\x7F]$/.test(prev) || /^[\x00-\x7F]/.test(next)) return `${prev} ${next}`;
+        return prev + next;
+    }
+
     function nextFrame() {
         return new Promise((resolve) => requestAnimationFrame(resolve));
     }
@@ -471,8 +481,10 @@
     function splitAssistantReply(text) {
         const raw = String(text || '').replace(/\r\n/g, '\n').trim();
         if (!raw) return [];
-        // 修复：原版会按照每句话或单行换行强制切碎气泡，导致排版大范围破裂。改为只根据双换行（段落）切分，或者干脆不切
-        const primary = raw
+        const normalized = raw
+            .replace(/[ \t]+\n/g, '\n')
+            .replace(/\n{3,}/g, '\n\n');
+        const paragraphs = normalized
             .split(/\n{2,}/)
             .map((part) => String(part || '').trim())
             .filter(Boolean);
@@ -480,31 +492,39 @@
         const pushChunk = (part) => {
             const cleaned = String(part || '').trim();
             if (!cleaned) return;
-            if (chunks.length && cleaned.length <= 3) {
+            if (chunks.length && cleaned.length <= 4) {
                 chunks[chunks.length - 1] += cleaned;
                 return;
             }
             chunks.push(cleaned);
         };
-        primary.forEach((part) => {
-            if (part.length <= 34) {
+        const splitLongParagraph = (part) => {
+            const sentences = String(part || '')
+                .split(/(?<=[。！？!?…])\s*/u)
+                .map((item) => item.trim())
+                .filter(Boolean);
+            if (sentences.length <= 1) {
                 pushChunk(part);
                 return;
             }
-            let rest = part;
-            while (rest.length > 34) {
-                let cut = 34;
-                const soft = rest.slice(0, 34).search(/[，、；,; ]/);
-                if (soft >= 18) cut = soft + 1;
-                const segment = rest.slice(0, cut).trim();
-                if (segment.length >= 6) {
-                    pushChunk(segment);
-                    rest = rest.slice(cut).trim();
+            let bucket = '';
+            sentences.forEach((sentence) => {
+                const next = bucket ? `${bucket}${sentence}` : sentence;
+                if (bucket && next.length > 90) {
+                    pushChunk(bucket);
+                    bucket = sentence;
                 } else {
-                    break;
+                    bucket = next;
                 }
+            });
+            pushChunk(bucket);
+        };
+        paragraphs.forEach((part) => {
+            if (part.length <= 110) {
+                pushChunk(part);
+            } else {
+                splitLongParagraph(part);
             }
-            pushChunk(rest);
         });
         return chunks.filter(Boolean);
     }
@@ -1565,6 +1585,35 @@
         return String(value || '').trim().replace(/^@+/, '').toLowerCase();
     }
 
+    const CODEX_TOGGLE_CONTACT_IDS = new Set(['zhansi']);
+    const CC_TOGGLE_CONTACT_IDS = new Set(['azheng']);
+
+    function canToggleCodexForContact(contact = {}) {
+        const ids = [
+            contact?.id,
+            contact?.agent_id,
+            contact?.handle,
+        ].map(normalizeNewContactAgentId).filter(Boolean);
+        return ids.some((id) => CODEX_TOGGLE_CONTACT_IDS.has(id));
+    }
+
+    function isCodexEnabledForContact(contact = {}) {
+        return canToggleCodexForContact(contact) && !!contact?.settings?.codexEnabled;
+    }
+
+    function canToggleCCForContact(contact = {}) {
+        const ids = [
+            contact?.id,
+            contact?.agent_id,
+            contact?.handle,
+        ].map(normalizeNewContactAgentId).filter(Boolean);
+        return ids.some((id) => CC_TOGGLE_CONTACT_IDS.has(id));
+    }
+
+    function isCCEnabledForContact(contact = {}) {
+        return canToggleCCForContact(contact) && !!contact?.settings?.ccEnabled;
+    }
+
     function contactDefaults(contact = {}) {
         const id = String(contact.id || '').trim() || `c${Date.now()}`;
         const chatTheme = getContactChatThemeKey(contact);
@@ -1599,6 +1648,8 @@
                 proactiveEnabled: false,
                 proactiveFrequency: 30,
                 memoryEnabled: true,
+                codexEnabled: false,
+                ccEnabled: false,
                 ...(contact.settings || {}),
             },
         };
@@ -1839,6 +1890,10 @@
         const c = byId(state.currentContactId) || state.contacts[0];
         const quoteMoment = state.quoteMomentId ? getMoment(state.quoteMomentId) : null;
         const quoteMessage = state.quoteMessageId ? c.messages.find((item) => item.id === state.quoteMessageId) : null;
+        const codexAllowed = canToggleCodexForContact(c);
+        const codexActive = isCodexEnabledForContact(c);
+        const ccAllowed = canToggleCCForContact(c);
+        const ccActive = isCCEnabledForContact(c);
         return `
       <section class="room-page room-theme-${c.theme}">
         <div class="messages-panel">
@@ -1851,6 +1906,8 @@
             <div class="composer-input-wrap">
               <input class="chat-input" placeholder="\u8f93\u5165\u6d88\u606f..." value="" />
             </div>
+            ${codexAllowed ? `<button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}" onclick="window.__yuiToggleCodex?.(this,event)" onpointerdown="window.__yuiToggleCodex?.(this,event)">${codexActive ? 'Cx ON' : 'Cx'}</button>` : ''}
+            ${ccAllowed ? `<button class="codex-toggle cc-toggle ${ccActive ? 'active' : ''}" data-action="toggle-cc-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${ccActive}" aria-label="${ccActive ? '关闭 Claude Code' : '启用 Claude Code'}" onclick="window.__yuiToggleCC?.(this,event)" onpointerdown="window.__yuiToggleCC?.(this,event)">${ccActive ? 'CC ON' : 'CC'}</button>` : ''}
             <button class="icon-btn icon-circle soft-mini" data-action="expand-actions" aria-label="\u9644\u4ef6">${icon('attach')}</button>
             ${state.streamingAbortController
                 ? `<button class="icon-btn send-round send-stop-active" data-action="fake-send" aria-label="\u505c\u6b62">${icon('stop')}</button>`
@@ -1864,9 +1921,13 @@
 
     function renderMessage(message, contact) {
         const roleClass = message.role === 'user' ? 'from-user' : 'from-ai';
+        const isCodexSource = String(message.source || message.provider || '').toLowerCase() === 'codex';
         const allowReasoning = !!contact?.settings?.reasoning_visibility;
         const avatar = message.role === 'ai'
             ? `<img class="bubble-avatar" src="${contact.avatar}" alt="${escapeHtml(contact.name)}" />`
+            : '';
+        const sourceBadge = message.role === 'ai' && isCodexSource
+            ? '<span class="message-source-badge codex">Codex</span>'
             : '';
         const cotButton = message.role === 'ai' && allowReasoning && message.thinking && !message.typing
             ? `<button class="bubble-cot-btn" data-action="toggle-thinking" data-id="${message.id}" aria-label="\u5c55\u5f00\u72ec\u767d">${icon('bubbleHeart')}</button>`
@@ -1892,6 +1953,7 @@
             ${message.role === 'user' ? `<time class="bubble-time">${escapeHtml(message.time)}</time>` : ''}
             <div class="message-bubble ${roleClass}${bubbleClassExtra}" ${message.role === 'ai' ? `data-msg-id="${message.id}" data-action="toggle-message-tools" data-id="${message.id}"` : ''}>
               ${cotButton}
+              ${sourceBadge}
               ${(message.typing || (message.streaming && !message.text))
                   ? `<div class="typing-dots"><span></span><span></span><span></span></div>`
                   : `<div class="message-text">${escapeHtml(message.text)}</div>`}
@@ -2254,17 +2316,17 @@
         const form = state.rpRoomForm || {};
         return `
       <div class="topic-confirm-overlay" data-action="close-rp-room-dialog">
-        <section class="topic-confirm-card glass-frost" data-rp-room-dialog="card" role="dialog" aria-modal="true" aria-label="${isEdit ? '编辑房间' : '新建房间'}" style="max-width:440px;">
+        <section class="topic-confirm-card glass-frost rp-room-dialog-card" data-rp-room-dialog="card" role="dialog" aria-modal="true" aria-label="${isEdit ? '编辑房间' : '新建房间'}">
           <h4>${isEdit ? '幕间' : '幕间'}</h4>
-          <div style="display:grid;gap:10px;text-align:left;">
+          <div class="rp-room-dialog-fields">
               <input id="rp-room-name" class="ai-input" placeholder="剧本" value="${escapeHtml(form.name || '')}" />
               <textarea id="rp-room-world" class="ai-textarea persona-textarea" rows="3" placeholder="世界观">${escapeHtml(form.world_setting || '')}</textarea>
               <input id="rp-room-user-role" class="ai-input" placeholder="你的角色" value="${escapeHtml(form.user_role || '')}" />
               <input id="rp-room-ai-role" class="ai-input" placeholder="AI 角色" value="${escapeHtml(form.ai_role || '')}" />
           </div>
-          <div class="topic-confirm-actions">
-            <button class="ghost-action" data-action="close-rp-room-dialog">取消</button>
-            <button class="bottom-tab active" data-action="save-rp-room">${isEdit ? '入梦' : '入梦'}</button>
+          <div class="topic-confirm-actions rp-room-dialog-actions">
+            <button class="ghost-action rp-room-dialog-btn" type="button" data-action="close-rp-room-dialog">取消</button>
+            <button class="bottom-tab active rp-room-dialog-btn" type="button" data-action="save-rp-room">${isEdit ? '入梦' : '入梦'}</button>
           </div>
         </section>
       </div>
@@ -2454,7 +2516,14 @@
         ${state.currentSettingsTab === 'basic' ? `
           <div class="settings-group glass-frost ai-panel">
             <h3>\u8054\u7cfb\u4eba\u8d44\u6599</h3>
-            ${navRow('\u5934\u50cf', '\u70b9\u51fb\u66f4\u6362\u5934\u50cf', 'open-contact-avatar')}
+            <button class="setting-row nav-row contact-avatar-row" data-action="open-contact-avatar">
+              <img class="contact-settings-avatar-preview" src="${escapeHtml(c.avatar)}" alt="${escapeHtml(c.name)}" />
+              <div class="setting-copy">
+                <strong>\u5934\u50cf</strong>
+                <p>\u70b9\u51fb\u66f4\u6362\u5934\u50cf</p>
+              </div>
+              <span class="row-chevron">${icon('chevron')}</span>
+            </button>
             ${navRow('\u6635\u79f0', c.name, 'open-contact-name')}
             ${navRow('\u7b80\u4ecb', c.bio, 'open-contact-bio')}
             <input id="contact-avatar-file" class="moment-image-input" type="file" accept="image/*" />
@@ -3421,12 +3490,22 @@
                 state.streamingAbortController.abort();
                 state.streamingAbortController = null;
                 render(); // immediately revert button without waiting for catch block
+            } else if (state.currentView !== 'rpRoom' && isCCEnabledForContact(byId(state.currentContactId))) {
+                doSendCCMessage();
+            } else if (state.currentView !== 'rpRoom' && isCodexEnabledForContact(byId(state.currentContactId))) {
+                doSendCodexMessage();
             } else {
                 doSendMessage();
             }
         });
         const attachBtn = mount.querySelector('.soft-mini');
         if (attachBtn) attachBtn.addEventListener('click', (e) => { e.stopPropagation(); state.showAttach = !state.showAttach; render(); });
+        const codexBtn = mount.querySelector('.codex-toggle');
+        if (codexBtn) codexBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleCurrentCodexMode();
+        });
         const contactRows = mount.querySelectorAll('.chat-list-item[data-contact-id]');
         contactRows.forEach((row) => {
             row.addEventListener('click', (e) => {
@@ -3442,7 +3521,13 @@
             chatInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    doSendMessage();
+                    if (state.currentView !== 'rpRoom' && isCCEnabledForContact(byId(state.currentContactId))) {
+                        doSendCCMessage();
+                    } else if (state.currentView !== 'rpRoom' && isCodexEnabledForContact(byId(state.currentContactId))) {
+                        doSendCodexMessage();
+                    } else {
+                        doSendMessage();
+                    }
                 }
             });
             if (['room', 'rpRoom'].includes(state.currentView) && !isLikelyTouchDevice()) chatInput.focus();
@@ -3456,6 +3541,40 @@
             });
         }
     }
+
+    function toggleCurrentCodexMode(contactId = state.currentContactId) {
+        const c = byId(contactId) || byId(state.currentContactId);
+        if (!c) return;
+        state.currentContactId = c.id;
+        if (!canToggleCodexForContact(c)) {
+            c.settings = { ...(c.settings || {}), codexEnabled: false };
+            state.toast = '只有阿湛能切 Codex';
+            render();
+            window.setTimeout(() => { state.toast = ''; render(); }, 1200);
+            return;
+        }
+        c.settings = { ...(c.settings || {}), codexEnabled: !c.settings?.codexEnabled };
+        state.toast = c.settings.codexEnabled ? 'Codex 已接管这个窗口' : 'Codex 已关闭';
+        queueLocalSyncIfChanged(120);
+        render();
+        window.setTimeout(() => { state.toast = ''; render(); }, 1200);
+    }
+
+    window.__yuiToggleCodex = (target, event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        event?.stopImmediatePropagation?.();
+        const contactId = target?.dataset?.contactId || state.currentContactId;
+        toggleCurrentCodexMode(contactId);
+    };
+
+    window.__yuiToggleCC = (target, event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        event?.stopImmediatePropagation?.();
+        const contactId = target?.dataset?.contactId || state.currentContactId;
+        toggleCurrentCCMode(contactId);
+    };
 
     async function handleClick(event) {
         const target = event.target.closest('[data-action]');
@@ -3664,13 +3783,27 @@
         }
 
         if (action === 'toggle-message-tools') {
+            event.preventDefault();
+            event.stopPropagation();
             if (state.suppressBubbleToggle) {
                 state.suppressBubbleToggle = false;
                 return;
             }
             const msgId = target.dataset.id;
-            state.activeBubbleToolsId = state.activeBubbleToolsId === msgId ? null : msgId;
-            render();
+            const nextId = state.activeBubbleToolsId === msgId ? null : msgId;
+            state.activeBubbleToolsId = nextId;
+            const mount = root();
+            if (mount) {
+                mount.querySelectorAll('.bubble-bottom-tools.open').forEach((el) => {
+                    el.classList.remove('open');
+                });
+                if (nextId) {
+                    mount
+                        .querySelector(`.message-row[data-msg-id="${CSS.escape(nextId)}"] .bubble-bottom-tools`)
+                        ?.classList.add('open');
+                }
+            }
+            return;
         }
 
         if (action === 'go-chat-with-quote') {
@@ -4269,6 +4402,11 @@
             return;
         }
 
+        if (action === 'toggle-codex-mode') {
+            toggleCurrentCodexMode(target.dataset.contactId);
+            return;
+        }
+
         if (action === 'quick-action') {
             const actionId = target.dataset.id;
             const input = root()?.querySelector('.chat-input');
@@ -4295,8 +4433,18 @@
         }
 
         if (action === 'fake-send') {
+            if (state.streamingAbortController) {
+                state.streamingAbortController.abort();
+                state.streamingAbortController = null;
+                render();
+                return;
+            }
             if (state.currentView === 'rpRoom') {
                 doSendRpMessage();
+            } else if (isCCEnabledForContact(byId(state.currentContactId))) {
+                doSendCCMessage();
+            } else if (isCodexEnabledForContact(byId(state.currentContactId))) {
+                doSendCodexMessage();
             } else {
                 doSendMessage();
             }
@@ -4483,6 +4631,8 @@
             created_at: createdAt,
             time,
             ...(message.model ? { model: message.model } : {}),
+            ...(message.source ? { source: message.source } : {}),
+            ...(message.provider ? { provider: message.provider } : {}),
             ...(message.attachments ? { attachments: message.attachments } : {}),
             ...(message.thinking ? { thinking: message.thinking } : {}),
             ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}),
@@ -4606,6 +4756,7 @@
         const role = String(message.role || '').toLowerCase() === 'user' ? 'user' : 'ai';
         const createdAt = String(message.created_at || '');
         const content = String(message.content || '');
+        const model = String(message.model || '');
         return normalizeStoredMessage({
             id: message.id || `${contactId}|${role}|${createdAt}|${content}`,
             session_id: message.session_id || '',
@@ -4615,7 +4766,8 @@
             text: content,
             created_at: createdAt,
             time: createdAt ? formatDisplayTime(createdAt, { fallback: '' }) : '',
-            model: message.model || '',
+            model,
+            ...(model.toLowerCase() === 'codex' ? { source: 'codex', provider: 'codex' } : {}),
         });
     }
 
@@ -5360,7 +5512,9 @@
                     let chunk = parsed.text;
                     const normalizedThinkingChunk = normalizeThinkingChunk(parsed.thinking, fullText, fullThinking);
                     const thinkingChunk = allowReasoning ? normalizedThinkingChunk : '';
-                    if (thinkingChunk && fullThinking.length < THINKING_MAX_ACCUMULATE) fullThinking += thinkingChunk;
+                    if (thinkingChunk && fullThinking.length < THINKING_MAX_ACCUMULATE) {
+                        fullThinking = appendThinkingChunk(fullThinking, thinkingChunk);
+                    }
                     if (chunk) fullText += chunk;
                     const idx = aiIdx();
                     if (idx !== -1) {
@@ -5414,6 +5568,250 @@
             state.streamingAbortController = null;
             if (state.currentRpRoomId) state.rpMessages[state.currentRpRoomId] = state.currentRpMessages.map(normalizeStoredMessage);
             queueLocalSyncIfChanged(120);
+            render();
+        }
+    }
+
+    function toggleCurrentCCMode(contactId = state.currentContactId) {
+        const c = byId(contactId) || byId(state.currentContactId);
+        if (!c) return;
+        state.currentContactId = c.id;
+        if (!canToggleCCForContact(c)) {
+            c.settings = { ...(c.settings || {}), ccEnabled: false };
+            state.toast = '只有阿筝能切 Claude Code';
+            render();
+            window.setTimeout(() => { state.toast = ''; render(); }, 1200);
+            return;
+        }
+        c.settings = { ...(c.settings || {}), ccEnabled: !c.settings?.ccEnabled };
+        state.toast = c.settings.ccEnabled ? 'Claude Code 已接管这个窗口' : 'Claude Code 已关闭';
+        queueLocalSyncIfChanged(120);
+        render();
+        window.setTimeout(() => { state.toast = ''; render(); }, 1200);
+    }
+
+    async function doSendCCMessage() {
+        const input = root()?.querySelector('.chat-input');
+        const text = input?.value?.trim();
+        if (!text) return;
+        const c = byId(state.currentContactId);
+        if (!c) return;
+        cancelAssistantPlayback();
+
+        const msgId = 'u' + Date.now();
+        c.messages.push({ id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
+        c.lastMessage = text;
+        c.lastTime = '刚刚';
+        input.value = '';
+
+        const aiId = 'ai_' + Date.now();
+        c.messages.push({
+            id: aiId,
+            role: 'ai',
+            text: '',
+            content: '',
+            time: '',
+            created_at: new Date().toISOString(),
+            typing: true,
+            source: 'claude-code',
+        });
+
+        syncConversationsFromContacts();
+        queueLocalSyncIfChanged(120);
+        render();
+        scrollToBottom();
+
+        const abortCtrl = new AbortController();
+        state.streamingAbortController = abortCtrl;
+        render();
+
+        try {
+            const resp = await fetch(`${API_BASE}/api/claude-code/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_key: `yui:${c.id}`,
+                    agent_id: c.id,
+                    content: text,
+                    reset: false,
+                }),
+                signal: abortCtrl.signal,
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+
+            const reply = String(data.reply || '').trim() || '…';
+            const persistedUser = data.user_message && typeof data.user_message === 'object'
+                ? murmurHistoryMessageToStored(data.user_message, c.id)
+                : null;
+            const persistedAssistant = data.assistant_message && typeof data.assistant_message === 'object'
+                ? {
+                    ...murmurHistoryMessageToStored(data.assistant_message, c.id),
+                    source: 'claude-code',
+                    provider: 'claude-code',
+                }
+                : null;
+            const userIdx = c.messages.findIndex((m) => m.id === msgId);
+            if (userIdx !== -1 && persistedUser) {
+                c.messages[userIdx] = contactMessageFromStored(persistedUser);
+            }
+            const idx = c.messages.findIndex((m) => m.id === aiId);
+            if (idx !== -1) {
+                c.messages[idx] = {
+                    ...(persistedAssistant ? contactMessageFromStored(persistedAssistant) : {}),
+                    id: persistedAssistant?.id || aiId,
+                    role: 'ai',
+                    text: reply,
+                    content: reply,
+                    source: 'claude-code',
+                    provider: 'claude-code',
+                    time: persistedAssistant?.time || nowTimeStr(),
+                    created_at: persistedAssistant?.created_at || new Date().toISOString(),
+                    typing: false,
+                };
+            }
+            c.lastMessage = reply;
+            c.lastTime = nowTimeStr();
+            syncConversationsFromContacts();
+            queueLocalSyncIfChanged(120);
+            render();
+            scrollToBottom();
+        } catch (err) {
+            const wasAborted = err.name === 'AbortError';
+            if (!wasAborted) console.error('[cc chat] error:', err);
+            const idx = c.messages.findIndex((m) => m.id === aiId);
+            if (idx !== -1) {
+                const textOut = wasAborted ? '…' : `Claude Code 连接失败：${err.message}`;
+                c.messages[idx] = {
+                    id: aiId,
+                    role: 'ai',
+                    text: textOut,
+                    content: textOut,
+                    source: 'claude-code',
+                    provider: 'claude-code',
+                    time: nowTimeStr(),
+                    created_at: new Date().toISOString(),
+                    typing: false,
+                };
+            }
+            syncConversationsFromContacts();
+            queueLocalSyncIfChanged(120);
+            render();
+        } finally {
+            state.streamingAbortController = null;
+            render();
+        }
+    }
+
+    async function doSendCodexMessage() {
+        const input = root()?.querySelector('.chat-input');
+        const text = input?.value?.trim();
+        if (!text) return;
+        const c = byId(state.currentContactId);
+        if (!c) return;
+        cancelAssistantPlayback();
+
+        const msgId = 'u' + Date.now();
+        c.messages.push({ id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
+        c.lastMessage = text;
+        c.lastTime = '\u521a\u521a';
+        input.value = '';
+
+        const aiId = 'ai_' + Date.now();
+        c.messages.push({
+            id: aiId,
+            role: 'ai',
+            text: '',
+            content: '',
+            time: '',
+            created_at: new Date().toISOString(),
+            typing: true,
+            source: 'codex',
+        });
+
+        syncConversationsFromContacts();
+        queueLocalSyncIfChanged(120);
+        render();
+        scrollToBottom();
+
+        const abortCtrl = new AbortController();
+        state.streamingAbortController = abortCtrl;
+        render();
+
+        try {
+            const resp = await fetch(`${API_BASE}/api/codex/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_key: `yui:${c.id}`,
+                    agent_id: c.id,
+                    content: text,
+                    reset: false,
+                }),
+                signal: abortCtrl.signal,
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+
+            const reply = String(data.reply || '').trim() || '\u2026';
+            const persistedUser = data.user_message && typeof data.user_message === 'object'
+                ? murmurHistoryMessageToStored(data.user_message, c.id)
+                : null;
+            const persistedAssistant = data.assistant_message && typeof data.assistant_message === 'object'
+                ? {
+                    ...murmurHistoryMessageToStored(data.assistant_message, c.id),
+                    source: 'codex',
+                    provider: 'codex',
+                }
+                : null;
+            const userIdx = c.messages.findIndex((m) => m.id === msgId);
+            if (userIdx !== -1 && persistedUser) {
+                c.messages[userIdx] = contactMessageFromStored(persistedUser);
+            }
+            const idx = c.messages.findIndex((m) => m.id === aiId);
+            if (idx !== -1) {
+                c.messages[idx] = {
+                    ...(persistedAssistant ? contactMessageFromStored(persistedAssistant) : {}),
+                    id: persistedAssistant?.id || aiId,
+                    role: 'ai',
+                    text: reply,
+                    content: reply,
+                    source: 'codex',
+                    provider: 'codex',
+                    time: persistedAssistant?.time || nowTimeStr(),
+                    created_at: persistedAssistant?.created_at || new Date().toISOString(),
+                    typing: false,
+                };
+            }
+            c.lastMessage = reply;
+            c.lastTime = nowTimeStr();
+            syncConversationsFromContacts();
+            queueLocalSyncIfChanged(120);
+            render();
+            scrollToBottom();
+        } catch (err) {
+            const wasAborted = err.name === 'AbortError';
+            if (!wasAborted) console.error('[codex chat] error:', err);
+            const idx = c.messages.findIndex((m) => m.id === aiId);
+            if (idx !== -1) {
+                const textOut = wasAborted ? '\u2026' : `Codex \u8fde\u63a5\u5931\u8d25\uff1a${err.message}`;
+                c.messages[idx] = {
+                    id: aiId,
+                    role: 'ai',
+                    text: textOut,
+                    content: textOut,
+                    source: 'codex',
+                    provider: 'codex',
+                    time: nowTimeStr(),
+                    created_at: new Date().toISOString(),
+                    typing: false,
+                };
+            }
+            syncConversationsFromContacts();
+            queueLocalSyncIfChanged(120);
+            render();
+        } finally {
+            state.streamingAbortController = null;
             render();
         }
     }
@@ -5556,7 +5954,7 @@
                     if (thinkingChunk) {
                         // Hard cap: stop accumulating beyond limit (discard excess chunks)
                         if (fullThinking.length < THINKING_MAX_ACCUMULATE) {
-                            fullThinking += thinkingChunk;
+                            fullThinking = appendThinkingChunk(fullThinking, thinkingChunk);
                         }
                         _thinkingLastChunk = Date.now();
                         const idx = aiIdx();
@@ -5797,7 +6195,7 @@
                     const thinkingChunk = allowReasoning ? normalizedThinkingChunk : '';
                     if (thinkingChunk) {
                         if (fullThinking.length < THINKING_MAX_ACCUMULATE) {
-                            fullThinking += thinkingChunk;
+                            fullThinking = appendThinkingChunk(fullThinking, thinkingChunk);
                         }
                         _rerollThinkingLastChunk = Date.now();
                         const curIdx = c.messages.findIndex(m => m.id === rerollId);
@@ -5939,12 +6337,23 @@
     // AI Settings Subpages v2
     const AI_PROVIDER_PRESETS = [
         { id: 'openai', name: 'OpenAI', enabled: true, baseUrl: 'https://api.openai.com/v1', apiPath: '', apiKey: '', models: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-4.1-mini'], defaultModel: 'gpt-5.4' },
-        { id: 'openrouter', name: 'OpenRouter', enabled: true, baseUrl: 'https://openrouter.ai/api/v1', apiPath: '', apiKey: '', models: ['openai/gpt-5', 'anthropic/claude-3.7-sonnet'], defaultModel: 'openai/gpt-5' },
+        { id: 'openrouter', name: 'OpenRouter', enabled: true, baseUrl: 'https://openrouter.ai/api/v1', apiPath: '', apiKey: '', models: ['openai/gpt-5', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.1', 'anthropic/claude-3.7-sonnet'], defaultModel: 'openai/gpt-5' },
         { id: 'gemini', name: 'Gemini', enabled: true, baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', apiPath: '', apiKey: '', models: ['gemini-2.5-pro', 'gemini-2.5-flash'], defaultModel: 'gemini-2.5-pro' },
         { id: 'deepseek', name: 'DeepSeek', enabled: false, baseUrl: 'https://api.deepseek.com/v1', apiPath: '', apiKey: '', models: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat' },
         { id: 'qwen', name: '\u963f\u91cc\u4e91\u5343\u95ee', enabled: false, baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiPath: '', apiKey: '', models: ['qwen-max', 'qwen-plus', 'qwen-turbo'], defaultModel: 'qwen-max' },
         { id: 'zhipu', name: '\u667a\u8c31', enabled: false, baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiPath: '', apiKey: '', models: ['glm-4.5', 'glm-4-air'], defaultModel: 'glm-4.5' },
+        { id: 'siliconflow', name: 'SiliconFlow', enabled: false, baseUrl: 'https://api.siliconflow.cn/v1', apiPath: '', apiKey: '', models: ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1', 'Qwen/Qwen2.5-72B-Instruct'], defaultModel: 'deepseek-ai/DeepSeek-V3' },
     ];
+    const PROVIDER_MODEL_FALLBACKS = {
+        openai: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-4.1', 'gpt-4.1-mini', 'o4-mini'],
+        openrouter: ['openai/gpt-5', 'openai/gpt-4.1', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.1', 'anthropic/claude-3.7-sonnet', 'anthropic/claude-3.5-sonnet', 'anthropic/claude-3.5-haiku', 'google/gemini-2.5-pro', 'google/gemini-2.5-flash', 'deepseek/deepseek-chat', 'deepseek/deepseek-r1', 'qwen/qwen-max'],
+        aggregate: ['openai/gpt-5', 'gpt-5', 'gpt-4.1', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-opus-4.1', 'anthropic/claude-3.7-sonnet', 'claude-sonnet-4-5', 'claude-opus-4-1', 'claude-3-7-sonnet-latest', 'google/gemini-2.5-pro', 'google/gemini-2.5-flash', 'deepseek/deepseek-chat', 'qwen/qwen-max'],
+        anthropic: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-opus-4-1', 'claude-sonnet-4-0', 'claude-3-7-sonnet-latest', 'claude-3-5-haiku-latest'],
+        gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'],
+        deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+        zhipu: ['glm-4.5', 'glm-4-air', 'glm-4-flash'],
+        siliconflow: ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1', 'Qwen/Qwen2.5-72B-Instruct', 'Qwen/Qwen2.5-32B-Instruct', 'THUDM/GLM-4-9B-0414'],
+    };
     const AI_SUB_VIEWS = new Set(['aiInterface', 'defaultModels', 'modelSlot', 'providerCatalog', 'providerEditor', 'promptEditor', 'themeSettings', 'accountSettings', 'memoryService', 'backendSync', 'exportSettings', 'mcpLibrary']);
     const __origShowBottomNav = showBottomNav;
     const __origRenderHeader = renderHeader;
@@ -5963,6 +6372,8 @@
     state.providerEditorDraft = state.providerEditorDraft || null;
     state.providerModelMenuOpen = !!state.providerModelMenuOpen;
     state.providerModelSyncingId = state.providerModelSyncingId || '';
+    state.providerModelSyncStatus = (state.providerModelSyncStatus && typeof state.providerModelSyncStatus === 'object') ? state.providerModelSyncStatus : {};
+    state.providerKeyVisible = !!state.providerKeyVisible;
     state.modelSlotMenuOpen = !!state.modelSlotMenuOpen;
     state.providerSearch = state.providerSearch || '';
     state.activePromptSlot = state.activePromptSlot || 'summary';
@@ -6009,13 +6420,11 @@
 
     function sanitizeModelId(value) {
         if (typeof value !== 'string') return '';
-        const text = value.trim();
-        if (!text || text.length > 120) return '';
+        const text = value.trim().replace(/\s+/g, ' ');
+        if (!text || text.length > 180) return '';
         if (/[<>]/.test(text)) return '';
         if (/<\/?[a-z][\s\S]*>/i.test(text) || /<!doctype|<html|<\/div|<\/body/i.test(text)) return '';
         if (/[\u0000-\u001f\u007f]/.test(text)) return '';
-        if (/\s/.test(text)) return '';
-        if (!/^[A-Za-z0-9._:/@+\-]+$/.test(text)) return '';
         return text;
     }
 
@@ -6037,9 +6446,53 @@
         return result;
     }
 
+    function providerKind(provider = {}) {
+        const id = String(provider.id || '').toLowerCase();
+        const name = String(provider.name || '').toLowerCase();
+        const base = String(provider.baseUrl || provider.base_url || '').toLowerCase();
+        if (id.includes('openrouter') || name.includes('openrouter') || base.includes('openrouter.ai')) return 'openrouter';
+        if (id.includes('jiushi') || name.includes('玖时') || base.includes('jiushi.xin')) return 'aggregate';
+        if (id.includes('silicon') || name.includes('silicon') || base.includes('siliconflow')) return 'siliconflow';
+        if (id.includes('deepseek') || name.includes('deepseek') || base.includes('deepseek')) return 'deepseek';
+        if (id.includes('anthropic') || id.includes('claude') || name.includes('anthropic') || name.includes('claude') || base.includes('anthropic.com')) return 'anthropic';
+        if (id.includes('gemini') || name.includes('gemini') || base.includes('generativelanguage')) return 'gemini';
+        if (id.includes('zhipu') || name.includes('智谱') || base.includes('bigmodel')) return 'zhipu';
+        if (id.includes('openai') || name.includes('openai') || base.includes('openai.com')) return 'openai';
+        return id || 'custom';
+    }
+
+    function isLikelyAggregateProvider(provider = {}) {
+        const kind = providerKind(provider);
+        if (kind === 'aggregate' || kind === 'openrouter') return true;
+        if (['openai', 'anthropic', 'gemini', 'deepseek', 'zhipu', 'siliconflow'].includes(kind)) return false;
+        const base = String(provider.baseUrl || provider.base_url || '').toLowerCase();
+        if (!base) return false;
+        return !/(openai\.com|anthropic\.com|generativelanguage|deepseek\.com|bigmodel\.cn|siliconflow\.cn)/.test(base);
+    }
+
+    function fallbackModelsForProvider(provider = {}) {
+        const kind = providerKind(provider);
+        const baseModels = PROVIDER_MODEL_FALLBACKS[kind] || [];
+        const aggregateModels = isLikelyAggregateProvider(provider) ? PROVIDER_MODEL_FALLBACKS.aggregate : [];
+        return normalizeModelIdList([...baseModels, ...aggregateModels]);
+    }
+
+    function maskedApiKey(value = '') {
+        const text = String(value || '').trim();
+        if (!text) return '';
+        const last = text.slice(-4);
+        const prefix = text.startsWith('sk-') ? 'sk-' : '';
+        return `${prefix}\u2022\u2022\u2022\u2022${last}`;
+    }
+
+    function setProviderSyncStatus(providerId, type, message) {
+        const key = String(providerId || state.providerDraftId || 'current');
+        state.providerModelSyncStatus[key] = { type, message };
+    }
+
     function validateModelIdForSave(value, label = '模型') {
         const id = sanitizeModelId(value);
-        if (!id) throw new Error(`${label} 不是合法模型 ID，不能包含 HTML、空格或乱码内容`);
+        if (!id) throw new Error(`${label} 不是合法模型 ID，不能包含 HTML、控制字符或过长内容`);
         return id;
     }
 
@@ -6079,6 +6532,12 @@
             const ai = state.globalSettings.aiSettings;
             ai.defaultModels = ai.defaultModels || {};
             ai.defaultPrompts = ai.defaultPrompts || {};
+            ai.providers = Array.isArray(ai.providers) ? ai.providers : [];
+            const providerMap = new Map(ai.providers.map((item) => [item.id, normalizeProviderRecord(item)]));
+            createDefaultAiSettings().providers.forEach((preset) => {
+                if (!providerMap.has(preset.id)) providerMap.set(preset.id, preset);
+            });
+            ai.providers = [...providerMap.values()];
             if (ai.defaultModels.ocr && !ai.defaultModels.vision) ai.defaultModels.vision = { ...ai.defaultModels.ocr };
             if (ai.defaultPrompts.ocr && !ai.defaultPrompts.vision) ai.defaultPrompts.vision = ai.defaultPrompts.ocr;
             delete ai.defaultModels.ocr;
@@ -6174,12 +6633,16 @@
             defaultModel: '',
         });
         const existingModels = normalizeModelIdList(base.models);
-        const allModels = existingModels.map(parseModelToStructured);
+        const allModels = normalizeModelIdList([
+            ...existingModels,
+            ...fallbackModelsForProvider(base),
+        ]).map(parseModelToStructured);
         return {
             ...base,
             models: existingModels,
             _allModels: allModels,
             _selectedModelIds: new Set(existingModels),
+            _apiKeyDirty: false,
         };
     }
 
@@ -6208,13 +6671,13 @@
         if (/gemini|gemma/.test(n)) return 'Google';
         if (/\bllama\b|meta-llama/.test(n)) return 'Meta';
         if (/mistral|mixtral|codestral/.test(n)) return 'Mistral';
-        if (/\byi[-/_]/.test(n)) return '闆朵竴涓囩墿';
+        if (/\byi[-/_]/.test(n)) return '01.AI';
         if (/moonshot|kimi/.test(n)) return 'Moonshot';
-        if (/hunyuan/.test(n)) return '娣峰厓';
-        if (/ernie|wenxin/.test(n)) return '鏂囧績';
-        if (/doubao/.test(n)) return '璞嗗寘';
-        if (/baichuan/.test(n)) return '鐧惧窛';
-        if (/spark/.test(n)) return '鏄熺伀';
+        if (/hunyuan/.test(n)) return 'Hunyuan';
+        if (/ernie|wenxin/.test(n)) return 'ERNIE';
+        if (/doubao/.test(n)) return 'Doubao';
+        if (/baichuan/.test(n)) return 'Baichuan';
+        if (/spark/.test(n)) return 'Spark';
         if (/internlm/.test(n)) return 'InternLM';
         return 'Other';
     }
@@ -6282,7 +6745,10 @@
         const hint = document.getElementById('provider-default-model-hint');
         if (!menu || !hint) return;
         const query = input?.value || draft.defaultModel || '';
-        const models = Array.isArray(draft.models) ? draft.models : [];
+        const models = normalizeModelIdList([
+            ...(Array.isArray(draft.models) ? draft.models : []),
+            ...(Array.isArray(draft._allModels) ? draft._allModels.map((item) => item?.id || item?.name || '') : []),
+        ]);
         const items = filteredProviderModels(query, models);
         hint.textContent = providerDefaultModelHintText(query, models);
         if (!state.providerModelMenuOpen) {
@@ -6292,12 +6758,13 @@
         }
         menu.classList.add('open');
         menu.innerHTML = items.length
-            ? items.map((item) => `
-          <button class="provider-model-option ${String(item).toLowerCase() === String(query).trim().toLowerCase() ? 'active' : ''}" data-action="pick-provider-default-model" data-model="${escapeHtml(item)}" type="button">
-            ${escapeHtml(item)}
+            ? items.map((item, index) => `
+          <button class="provider-model-option ${String(item).toLowerCase() === String(query).trim().toLowerCase() ? 'active' : ''}" data-action="pick-provider-default-model" data-model-index="${index}" type="button">
+            <span>${escapeHtml(item)}</span>
+            ${String(item).toLowerCase() === String(query).trim().toLowerCase() ? '<em>已选</em>' : ''}
           </button>
         `).join('')
-            : '<div class="provider-model-empty">娌℃湁鍖归厤鍒板凡鍚屾妯″瀷锛屽彲缁х画鎵嬪姩杈撳叆淇濆瓨銆?/div>';
+            : '<div class="provider-model-empty">没有获取到模型，仍可手动输入保存。</div>';
     }
 
     function getSlot(slotId) {
@@ -7071,19 +7538,19 @@
         <div class="settings-group glass-frost ai-panel compact-panel">
           <h3>\u8bed\u97f3\u670d\u52a1\u914d\u7f6e</h3>
           <label class="ai-field-label">Provider</label>
-          <input id="voice-slot-provider-input" class="ai-input" value="${escapeHtml(slot.provider || '')}" placeholder="voice-mcp" />
+          <input id="voice-slot-provider-input" class="ai-input" value="${escapeHtml(slot.provider || '')}" placeholder="voice-mcp" data-plain-input="true" />
           <label class="ai-field-label">Service URL</label>
-          <input id="voice-slot-service-url-input" class="ai-input" value="${escapeHtml(slot.service_url || slot.base_url || '')}" placeholder="https://voice.example.com/speak" />
+          <input id="voice-slot-service-url-input" class="ai-input" value="${escapeHtml(slot.service_url || slot.base_url || '')}" placeholder="https://voice.example.com/speak" data-plain-input="true" />
           <label class="ai-field-label">Voice ID</label>
-          <input id="voice-slot-voice-id-input" class="ai-input" value="${escapeHtml(slot.voice_id || slot.voiceId || '')}" placeholder="default voice_id" />
+          <input id="voice-slot-voice-id-input" class="ai-input" value="${escapeHtml(slot.voice_id || slot.voiceId || '')}" placeholder="default voice_id" data-plain-input="true" />
           <label class="ai-field-label">Speaker</label>
-          <input id="voice-slot-speaker-input" class="ai-input" value="${escapeHtml(slot.speaker || '')}" placeholder="\u53ef\u9009 speaker" />
+          <input id="voice-slot-speaker-input" class="ai-input" value="${escapeHtml(slot.speaker || '')}" placeholder="\u53ef\u9009 speaker" data-plain-input="true" />
           <label class="ai-field-label">Emotion</label>
-          <input id="voice-slot-emotion-input" class="ai-input" value="${escapeHtml(slot.emotion || '')}" placeholder="\u53ef\u9009 emotion" />
+          <input id="voice-slot-emotion-input" class="ai-input" value="${escapeHtml(slot.emotion || '')}" placeholder="\u53ef\u9009 emotion" data-plain-input="true" />
           <label class="ai-field-label">Speed</label>
-          <input id="voice-slot-speed-input" class="ai-input" value="${escapeHtml(slot.speed ?? 1)}" placeholder="1.0" />
+          <input id="voice-slot-speed-input" class="ai-input" value="${escapeHtml(slot.speed ?? 1)}" placeholder="1.0" data-plain-input="true" />
           <label class="ai-field-label">Format</label>
-          <input id="voice-slot-format-input" class="ai-input" value="${escapeHtml(slot.format || '')}" placeholder="audio/mpeg" />
+          <input id="voice-slot-format-input" class="ai-input" value="${escapeHtml(slot.format || '')}" placeholder="audio/mpeg" data-plain-input="true" />
         </div>
       </section>
     `;
@@ -7117,7 +7584,7 @@
           <h3>\u6a21\u578b\u5217\u8868</h3>
           <div class="provider-model-picker">
             <div class="provider-model-input-row">
-              <input id="model-slot-input" class="ai-input provider-model-input" value="${escapeHtml(slot.model || '')}" placeholder="${escapeHtml(models[0] || '输入或选择模型')}" autocomplete="off" />
+              <input id="model-slot-input" class="ai-input provider-model-input" value="${escapeHtml(slot.model || '')}" placeholder="${escapeHtml(models[0] || '输入或选择模型')}" autocomplete="off" data-plain-input="true" />
               <button class="provider-model-toggle" data-action="toggle-model-slot-menu" type="button" aria-label="灞曞紑妯″瀷鍒楄〃">
                 ${icon('chevron')}
               </button>
@@ -7150,7 +7617,7 @@
           <h3>\u6a21\u578b\u5217\u8868</h3>
           <div class="provider-model-picker">
             <div class="provider-model-input-row">
-              <input id="model-slot-input" class="ai-input provider-model-input" value="${escapeHtml(slot.model || '')}" placeholder="${escapeHtml(models[0] || '输入或选择模型')}" autocomplete="off" />
+              <input id="model-slot-input" class="ai-input provider-model-input" value="${escapeHtml(slot.model || '')}" placeholder="${escapeHtml(models[0] || '输入或选择模型')}" autocomplete="off" data-plain-input="true" />
               <button class="provider-model-toggle" data-action="toggle-model-slot-menu" type="button" aria-label="\u5c55\u5f00\u6a21\u578b\u5217\u8868">
                 ${icon('chevron')}
               </button>
@@ -7207,7 +7674,14 @@
     }
 
     function renderProviderModelPool(draft) {
-        const allModels = Array.isArray(draft._allModels) ? draft._allModels : [];
+        const seenModelIds = new Set();
+        const allModels = (Array.isArray(draft._allModels) ? draft._allModels : []).filter((model) => {
+            const id = sanitizeModelId(model?.id || model?.name || '');
+            const key = id.toLowerCase();
+            if (!id || seenModelIds.has(key)) return false;
+            seenModelIds.add(key);
+            return true;
+        });
         const selected = draft._selectedModelIds instanceof Set ? draft._selectedModelIds : new Set(draft._selectedModelIds || []);
         const selTotal = selected.size;
 
@@ -7218,7 +7692,7 @@
             if (!vendorMap[v]) vendorMap[v] = [];
             vendorMap[v].push(m);
         }
-        const vendorOrder = ['OpenAI', 'Anthropic', 'Google', 'DeepSeek', 'Qwen', 'GLM', 'Meta', 'Mistral', 'Moonshot', '璞嗗寘', '鏂囧績', '娣峰厓', '鐧惧窛', '鏄熺伀', '闆朵竴涓囩墿', 'InternLM', 'Other'];
+        const vendorOrder = ['OpenAI', 'Anthropic', 'Google', 'DeepSeek', 'Qwen', 'GLM', 'Meta', 'Mistral', 'Moonshot', 'Doubao', 'ERNIE', 'Hunyuan', 'Baichuan', 'Spark', '01.AI', 'InternLM', 'Other'];
         const sortedVendors = [...new Set([...vendorOrder.filter((v) => vendorMap[v]), ...Object.keys(vendorMap)])];
 
         const allSelectable = allModels.map((m) => m.id);
@@ -7233,13 +7707,14 @@
           <div class="vendor-group-body">
             ${mods.map((m) => {
                 const isSel = selected.has(m.id);
+                const modelIndex = allModels.findIndex((item) => item.id === m.id);
                 return `
               <div class="pool-model-row">
                 <span class="pool-model-name">${escapeHtml(m.name)}</span>
                 <span class="pool-model-caps">${renderModelCapabilityBadges(m)}</span>
                 <button class="pool-model-btn${isSel ? ' selected' : ''}"
                   data-action="${isSel ? 'remove-provider-model' : 'add-provider-model'}"
-                  data-model-id="${escapeHtml(m.id)}" type="button">${isSel ? '\u2212' : '+'}</button>
+                  data-model-index="${modelIndex}" type="button">${isSel ? '\u2212' : '+'}</button>
               </div>`;
             }).join('')}
           </div>` : '';
@@ -7269,7 +7744,7 @@
         ${emptyHint}
         ${vendorHtml}
         <div class="pool-manual-row">
-          <input id="provider-manual-model-input" class="ai-input provider-model-input" placeholder="\u624b\u52a8\u8f93\u5165\u6a21\u578b\u540d" autocomplete="off" />
+          <input id="provider-manual-model-input" class="ai-input provider-model-input" placeholder="\u624b\u52a8\u8f93\u5165\u6a21\u578b\u540d" autocomplete="off" data-plain-input="true" />
           <button class="pool-manual-add-btn" data-action="add-manual-provider-model" type="button">\uff0b</button>
         </div>
       </div>`;
@@ -7281,8 +7756,8 @@
         if (!list.length) {
             return '<div class="model-choice-empty">当前供应商还没有可选模型，请先在“模型供应商”页同步并保存。</div>';
         }
-        return list.map((item) => `
-          <button class="model-choice-item ${selected === item ? 'active' : ''}" data-action="pick-slot-model" data-slot="${slotId}" data-model="${escapeHtml(item)}">
+        return list.map((item, index) => `
+          <button class="model-choice-item ${selected === item ? 'active' : ''}" data-action="pick-slot-model" data-slot="${slotId}" data-model-index="${index}">
             <span class="model-choice-name">${escapeHtml(item)}</span>
             <span class="model-choice-check">${selected === item ? '已选' : ''}</span>
           </button>
@@ -7294,6 +7769,12 @@
         const explicitApiPath = normalizeProviderApiPath(provider.apiPath || provider.api_path || '', { allowEmpty: true });
         const effectiveApiPath = resolveProviderApiPath(provider);
         const advancedOpen = !!state.providerAdvancedOpen || !!explicitApiPath;
+        const syncStatus = state.providerModelSyncStatus?.[provider.id];
+        const savedKeyMask = maskedApiKey(provider.apiKey || '');
+        const keyIsDirty = !!provider._apiKeyDirty;
+        const keyInputValue = keyIsDirty ? String(provider.apiKey || '') : savedKeyMask;
+        const keyInputType = keyIsDirty ? (state.providerKeyVisible ? 'text' : 'password') : 'text';
+        const keyButtonText = keyIsDirty ? (state.providerKeyVisible ? '隐藏' : '显示') : (savedKeyMask ? '更换' : '显示');
         return `
       <section class="settings-page page-block ai-settings-page provider-editor-page">
         <div class="settings-group glass-frost ai-panel provider-editor-card">
@@ -7301,9 +7782,9 @@
           <div class="prov-sec">
             <h3 class="prov-sec-title">\u63a5\u53e3\u914d\u7f6e</h3>
             <label class="ai-field-label">\u540d\u79f0</label>
-            <input id="provider-name-input" class="ai-input" value="${escapeHtml(provider.name || '')}" placeholder="\u4f8b\u5982 SiliconFlow" />
+            <input id="provider-name-input" class="ai-input" value="${escapeHtml(provider.name || '')}" placeholder="\u4f8b\u5982 SiliconFlow" data-plain-input="true" />
             <label class="ai-field-label">Base URL</label>
-            <input id="provider-base-input" class="ai-input" value="${escapeHtml(provider.baseUrl || '')}" placeholder="https://api.example.com/v1" />
+            <input id="provider-base-input" class="ai-input" value="${escapeHtml(provider.baseUrl || '')}" placeholder="https://api.example.com/v1" data-plain-input="true" />
             <div class="provider-advanced-head">
               <span class="section-eyebrow">Base URL \u4e0e API \u8def\u5f84\u4e00\u8d77\u62fc\u63a5\u8bf7\u6c42\u5730\u5740</span>
               <button class="provider-advanced-toggle" data-action="toggle-provider-advanced" type="button">
@@ -7313,11 +7794,15 @@
             </div>
             <div class="provider-advanced-panel ${advancedOpen ? 'open' : ''}">
               <label class="ai-field-label">API \u8def\u5f84\uff08\u53ef\u9009\uff09</label>
-              <input id="provider-api-path-input" class="ai-input" value="${escapeHtml(explicitApiPath)}" placeholder="${escapeHtml(effectiveApiPath)}" />
+              <input id="provider-api-path-input" class="ai-input" value="${escapeHtml(explicitApiPath)}" placeholder="${escapeHtml(effectiveApiPath)}" data-plain-input="true" />
               <p class="section-eyebrow">\u7559\u7a7a\u65f6\u81ea\u52a8\u4f7f\u7528 ${escapeHtml(effectiveApiPath)}</p>
             </div>
             <label class="ai-field-label">API Key</label>
-            <input id="provider-key-input" class="ai-input" value="${escapeHtml(provider.apiKey || '')}" placeholder="sk-..." />
+            <div class="provider-key-row">
+              <input id="provider-key-input" class="ai-input provider-key-input" type="${keyInputType}" value="${escapeHtml(keyInputValue)}" placeholder="sk-..." autocomplete="off" autocapitalize="off" spellcheck="false" data-plain-input="true" data-masked="${!keyIsDirty && savedKeyMask ? 'true' : 'false'}" />
+              <button class="provider-key-toggle" data-action="toggle-provider-key-visible" type="button" aria-label="${keyButtonText} API Key">${keyButtonText}</button>
+            </div>
+            ${savedKeyMask ? `<p class="section-eyebrow provider-key-mask">已保存：${escapeHtml(savedKeyMask)}</p>` : ''}
           </div>
 
           <div class="prov-sec-divider"></div>
@@ -7326,7 +7811,7 @@
             <h3 class="prov-sec-title">\u9ed8\u8ba4\u6a21\u578b</h3>
             <div class="provider-model-picker">
               <div class="provider-model-input-row">
-                <input id="provider-default-model-input" class="ai-input provider-model-input" value="${escapeHtml(provider.defaultModel || '')}" placeholder="gpt-5.4" autocomplete="off" />
+                <input id="provider-default-model-input" class="ai-input provider-model-input" value="${escapeHtml(provider.defaultModel || '')}" placeholder="gpt-5.4" autocomplete="off" data-plain-input="true" />
                 <button class="provider-model-toggle" data-action="toggle-provider-model-menu" type="button" aria-label="\u5c55\u5f00\u6a21\u578b\u5217\u8868">
                   ${icon('chevron')}
                 </button>
@@ -7344,7 +7829,7 @@
               <button class="prov-sync-btn" data-action="sync-provider-models" data-provider="${provider.id}" type="button" ${state.providerModelSyncingId === provider.id ? 'disabled' : ''}>${icon('reroll')}${state.providerModelSyncingId === provider.id ? '同步中' : '同步'}</button>
             </div>
             ${renderProviderModelPool(provider)}
-            <p class="section-eyebrow" style="margin-top:4px;">\u540c\u6b65\u4f1a\u5c1d\u8bd5\u8bf7\u6c42 /models \u63a5\u53e3\uff1b\u4e0d\u517c\u5bb9\u65f6\u53ef\u624b\u52a8\u6dfb\u52a0\u3002</p>
+            ${syncStatus?.message ? `<p class="provider-sync-status ${escapeHtml(syncStatus.type || '')}">${escapeHtml(syncStatus.message)}</p>` : '<p class="provider-sync-status muted">同步会优先请求真实模型列表；失败时保留当前列表。</p>'}
           </div>
 
           <div class="prov-sec-divider"></div>
@@ -7363,19 +7848,37 @@
         const draft = ensureProviderEditorDraft();
         if (state.providerModelSyncingId) return;
         const baseUrl = document.getElementById('provider-base-input')?.value?.trim() || '';
-        const apiKey = document.getElementById('provider-key-input')?.value?.trim() || '';
+        const keyInput = document.getElementById('provider-key-input');
+        const apiKey = draft._apiKeyDirty ? (keyInput?.value?.trim() || '') : (draft.apiKey || '');
+        const kind = providerKind({ ...draft, baseUrl });
         if (!baseUrl) {
-            alert('\u8bf7\u5148\u586b\u5199 Base URL \u518d\u540c\u6b65\u6a21\u578b');
+            const fallback = fallbackModelsForProvider(draft);
+            if (!fallback.length) {
+                setProviderSyncStatus(draft.id, 'error', '请先填写 Base URL 再同步模型');
+                render();
+                return;
+            }
+            const fallbackStructured = fallback.map(parseModelToStructured);
+            draft._allModels = fallbackStructured;
+            fallbackStructured.forEach((m) => { state.providerModelVendorOpen[m.vendor] = true; });
+            setProviderSyncStatus(draft.id, 'success', `已载入内置列表 ${fallback.length} 个模型`);
+            render();
             return;
         }
 
         state.providerModelSyncingId = draft.id || state.providerDraftId || 'syncing';
+        setProviderSyncStatus(draft.id, 'muted', '正在同步模型...');
         render();
         try {
             const resp = await fetch(`${API_BASE}/api/settings/ai/discover-models`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+                body: JSON.stringify({
+                    provider_id: draft.id || kind,
+                    provider_name: draft.name || '',
+                    base_url: baseUrl,
+                    api_key: apiKey,
+                }),
             });
             const contentType = resp.headers.get('content-type') || '';
             const rawText = await resp.text();
@@ -7396,38 +7899,47 @@
             } catch {
                 throw new Error('后端返回 JSON 解析失败，已阻止写入模型列表');
             }
-            const modelNames = normalizeModelIdList(Array.isArray(data.models) ? data.models : []);
+            const discoveredNames = normalizeModelIdList(Array.isArray(data.models) ? data.models : []);
+            const fallbackNames = fallbackModelsForProvider({ ...draft, baseUrl });
+            const modelNames = normalizeModelIdList([...discoveredNames, ...fallbackNames]);
             if (!modelNames.length) {
-                alert('没有获取到模型，已保留当前默认模型和已有列表。');
+                setProviderSyncStatus(draft.id, 'error', '没有获取到模型，已保留当前默认模型和已有列表。');
+                render();
                 return;
             }
 
-            // Preserve existing manual models; merge synced ones
             const syncedModels = modelNames.map(parseModelToStructured);
-            const merged = [
-                ...syncedModels,
-                ...(draft._allModels || []).filter((m) => !modelNames.includes(m.id)),
-            ];
+            const syncedKeys = new Set(modelNames.map((item) => item.toLowerCase()));
+            const merged = [...syncedModels];
+            (draft._allModels || []).forEach((model) => {
+                const id = sanitizeModelId(model?.id || model?.name || '');
+                if (!id || syncedKeys.has(id.toLowerCase())) return;
+                merged.push(parseModelToStructured(id));
+            });
             draft._allModels = merged;
-            // Auto-expand all vendor groups that appeared
             const vendors = [...new Set(syncedModels.map((m) => m.vendor))];
             vendors.forEach((v) => { state.providerModelVendorOpen[v] = true; });
 
-            // Update legacy models field from current selection
             if (!(draft._selectedModelIds instanceof Set)) draft._selectedModelIds = new Set(draft._selectedModelIds || []);
-            // Keep existing selection; new synced models are NOT auto-selected
             draft.models = [...draft._selectedModelIds];
+            const fallbackAdded = Math.max(0, modelNames.length - discoveredNames.length);
+            setProviderSyncStatus(draft.id, 'success', data.is_fallback || data.source === 'fallback'
+                ? `已载入内置列表 ${modelNames.length} 个模型`
+                : fallbackAdded
+                    ? `已同步 ${discoveredNames.length} 个模型，补充内置 ${fallbackAdded} 个`
+                    : `已同步 ${modelNames.length} 个模型`);
 
             render();
             renderProviderModelMenu();
-            alert(modelNames.length ? `\u5df2\u540c\u6b65 ${modelNames.length} \u4e2a\u6a21\u578b\uff0c\u8bf7\u5728\u6a21\u578b\u6c60\u4e2d\u9009\u62e9\u9700\u8981\u7684\u6a21\u578b` : '\u63a5\u53e3\u5df2\u8fde\u63a5\uff0c\u4f46\u4f9b\u5e94\u5546\u6ca1\u6709\u8fd4\u56de\u53ef\u7528\u6a21\u578b');
         } catch (error) {
             const message = String(error?.message || '\u540c\u6b65\u6a21\u578b\u5931\u8d25');
             if (message.includes('Failed to fetch')) {
-                alert('\u540c\u6b65\u5931\u8d25\uff1a\u5f53\u524d\u524d\u7aef\u8fde\u4e0d\u4e0a\u540e\u7aef\u63a5\u53e3\u3002\u8bf7\u786e\u8ba4 API base \u914d\u7f6e\u6b63\u786e\uff0c\u4e14\u540e\u7aef\u53ef\u4ee5\u8bbf\u95ee\u3002');
+                setProviderSyncStatus(draft.id, 'error', '同步失败：当前前端连不上后端接口。');
+                render();
                 return;
             }
-            alert(`\u540c\u6b65\u5931\u8d25\uff1a${message}`);
+            setProviderSyncStatus(draft.id, 'error', `同步失败：${message}`);
+            render();
         } finally {
             state.providerModelSyncingId = '';
             render();
@@ -7602,6 +8114,19 @@
         if (action === 'open-prompt-editor') return openAiSubView('promptEditor', () => { state.activePromptSlot = normalizeModelSlotId(target.dataset.slot); });
         if (action === 'back-sub-settings') return closeAiSubView();
         if (action === 'sync-provider-models') { syncProviderModelsFromEditor(); return; }
+        if (action === 'toggle-provider-key-visible') {
+            const draft = ensureProviderEditorDraft();
+            if (!draft._apiKeyDirty) {
+                draft._apiKeyDirty = true;
+                draft.apiKey = '';
+                state.providerKeyVisible = true;
+            } else {
+                state.providerKeyVisible = !state.providerKeyVisible;
+            }
+            render();
+            window.setTimeout(() => document.getElementById('provider-key-input')?.focus(), 0);
+            return;
+        }
         if (action === 'toggle-provider-advanced') {
             state.providerAdvancedOpen = !state.providerAdvancedOpen;
             render();
@@ -7618,9 +8143,14 @@
             return;
         }
         if (action === 'pick-provider-default-model') {
-            const model = sanitizeModelId(target.dataset.model || '');
-            if (!model) return;
             const draft = ensureProviderEditorDraft();
+            const query = document.getElementById('provider-default-model-input')?.value || draft.defaultModel || '';
+            const items = filteredProviderModels(query, draft.models);
+            const model = sanitizeModelId(items[Number(target.dataset.modelIndex)] || target.dataset.model || '');
+            if (!model) return;
+            if (!(draft._selectedModelIds instanceof Set)) draft._selectedModelIds = new Set(draft._selectedModelIds || []);
+            draft._selectedModelIds.add(model);
+            draft.models = [...draft._selectedModelIds];
             draft.defaultModel = model;
             const input = document.getElementById('provider-default-model-input');
             if (input) input.value = model;
@@ -7699,8 +8229,15 @@
         if (action === 'add-provider-model') {
             const draft = ensureProviderEditorDraft();
             if (!(draft._selectedModelIds instanceof Set)) draft._selectedModelIds = new Set(draft._selectedModelIds || []);
-            const mid = sanitizeModelId(target.dataset.modelId || '');
+            const allModels = Array.isArray(draft._allModels) ? draft._allModels : [];
+            const modelRecord = allModels[Number(target.dataset.modelIndex)] || {};
+            const mid = sanitizeModelId(modelRecord.id || modelRecord.name || target.dataset.modelId || '');
             if (mid) draft._selectedModelIds.add(mid);
+            if (mid) {
+                draft.defaultModel = mid;
+                const input = document.getElementById('provider-default-model-input');
+                if (input) input.value = mid;
+            }
             draft.models = [...draft._selectedModelIds];
             render();
             return;
@@ -7709,7 +8246,9 @@
         if (action === 'remove-provider-model') {
             const draft = ensureProviderEditorDraft();
             if (!(draft._selectedModelIds instanceof Set)) draft._selectedModelIds = new Set(draft._selectedModelIds || []);
-            const mid = sanitizeModelId(target.dataset.modelId || '');
+            const allModels = Array.isArray(draft._allModels) ? draft._allModels : [];
+            const modelRecord = allModels[Number(target.dataset.modelIndex)] || {};
+            const mid = sanitizeModelId(modelRecord.id || modelRecord.name || target.dataset.modelId || '');
             if (mid) draft._selectedModelIds.delete(mid);
             draft.models = [...draft._selectedModelIds];
             render();
@@ -7721,7 +8260,7 @@
             const input = document.getElementById('provider-manual-model-input');
             const m = sanitizeModelId(input?.value || '');
             if ((input?.value || '').trim() && !m) {
-                alert('模型 ID 不合法，不能包含 HTML、空格或乱码内容');
+                alert('模型 ID 不合法，不能包含 HTML、控制字符或过长内容');
                 return;
             }
             if (!m) return;
@@ -7733,6 +8272,7 @@
                 state.providerModelVendorOpen[vendor] = true;
             }
             draft._selectedModelIds.add(m);
+            draft.defaultModel = m;
             draft.models = [...draft._selectedModelIds];
             render();
             return;
@@ -7779,7 +8319,7 @@
             const input = document.getElementById('model-slot-manual-input');
             const m = sanitizeModelId(input?.value || '');
             if ((input?.value || '').trim() && !m) {
-                alert('模型 ID 不合法，不能包含 HTML、空格或乱码内容');
+                alert('模型 ID 不合法，不能包含 HTML、控制字符或过长内容');
                 return;
             }
             if (!slotId || !m) return;
@@ -7923,7 +8463,10 @@
         }
 
         if (action === 'pick-slot-model') {
-            const model = sanitizeModelId(target.dataset.model || '');
+            const currentSlot = getSlot(target.dataset.slot);
+            const provider = getProviderById(currentSlot?.providerId);
+            const list = normalizeModelIdList(provider?.models || []);
+            const model = sanitizeModelId(list[Number(target.dataset.modelIndex)] || target.dataset.model || '');
             if (!model) return;
             if (state.activeModelSlotContext === 'contact') {
                 const c = byId(state.currentContactId) || state.contacts[0];
@@ -7989,11 +8532,17 @@
                 baseUrl: document.getElementById('provider-base-input')?.value?.trim() || '',
                 apiPath,
                 api_path: apiPath,
-                apiKey: document.getElementById('provider-key-input')?.value?.trim() || '',
+                apiKey: draft._apiKeyDirty
+                    ? (document.getElementById('provider-key-input')?.value?.trim() || '')
+                    : (draft.apiKey || ''),
                 defaultModel,
                 models,
             };
             const ai = ensureAiSettings();
+            ai.providerModels = {
+                ...(ai.providerModels || {}),
+                [id]: models,
+            };
             ai.providers = ai.providers.filter((item) => item.id !== id);
             ai.providers.push(next);
             syncLegacyAiSettings();
@@ -8070,7 +8619,13 @@
             return;
         }
         if (target?.id === 'provider-key-input') {
-            ensureProviderEditorDraft().apiKey = target.value || '';
+            const draft = ensureProviderEditorDraft();
+            if (target.dataset?.masked === 'true') {
+                target.value = '';
+                target.dataset.masked = 'false';
+            }
+            draft._apiKeyDirty = true;
+            draft.apiKey = String(target.value || '');
             return;
         }
         if (target?.id === 'provider-models-input') {
@@ -8129,6 +8684,18 @@
             queueLocalSyncIfChanged(180);
             queueAgentPersonaSave(c.id, c.persona);
         }
+    });
+
+    document.addEventListener('paste', (event) => {
+        const target = event.target;
+        if (target?.id !== 'provider-key-input') return;
+        event.preventDefault();
+        const text = String(event.clipboardData?.getData('text/plain') || '').trim();
+        target.value = text;
+        const draft = ensureProviderEditorDraft();
+        draft._apiKeyDirty = true;
+        draft.apiKey = text;
+        target.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
     document.addEventListener('change', (event) => {
@@ -8482,6 +9049,29 @@
         resetQuickGesture();
     }, { passive: true });
 
+    let lastCodexToggleEventAt = 0;
+
+    function handleCodexTogglePress(event) {
+        const target = event.target?.closest?.('.codex-toggle');
+        if (!target) return;
+        const now = Date.now();
+        if (now - lastCodexToggleEventAt < 320) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation?.();
+            return;
+        }
+        lastCodexToggleEventAt = now;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        toggleCurrentCodexMode(target.dataset.contactId);
+    }
+
+    ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach((eventName) => {
+        document.addEventListener(eventName, handleCodexTogglePress, true);
+    });
+
     document.addEventListener('mousedown', (event) => {
         if (isEditableTarget(event.target)) return;
         if (event.target.closest('.quick-action-open')) return;
@@ -8531,6 +9121,15 @@
         if (target?.id === 'provider-default-model-input') {
             state.providerModelMenuOpen = true;
             renderProviderModelMenu();
+        }
+        if (target?.id === 'provider-key-input' && target.dataset?.masked === 'true') {
+            const draft = ensureProviderEditorDraft();
+            target.value = '';
+            target.dataset.masked = 'false';
+            draft._apiKeyDirty = true;
+            draft.apiKey = '';
+            state.providerKeyVisible = true;
+            target.type = 'text';
         }
     });
 
