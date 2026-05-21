@@ -14,6 +14,7 @@ from sse_starlette.sse import EventSourceResponse
 
 import ai_runtime
 from codex_bridge import codex_bridge_chat
+from claude_tmux_bridge import claude_tmux_chat, claude_tmux_reset, list_active_sessions
 import database as db
 from models import router as model_router
 from models import OpenAICompatAdapter, EchoAdapter, ADAPTER_MAP
@@ -323,6 +324,14 @@ class CodexChatRequest(BaseModel):
     timeout_seconds: Optional[int] = None
     agent_id: Optional[str] = None
     persona: Optional[str] = None
+
+
+class ClaudeCodeChatRequest(BaseModel):
+    conversation_key: str
+    content: str
+    reset: bool = False
+    timeout_seconds: Optional[int] = None
+    agent_id: Optional[str] = None
 
 
 def _codex_prompt_from_built_messages(messages: list[dict]) -> str:
@@ -1067,6 +1076,98 @@ async def codex_chat(body: CodexChatRequest):
         "assistant_message": assistant_message,
         "prompt_debug": built_prompt.debug if (settings.prompt_debug and built_prompt) else None,
     }
+
+
+@api.post("/claude-code/chat")
+async def claude_code_chat(body: ClaudeCodeChatRequest):
+    """
+    Bridge a client conversation into a persistent interactive Claude Code tmux session.
+    Uses Claude subscription quota (not API billing).
+    Each conversation_key gets its own tmux session on the VPS.
+    """
+    raw_agent_id = (body.agent_id or body.conversation_key.rsplit(":", 1)[-1] or "").strip()
+    agent_id = db.normalize_agent_id_value(raw_agent_id)
+    session_title = f"Claude Code bridge: {body.conversation_key.strip()}"
+
+    try:
+        session = await db.get_latest_session_for_agent_source(
+            agent_id=agent_id,
+            source_app="claude_code_bridge",
+            title=session_title,
+        )
+        if not session:
+            session = await db.create_session(
+                title=session_title,
+                model="claude-code",
+                source_app="claude_code_bridge",
+                agent_id=agent_id,
+            )
+        if body.reset:
+            await db.update_session(session["id"], last_summarized_message_id="")
+    except Exception as exc:
+        logger.exception("Claude Code bridge session setup failed")
+        raise HTTPException(status_code=502, detail=f"Claude Code session setup failed: {exc}") from exc
+
+    try:
+        user_message = await db.add_message(
+            session["id"],
+            "user",
+            body.content,
+            model="claude-code",
+            agent_id=agent_id,
+        )
+    except Exception as exc:
+        logger.exception("Claude Code bridge user persistence failed")
+        raise HTTPException(status_code=502, detail=f"Claude Code failed to save user message: {exc}") from exc
+
+    try:
+        await _auto_capture_memory_from_user_text(body.content, agent_id)
+    except Exception as exc:
+        logger.warning("Claude Code auto memory capture failed: %s", exc)
+
+    try:
+        result = await claude_tmux_chat(
+            conversation_key=body.conversation_key,
+            content=body.content,
+            reset=body.reset,
+            timeout_seconds=body.timeout_seconds or 120,
+        )
+    except Exception as exc:
+        logger.exception("Claude Code tmux bridge failed")
+        raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
+
+    try:
+        assistant_message = await db.add_message(
+            session["id"],
+            "assistant",
+            result.reply,
+            model="claude-code",
+            agent_id=agent_id,
+        )
+    except Exception as exc:
+        logger.exception("Claude Code bridge persistence failed")
+        raise HTTPException(status_code=502, detail=f"Claude Code replied but failed to save messages: {exc}") from exc
+
+    return {
+        "conversation_key": result.conversation_key,
+        "session_name": result.session_name,
+        "reply": result.reply,
+        "user_message": user_message,
+        "assistant_message": assistant_message,
+    }
+
+
+@api.get("/claude-code/sessions")
+async def claude_code_sessions():
+    """列出所有活跃的 Claude Code tmux sessions。"""
+    return {"sessions": list_active_sessions()}
+
+
+@api.post("/claude-code/reset")
+async def claude_code_reset_session(body: ClaudeCodeChatRequest):
+    """Kill 掉对应的 tmux session，下次重新开始。"""
+    await claude_tmux_reset(body.conversation_key)
+    return {"ok": True, "conversation_key": body.conversation_key}
 
 
 @api.post("/rp/chat")
