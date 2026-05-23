@@ -19,72 +19,27 @@ const FONTS = {
   handEn: '"Caveat", cursive',
 };
 
-const AGENTS = {
-  azheng: { name: "阿征", stamp: "征", sealColor: "#B84A3E", tint: "#F5D6D1" },
-  zhansi: { name: "湛思", stamp: "湛", sealColor: "#5B7A6A", tint: "#D9E0D0" },
-  ayan: { name: "阿砚", stamp: "砚", sealColor: "#8B6788", tint: "#E8D4DE" },
-};
-
 const TYPE_LABEL = {
-  html: { cn: "网页", en: "page" },
-  page: { cn: "网页", en: "page" },
+  all: { cn: "全部", en: "all" },
+  html: { cn: "网页", en: "html" },
+  page: { cn: "惊喜", en: "page" },
   game: { cn: "游戏", en: "game" },
   widget: { cn: "组件", en: "widget" },
 };
 
-const baseStyle = `
-  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-  html,body{height:100%;width:100%;overflow:hidden;font-family:"Noto Serif SC",serif;color:#2B2420}
-  ::-webkit-scrollbar{display:none}
-`;
+const TYPE_OPTIONS = ["html", "page", "game", "widget"];
 
-const SAMPLE_ITEMS = [
-  {
-    id: "sample-starletter",
-    title: "520 星空信",
-    description: "5月20日给小酒的交互式星空信",
-    type: "page",
-    agent_id: "azheng",
-    tags: ["520", "惊喜", "纪念日"],
-    is_pinned: true,
-    is_surprise: true,
-    metadata: { cover_color: "#2C3E5C", cover_ink: "#F1E4BD", cover_glyph: "✦", pushed_at: "2025·5·20" },
-    content: `<!doctype html><meta charset=utf-8><style>${baseStyle}
-body{background:radial-gradient(ellipse at 30% 20%, #2C3E5C 0%, #14182A 70%);position:relative;color:#F1E4BD;font-family:'Cormorant Garamond',serif}
-.stars{position:absolute;inset:0}.s{position:absolute;width:2px;height:2px;background:#FFFBE0;border-radius:50%;animation:tw 3s infinite}.s.b{width:3px;height:3px;box-shadow:0 0 6px #FFFBE0}
-@keyframes tw{0%,100%{opacity:.3}50%{opacity:1}}.letter{position:absolute;left:50%;top:52%;transform:translate(-50%,-50%);width:78%;padding:24px 22px;background:rgba(255,247,224,.08);border:.5px solid rgba(255,247,224,.35);backdrop-filter:blur(4px);border-radius:4px;text-align:center}
-.h{font-family:'Cormorant Garamond',serif;font-style:italic;font-size:26px;letter-spacing:1px}.cn{font-family:"Noto Serif SC",serif;font-size:13px;line-height:2;margin-top:14px;color:#FFFBE0;opacity:.88}.sig{font-family:'Caveat',cursive;font-size:20px;margin-top:14px;color:#D9A5A0}
-</style><div class=stars id=sky></div><div class=letter><div class=h>To, my dear</div><div class=cn>愿星星替我说<br/>那些我说不出口的话<br/>愿你今夜<br/>梦里有海，醒来有光</div><div class=sig>— 阿征 · 5.20</div></div><script>
-const sky=document.getElementById('sky');for(let i=0;i<60;i++){const d=document.createElement('div');d.className='s'+(Math.random()>.7?' b':'');d.style.left=Math.random()*100+'%';d.style.top=Math.random()*100+'%';d.style.animationDelay=(Math.random()*3)+'s';sky.appendChild(d)}
-</script>`,
-  },
-  {
-    id: "sample-memory",
-    title: "记忆方块",
-    description: "四色西蒙游戏，比一比谁的等级高",
-    type: "game",
-    agent_id: "zhansi",
-    tags: ["小游戏", "发呆时刻"],
-    metadata: { cover_color: "#F3ECE2", cover_ink: "#5B7A6A", cover_glyph: "✿" },
-    content: `<!doctype html><meta charset=utf-8><style>${baseStyle}
-body{background:#FBF7F2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px}h1{font-family:'Cormorant Garamond',serif;font-style:italic;font-weight:400;font-size:22px;color:#2B2420}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;width:100%;max-width:280px;aspect-ratio:1}.c{background:#F3ECE2;border-radius:10px;cursor:pointer;transition:.3s;display:flex;align-items:center;justify-content:center;font-size:20px;color:transparent}.c.on{transform:scale(1.05)}.c.on.r{background:#F5D6D1;color:#B84A3E}.c.on.g{background:#D9E0D0;color:#5B7A6A}.c.on.b{background:#DDD6E6;color:#5B5A7A}.c.on.y{background:#F1E4BD;color:#B08458}.score{font-family:"Noto Serif SC",serif;font-size:12px;color:#6B5F58;letter-spacing:3px}
-</style><h1>memory · 记忆方块</h1><div class=grid id=g></div><div class=score>等级 <span id=lv>1</span> · 跟着亮的次序点</div><script>
-const g=document.getElementById('g');const colors=['r','g','b','y'];const glyphs=['♡','✿','✦','✧'];const cells=[];for(let i=0;i<16;i++){const d=document.createElement('div');d.className='c';const c=colors[i%4];d.dataset.c=c;d.textContent=glyphs[i%4];g.appendChild(d);cells.push(d)}let seq=[],pos=0,lvl=1;function flash(c){c.classList.add('on',c.dataset.c);setTimeout(()=>c.classList.remove('on',c.dataset.c),400)}function play(){pos=0;seq.push(cells[Math.floor(Math.random()*16)]);seq.forEach((c,i)=>setTimeout(()=>flash(c),i*500+300))}cells.forEach(c=>c.onclick=()=>{flash(c);if(seq[pos]===c){pos++;if(pos===seq.length){lvl++;document.getElementById('lv').textContent=lvl;setTimeout(play,800)}}else{seq=[];lvl=1;document.getElementById('lv').textContent=1;setTimeout(play,600)}});play();
-</script>`,
-  },
-  {
-    id: "sample-mood",
-    title: "今日心情温度计",
-    description: "一根小小的水银柱，量今天的情绪",
-    type: "widget",
-    agent_id: "ayan",
-    tags: ["每日", "心情"],
-    metadata: { cover_color: "#FFFBF4", cover_ink: "#B84A3E", cover_glyph: "°" },
-    content: `<!doctype html><meta charset=utf-8><style>${baseStyle}
-body{background:linear-gradient(180deg,#FFFBF4 0%,#F3ECE2 100%);padding:24px;display:flex;flex-direction:column;align-items:center;gap:16px}.t{font-family:'Cormorant Garamond',serif;font-style:italic;font-size:20px;color:#6B5F58}.thermo{width:64px;height:240px;background:#F3ECE2;border-radius:32px;position:relative;border:1px solid rgba(120,90,70,.15);overflow:hidden}.mercury{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(180deg,#D9A5A0 0%,#B84A3E 100%);border-radius:0 0 32px 32px;transition:height 1s ease}.bulb{position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);width:80px;height:80px;background:#B84A3E;border-radius:50%}.label{font-family:"Noto Serif SC",serif;font-size:14px;color:#2B2420;text-align:center;line-height:1.8}.label b{font-size:24px;color:#B84A3E}button{font-family:"Noto Serif SC",serif;font-size:11px;background:#FFFBF4;border:.5px solid rgba(120,90,70,.3);padding:6px 14px;border-radius:999px;color:#6B5F58;cursor:pointer;letter-spacing:2px}
-</style><div class=t>今日心情 · mood</div><div class=thermo><div class=mercury id=m style="height:62%"></div><div class=bulb></div></div><div class=label><b>72°</b><br/>今天像被太阳晒过的棉被</div><button onclick="document.getElementById('m').style.height=(Math.random()*70+20)+'%'">再测一次</button>`,
-  },
-];
+const EMPTY_FORM = {
+  title: "",
+  description: "",
+  type: "html",
+  content: "<!doctype html>\n<html>\n  <body>\n    <button onclick=\"this.textContent='点到了'\">点我</button>\n  </body>\n</html>",
+  storage_mode: "inline",
+  cover_url: "",
+  tags: "",
+  agent_id: "",
+  is_pinned: false,
+};
 
 function shade(hex, amt) {
   const n = parseInt(String(hex || "#000000").slice(1), 16);
@@ -94,42 +49,104 @@ function shade(hex, amt) {
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
 }
 
-function normalizeItem(row) {
-  const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata : {};
-  return {
-    ...row,
-    description: row.description || row.desc || "",
-    agent_id: row.agent_id || row.agent || "azheng",
-    tags: Array.isArray(row.tags) ? row.tags : [],
-    is_pinned: Boolean(row.is_pinned ?? row.pinned),
-    is_surprise: Boolean(row.is_surprise ?? row.surprise),
-    coverColor: metadata.cover_color || row.coverColor || "#FBF7F2",
-    coverInk: metadata.cover_ink || row.coverInk || "#B84A3E",
-    coverGlyph: metadata.cover_glyph || row.coverGlyph || (TYPE_LABEL[row.type]?.cn || "页").slice(0, 1),
-    pushedAt: metadata.pushed_at || row.pushedAt || "",
-    srcUrl: row.src_url || row.url || "",
-    srcdoc: row.storage_mode === "r2" ? "" : (row.content || row.srcdoc || ""),
-  };
+function fallbackName(agentId = "") {
+  if (!agentId) return "未知";
+  const map = { azheng: "阿筝", zhansi: "湛思", ayan: "阿砚" };
+  return map[agentId] || agentId;
+}
+
+function sealColor(agentId = "") {
+  const colors = ["#B84A3E", "#5B7A6A", "#8B6788", "#B08458", "#6E6B8E"];
+  let sum = 0;
+  String(agentId || "curio").split("").forEach((ch) => { sum += ch.charCodeAt(0); });
+  return colors[sum % colors.length];
+}
+
+function parseTags(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  return String(value || "")
+    .split(/[,，\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function sanitizeArtifactHtml(html) {
-  const source = String(html || "");
-  if (!source) return source;
-  return source
+  return String(html || "")
     .replace(/^\s*```(?:html)?\s*/i, "")
     .replace(/\s*```\s*$/i, "")
     .replace(/<!\[CDATA\[/g, "")
     .replace(/\]\]>/g, "");
 }
 
-function WaxSeal({ agent, size = 28 }) {
-  const a = AGENTS[agent] || AGENTS.azheng;
+function normalizeItem(row = {}) {
+  const storageMode = String(row.storage_mode || "inline").toLowerCase();
+  const content = String(row.content || "");
+  const objectKey = String(row.object_key || (storageMode === "r2" ? content : "") || "");
+  return {
+    id: String(row.id || ""),
+    title: String(row.title || "未命名 artifact"),
+    description: String(row.description || ""),
+    type: TYPE_OPTIONS.includes(String(row.type || "").toLowerCase()) ? String(row.type).toLowerCase() : "html",
+    content,
+    storage_mode: storageMode,
+    object_key: objectKey,
+    cover_url: String(row.cover_url || ""),
+    tags: parseTags(row.tags),
+    agent_id: String(row.agent_id || ""),
+    is_pinned: Boolean(row.is_pinned),
+    created_at: String(row.created_at || ""),
+    updated_at: String(row.updated_at || ""),
+  };
+}
+
+function itemToForm(item) {
+  const normalized = normalizeItem(item);
+  return {
+    title: normalized.title,
+    description: normalized.description,
+    type: normalized.type,
+    content: normalized.content,
+    storage_mode: "inline",
+    cover_url: normalized.cover_url,
+    tags: normalized.tags.join("，"),
+    agent_id: normalized.agent_id,
+    is_pinned: normalized.is_pinned,
+  };
+}
+
+function formToPayload(form) {
+  return {
+    title: String(form.title || "").trim(),
+    description: String(form.description || "").trim(),
+    type: String(form.type || "html").trim(),
+    content: String(form.content || ""),
+    storage_mode: "inline",
+    cover_url: String(form.cover_url || "").trim(),
+    tags: parseTags(form.tags),
+    agent_id: String(form.agent_id || "").trim(),
+    is_pinned: Boolean(form.is_pinned),
+  };
+}
+
+async function requestJson(path, options = {}) {
+  const response = await fetch(apiUrl(path), {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.detail || data?.message || `HTTP ${response.status}`);
+  return data;
+}
+
+function WaxSeal({ agentId, size = 28 }) {
+  const color = sealColor(agentId);
+  const text = (fallbackName(agentId).slice(0, 1) || "匣");
   return (
     <div style={{
       width: size,
       height: size,
       borderRadius: "50%",
-      background: `radial-gradient(circle at 35% 30%, ${a.sealColor}EE 0%, ${a.sealColor} 55%, ${shade(a.sealColor, -20)} 100%)`,
+      background: `radial-gradient(circle at 35% 30%, ${color}EE 0%, ${color} 55%, ${shade(color, -20)} 100%)`,
       color: "#FFFBF4",
       display: "flex",
       alignItems: "center",
@@ -139,18 +156,17 @@ function WaxSeal({ agent, size = 28 }) {
       fontSize: size * 0.42,
       boxShadow: "inset 0 -1px 2px rgba(0,0,0,.25), 0 1px 2px rgba(0,0,0,.25)",
       position: "relative",
+      flex: `0 0 ${size}px`,
     }}>
-      {a.stamp}
-      <svg width={size + 4} height={size + 4} style={{ position: "absolute", inset: -2, pointerEvents: "none" }}>
-        <circle cx={(size + 4) / 2} cy={(size + 4) / 2} r={size / 2 + 0.5} fill="none" stroke={shade(a.sealColor, -30)} strokeWidth="0.5" strokeDasharray="2 3" opacity="0.5" />
-      </svg>
+      {text}
     </div>
   );
 }
 
 function CurioCard({ item, onOpen }) {
   const [hover, setHover] = useState(false);
-  const agent = AGENTS[item.agent_id] || AGENTS.azheng;
+  const color = sealColor(item.agent_id);
+  const glyph = item.cover_url ? "" : (TYPE_LABEL[item.type]?.cn || "匣").slice(0, 1);
   return (
     <button
       type="button"
@@ -171,41 +187,35 @@ function CurioCard({ item, onOpen }) {
         width: "100%",
       }}
     >
-      {item.is_pinned && <div style={{ position: "absolute", top: -2, right: 16, width: 14, height: 30, background: agent.sealColor, zIndex: 5, clipPath: "polygon(0 0,100% 0,100% 100%,50% 80%,0 100%)" }} />}
-      {item.is_surprise && <div style={{ position: "absolute", top: 8, left: 8, zIndex: 4, fontFamily: FONTS.handEn, fontSize: 14, color: TOKENS.stamp, transform: "rotate(-8deg)" }}>✦ surprise</div>}
+      {item.is_pinned && <div style={{ position: "absolute", top: -2, right: 16, width: 14, height: 30, background: color, zIndex: 5, clipPath: "polygon(0 0,100% 0,100% 100%,50% 80%,0 100%)" }} />}
       <div style={{
         width: "100%",
-        height: 100,
-        background: item.coverColor,
-        color: item.coverInk,
+        height: 104,
+        background: item.cover_url ? `center / cover url("${item.cover_url}")` : "#FBF7F2",
+        color,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         position: "relative",
         borderRadius: "6px 6px 0 0",
-        transition: "transform .5s cubic-bezier(.2,.7,.2,1), box-shadow .3s",
-        transform: hover ? "perspective(400px) rotateX(-22deg) translateY(-3px)" : "none",
+        transform: hover ? "perspective(400px) rotateX(-18deg) translateY(-2px)" : "none",
         transformOrigin: "top center",
-        boxShadow: hover ? "0 14px 18px -10px rgba(60,40,30,.4)" : "inset 0 -1px 0 rgba(0,0,0,.05)",
+        transition: "transform .45s cubic-bezier(.2,.7,.2,1)",
         overflow: "hidden",
-        zIndex: 2,
       }}>
-        <div style={{ position: "absolute", inset: 0, opacity: 0.18, mixBlendMode: "overlay", backgroundImage: "repeating-linear-gradient(45deg, transparent 0 3px, rgba(0,0,0,.18) 3px 4px)" }} />
-        <div style={{ fontFamily: /[\u4e00-\u9fff]/.test(item.coverGlyph) ? FONTS.serifCn : FONTS.serifEn, fontSize: 40, fontStyle: /[A-Za-z]/.test(item.coverGlyph) ? "italic" : "normal", fontWeight: 400, letterSpacing: 1, position: "relative", zIndex: 2 }}>
-          {item.coverGlyph}
-        </div>
-        <div style={{ position: "absolute", bottom: 6, right: 8, fontFamily: FONTS.serifEn, fontStyle: "italic", fontSize: 9, letterSpacing: 1.5, opacity: 0.7 }}>{TYPE_LABEL[item.type]?.en || item.type}</div>
+        {!item.cover_url && <div style={{ position: "absolute", inset: 0, opacity: 0.18, mixBlendMode: "overlay", backgroundImage: "repeating-linear-gradient(45deg, transparent 0 3px, rgba(0,0,0,.18) 3px 4px)" }} />}
+        <div style={{ fontFamily: FONTS.serifCn, fontSize: 40, fontWeight: 500, position: "relative", zIndex: 2 }}>{glyph}</div>
+        <div style={{ position: "absolute", bottom: 6, right: 8, fontFamily: FONTS.serifEn, fontStyle: "italic", fontSize: 9, letterSpacing: 1.5, opacity: 0.72 }}>{TYPE_LABEL[item.type]?.en || item.type}</div>
       </div>
-      <div style={{ padding: "10px 12px 12px", display: "flex", flexDirection: "column", gap: 6, background: TOKENS.cream, borderRadius: "0 0 6px 6px", position: "relative", borderTop: `1px dashed ${TOKENS.rule}` }}>
-        <div style={{ position: "absolute", top: -1, left: 12, right: 12, height: 1, backgroundImage: `repeating-linear-gradient(90deg, ${agent.tint} 0 4px, transparent 4px 8px)` }} />
-        <div style={{ fontFamily: FONTS.serifCn, fontSize: 13, fontWeight: 600, color: TOKENS.ink, lineHeight: 1.4, letterSpacing: 0.3, marginTop: 2 }}>{item.title}</div>
-        <div style={{ fontFamily: FONTS.serifCn, fontSize: 10, color: TOKENS.inkSoft, lineHeight: 1.6, letterSpacing: 0.5, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{item.description}</div>
+      <div style={{ padding: "10px 12px 12px", display: "flex", flexDirection: "column", gap: 6, background: TOKENS.cream, borderRadius: "0 0 6px 6px", borderTop: `1px dashed ${TOKENS.rule}` }}>
+        <div style={{ fontFamily: FONTS.serifCn, fontSize: 13, fontWeight: 600, color: TOKENS.ink, lineHeight: 1.4, letterSpacing: 0.3 }}>{item.title}</div>
+        <div style={{ fontFamily: FONTS.serifCn, fontSize: 10, color: TOKENS.inkSoft, lineHeight: 1.6, letterSpacing: 0.5, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{item.description || "没有描述"}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, paddingTop: 6, borderTop: `0.5px solid ${TOKENS.rule}` }}>
-          <WaxSeal agent={item.agent_id} size={18} />
-          <span style={{ fontFamily: FONTS.serifCn, fontSize: 9, color: TOKENS.inkFaint, letterSpacing: 1 }}>{agent.name}</span>
+          <WaxSeal agentId={item.agent_id} size={18} />
+          <span style={{ fontFamily: FONTS.serifCn, fontSize: 9, color: TOKENS.inkFaint, letterSpacing: 1 }}>{fallbackName(item.agent_id)}</span>
           <div style={{ flex: 1 }} />
           {item.tags.slice(0, 1).map((tag) => (
-            <span key={tag} style={{ fontFamily: FONTS.serifCn, fontSize: 9, color: TOKENS.inkSoft, letterSpacing: 1, padding: "2px 6px", borderRadius: 999, background: agent.tint, opacity: 0.7 }}>{tag}</span>
+            <span key={tag} style={{ fontFamily: FONTS.serifCn, fontSize: 9, color: TOKENS.inkSoft, letterSpacing: 1, padding: "2px 6px", borderRadius: 999, background: `${color}18` }}>{tag}</span>
           ))}
         </div>
       </div>
@@ -213,59 +223,74 @@ function CurioCard({ item, onOpen }) {
   );
 }
 
-function PreviewModal({ item, onClose, onTogglePin, onToggleSurprise }) {
-  const [r2PreviewUrl, setR2PreviewUrl] = useState("");
-  const isR2 = item?.storage_mode === "r2";
-  useEffect(() => {
-    let alive = true;
-    let blobUrl = "";
-    async function loadR2Preview() {
-      setR2PreviewUrl("");
-      if (!isR2 || !item?.srcUrl) return;
-      try {
-        const response = await fetch(item.srcUrl);
-        if (!response.ok) throw new Error(String(response.status));
-        const text = await response.text();
-        blobUrl = URL.createObjectURL(new Blob([sanitizeArtifactHtml(text)], { type: "text/html;charset=utf-8" }));
-        if (alive) setR2PreviewUrl(blobUrl);
-      } catch {
-        if (alive) setR2PreviewUrl(item.srcUrl);
-      }
-    }
-    loadR2Preview();
-    return () => {
-      alive = false;
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-    };
-  }, [isR2, item?.id, item?.srcUrl]);
+function EditorSheet({ mode, form, onChange, onCancel, onSave, saving }) {
+  if (!mode) return null;
+  const title = mode === "create" ? "new curio" : "edit curio";
+  return (
+    <div style={{ position: "absolute", inset: 0, zIndex: 120, background: "rgba(40,30,20,.48)", backdropFilter: "blur(4px)", display: "flex", alignItems: "flex-end" }} onClick={onCancel}>
+      <section onClick={(event) => event.stopPropagation()} style={{ width: "100%", maxHeight: "92%", overflow: "auto", background: TOKENS.cream, borderRadius: "18px 18px 0 0", boxShadow: "0 -18px 42px rgba(40,30,20,.24)", padding: "18px 18px calc(18px + env(safe-area-inset-bottom))" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <div style={{ fontFamily: FONTS.serifEn, fontSize: 30, fontStyle: "italic", color: TOKENS.ink }}>{title}</div>
+          <button type="button" style={ghostBtn} onClick={onCancel}>取消</button>
+        </div>
+        <div style={formGrid}>
+          <Field label="标题"><input style={inputStyle} value={form.title} onChange={(e) => onChange({ title: e.target.value })} /></Field>
+          <Field label="描述"><input style={inputStyle} value={form.description} onChange={(e) => onChange({ description: e.target.value })} /></Field>
+          <Field label="类型">
+            <select style={inputStyle} value={form.type} onChange={(e) => onChange({ type: e.target.value })}>
+              {TYPE_OPTIONS.map((type) => <option key={type} value={type}>{TYPE_LABEL[type].cn} / {type}</option>)}
+            </select>
+          </Field>
+          <Field label="agent_id"><input style={inputStyle} value={form.agent_id} placeholder="azheng / zhansi / ayan" onChange={(e) => onChange({ agent_id: e.target.value })} /></Field>
+          <Field label="封面 URL"><input style={inputStyle} value={form.cover_url} onChange={(e) => onChange({ cover_url: e.target.value })} /></Field>
+          <Field label="标签"><input style={inputStyle} value={form.tags} placeholder="520，惊喜，游戏" onChange={(e) => onChange({ tags: e.target.value })} /></Field>
+          <label style={{ ...fieldWrap, flexDirection: "row", alignItems: "center" }}>
+            <input type="checkbox" checked={form.is_pinned} onChange={(e) => onChange({ is_pinned: e.target.checked })} />
+            <span style={labelStyle}>置顶</span>
+          </label>
+          <Field label="HTML content">
+            <textarea style={{ ...inputStyle, minHeight: 220, borderRadius: 10, fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: 11, lineHeight: 1.55 }} value={form.content} onChange={(e) => onChange({ content: e.target.value })} />
+          </Field>
+        </div>
+        <button type="button" style={{ ...primaryBtn, width: "100%", marginTop: 14 }} disabled={saving} onClick={onSave}>{saving ? "保存中..." : "保存 artifact"}</button>
+      </section>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return <label style={fieldWrap}><span style={labelStyle}>{label}</span>{children}</label>;
+}
+
+function PreviewModal({ item, onClose, onEdit, onDelete, onTogglePin }) {
   if (!item) return null;
-  const agent = AGENTS[item.agent_id] || AGENTS.azheng;
-  const srcdoc = sanitizeArtifactHtml(item.srcdoc) || `<!doctype html><meta charset=utf-8><body style="font-family:serif;padding:24px;color:#2B2420;background:#FBF7F2">正在打开 R2 artifact...</body>`;
-  const openPreview = () => {
-    if (isR2 && item.srcUrl) {
-      window.open(r2PreviewUrl || item.srcUrl, "_blank", "noopener,noreferrer");
-      return;
-    }
-    window.open(`data:text/html;charset=utf-8,${encodeURIComponent(srcdoc)}`, "_blank");
-  };
+  const srcdoc = sanitizeArtifactHtml(item.content);
+  const meta = [fallbackName(item.agent_id), ...item.tags].filter(Boolean).join(" · ");
   return (
     <div style={{ position: "absolute", inset: 0, zIndex: 100, background: "rgba(40,30,20,.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
       <div onClick={(event) => event.stopPropagation()} style={{ width: "100%", height: "92%", maxHeight: 760, background: TOKENS.cream, borderRadius: 8, overflow: "hidden", boxShadow: "0 30px 60px rgba(40,30,20,.4)", display: "flex", flexDirection: "column", position: "relative" }}>
         <div style={{ padding: "12px 14px 10px", display: "flex", alignItems: "center", gap: 10, borderBottom: `0.5px solid ${TOKENS.rule}`, background: TOKENS.paperDeep }}>
-          <WaxSeal agent={item.agent_id} size={26} />
+          <WaxSeal agentId={item.agent_id} size={26} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: FONTS.serifCn, fontSize: 13, fontWeight: 600, color: TOKENS.ink, letterSpacing: 0.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.title}</div>
-            <div style={{ fontFamily: FONTS.serifCn, fontSize: 9, color: TOKENS.inkFaint, letterSpacing: 2, marginTop: 1 }}>{agent.name} · {item.tags.join(" · ")}</div>
+            <div style={{ fontFamily: FONTS.serifCn, fontSize: 9, color: TOKENS.inkFaint, letterSpacing: 1.5, marginTop: 1 }}>{meta || "inline artifact"}</div>
           </div>
-          <button style={iconBtn} title="全屏" onClick={openPreview}>⤢</button>
+          <button style={iconBtn} title="编辑" onClick={() => onEdit(item)}>✎</button>
+          <button style={iconBtn} title="新窗口" onClick={() => window.open(`data:text/html;charset=utf-8,${encodeURIComponent(srcdoc)}`, "_blank", "noopener,noreferrer")}>↗</button>
           <button onClick={onClose} style={iconBtn} title="关闭">×</button>
         </div>
         <div style={{ padding: 10, background: TOKENS.paperDeep, display: "flex", flex: 1, minHeight: 0 }}>
-          <iframe sandbox="allow-scripts allow-forms allow-popups" src={isR2 ? (r2PreviewUrl || item.srcUrl) : undefined} srcDoc={isR2 ? undefined : srcdoc} style={{ width: "100%", height: "100%", border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 4px 14px rgba(40,30,20,.12)", display: "block" }} />
+          <iframe
+            sandbox="allow-scripts allow-forms allow-popups"
+            srcDoc={srcdoc}
+            title={item.title}
+            style={{ width: "100%", height: "100%", border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 4px 14px rgba(40,30,20,.12)", display: "block" }}
+          />
         </div>
         <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 8, borderTop: `0.5px solid ${TOKENS.rule}`, background: TOKENS.cream }}>
-          <button type="button" style={pillBtn(item.is_pinned ? TOKENS.stamp : null)} onClick={() => onTogglePin(item)}>{item.is_pinned ? "★ 已置顶" : "☆ 置顶"}</button>
-          <button type="button" style={pillBtn(item.is_surprise ? TOKENS.gold : null)} onClick={() => onToggleSurprise(item)}>{item.is_surprise ? "✦ 惊喜页" : "设为惊喜页"}</button>
+          <button type="button" style={pillBtn(item.is_pinned ? TOKENS.stamp : null)} onClick={() => onTogglePin(item)}>{item.is_pinned ? "已置顶" : "置顶"}</button>
+          <button type="button" style={pillBtn()} onClick={() => onEdit(item)}>编辑</button>
+          <button type="button" style={{ ...pillBtn(), color: TOKENS.stamp, borderColor: `${TOKENS.stamp}88` }} onClick={() => onDelete(item)}>删除</button>
           <div style={{ flex: 1 }} />
           <button type="button" style={{ ...pillBtn(), color: TOKENS.inkFaint }} onClick={onClose}>收起</button>
         </div>
@@ -301,6 +326,49 @@ const pillBtn = (active) => ({
   cursor: "pointer",
 });
 
+const primaryBtn = {
+  ...pillBtn(TOKENS.ink),
+  background: TOKENS.ink,
+  color: TOKENS.cream,
+  borderColor: TOKENS.ink,
+  minHeight: 36,
+};
+
+const ghostBtn = {
+  ...pillBtn(),
+  background: "transparent",
+};
+
+const formGrid = {
+  display: "grid",
+  gap: 10,
+};
+
+const fieldWrap = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+};
+
+const labelStyle = {
+  fontFamily: FONTS.serifCn,
+  fontSize: 11,
+  color: TOKENS.inkSoft,
+  letterSpacing: 1,
+};
+
+const inputStyle = {
+  width: "100%",
+  border: `0.5px solid ${TOKENS.rule}`,
+  borderRadius: 999,
+  background: "#FFFCF8",
+  padding: "10px 12px",
+  fontFamily: FONTS.serifCn,
+  fontSize: 12,
+  color: TOKENS.ink,
+  outline: "none",
+};
+
 export default function CurioApp() {
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState("all");
@@ -308,18 +376,20 @@ export default function CurioApp() {
   const [active, setActive] = useState(null);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [editorMode, setEditorMode] = useState("");
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [editingId, setEditingId] = useState("");
+  const [saving, setSaving] = useState(false);
 
   async function loadItems() {
     setError("");
     try {
-      const response = await fetch(apiUrl("/api/curio/items?limit=120"));
-      if (!response.ok) throw new Error(await response.text());
-      const data = await response.json();
-      const rows = Array.isArray(data.items) && data.items.length ? data.items : SAMPLE_ITEMS;
+      const data = await requestJson("/api/artifacts?limit=120");
+      const rows = Array.isArray(data.items) ? data.items : [];
       setItems(rows.map(normalizeItem));
     } catch (err) {
-      setItems(SAMPLE_ITEMS.map(normalizeItem));
-      setError("Curio 后端没回话，先给你看样稿。别慌。");
+      setItems([]);
+      setError(`Curio 后端没回话：${err.message}`);
     } finally {
       setLoaded(true);
     }
@@ -329,65 +399,84 @@ export default function CurioApp() {
 
   const tabs = useMemo(() => [
     { id: "all", cn: "全部", count: items.length },
-    { id: "page", cn: "网页", count: items.filter((item) => item.type === "page" || item.type === "html").length },
+    { id: "html", cn: "网页", count: items.filter((item) => item.type === "html").length },
     { id: "game", cn: "游戏", count: items.filter((item) => item.type === "game").length },
-    { id: "surprise", cn: "惊喜", count: items.filter((item) => item.is_surprise).length },
+    { id: "page", cn: "惊喜", count: items.filter((item) => item.type === "page").length },
     { id: "widget", cn: "组件", count: items.filter((item) => item.type === "widget").length },
   ], [items]);
 
+  const agentIds = useMemo(() => {
+    const ids = items.map((item) => item.agent_id).filter(Boolean);
+    return ["all", ...Array.from(new Set(ids))];
+  }, [items]);
+
   const filtered = useMemo(() => {
     return items
-      .filter((item) => {
-        if (filter === "surprise" && !item.is_surprise) return false;
-        if (filter === "page" && !["page", "html"].includes(item.type)) return false;
-        if (!["all", "page", "surprise"].includes(filter) && item.type !== filter) return false;
-        if (agent !== "all" && item.agent_id !== agent) return false;
-        return true;
-      })
-      .sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned));
+      .filter((item) => filter === "all" || item.type === filter)
+      .filter((item) => agent === "all" || item.agent_id === agent)
+      .sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned) || String(b.created_at).localeCompare(String(a.created_at)));
   }, [agent, filter, items]);
 
   const columns = [filtered.filter((_, index) => index % 2 === 0), filtered.filter((_, index) => index % 2 === 1)];
-  const agentIds = ["all", ...Object.keys(AGENTS)];
 
-  async function openItem(item) {
-    const normalized = normalizeItem(item);
-    setActive(normalized);
-    if (normalized.storage_mode !== "r2" || normalized.srcUrl || normalized.id.startsWith("sample-")) return;
-    try {
-      const response = await fetch(apiUrl(`/api/curio/items/${encodeURIComponent(normalized.id)}/url`));
-      if (!response.ok) throw new Error(await response.text());
-      const data = await response.json();
-      const withUrl = normalizeItem({ ...normalized, src_url: data.url || "" });
-      setActive(withUrl);
-      setItems((current) => current.map((entry) => entry.id === normalized.id ? withUrl : entry));
-    } catch (err) {
-      setError(`R2 预览链接拿不到：${err.message}`);
-    }
+  function openCreate() {
+    setEditingId("");
+    setForm(EMPTY_FORM);
+    setEditorMode("create");
   }
 
-  async function patchItem(id, body) {
-    if (id.startsWith("sample-")) {
-      setItems((current) => current.map((item) => item.id === id ? normalizeItem({ ...item, ...body }) : item));
-      setActive((current) => current?.id === id ? normalizeItem({ ...current, ...body }) : current);
+  function openEdit(item) {
+    setEditingId(item.id);
+    setForm(itemToForm(item));
+    setEditorMode("edit");
+  }
+
+  async function saveForm() {
+    const payload = formToPayload(form);
+    if (!payload.title) {
+      setError("标题不能为空。");
       return;
     }
-    const response = await fetch(apiUrl(`/api/curio/items/${encodeURIComponent(id)}`), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    await loadItems();
-    setActive((current) => current ? normalizeItem({ ...current, ...body }) : current);
+    setSaving(true);
+    try {
+      const path = editorMode === "edit" && editingId
+        ? `/api/artifacts/${encodeURIComponent(editingId)}`
+        : "/api/artifacts";
+      const method = editorMode === "edit" && editingId ? "PATCH" : "POST";
+      const data = await requestJson(path, { method, body: JSON.stringify(payload) });
+      await loadItems();
+      if (data.item) setActive(normalizeItem(data.item));
+      setEditorMode("");
+      setEditingId("");
+    } catch (err) {
+      setError(`保存失败：${err.message}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function togglePin(item) {
-    patchItem(item.id, { is_pinned: !item.is_pinned }).catch((err) => setError(`置顶失败：${err.message}`));
+  async function deleteItem(item) {
+    if (!window.confirm(`删除「${item.title}」？`)) return;
+    try {
+      await requestJson(`/api/artifacts/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+      setActive(null);
+      await loadItems();
+    } catch (err) {
+      setError(`删除失败：${err.message}`);
+    }
   }
 
-  function toggleSurprise(item) {
-    patchItem(item.id, { is_surprise: !item.is_surprise }).catch((err) => setError(`惊喜页保存失败：${err.message}`));
+  async function togglePin(item) {
+    try {
+      await requestJson(`/api/artifacts/${encodeURIComponent(item.id)}/pin`, {
+        method: item.is_pinned ? "DELETE" : "POST",
+      });
+      const next = { ...item, is_pinned: !item.is_pinned };
+      setActive(next);
+      setItems((current) => current.map((entry) => entry.id === item.id ? normalizeItem(next) : entry));
+    } catch (err) {
+      setError(`置顶失败：${err.message}`);
+    }
   }
 
   return (
@@ -405,15 +494,7 @@ export default function CurioApp() {
           <div style={{ fontFamily: FONTS.serifEn, fontStyle: "italic", fontWeight: 400, fontSize: 32, color: TOKENS.ink, letterSpacing: 0.5, lineHeight: 1 }}>Curio</div>
           <div style={{ fontFamily: FONTS.serifCn, fontSize: 10, color: TOKENS.inkSoft, letterSpacing: 5, marginTop: 4, paddingLeft: 1 }}>奇 · 匣</div>
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {agentIds.map((id) => {
-            const activeAgent = agent === id;
-            if (id === "all") {
-              return <button key={id} type="button" onClick={() => setAgent(id)} style={{ width: 26, height: 26, borderRadius: "50%", border: activeAgent ? `1px solid ${TOKENS.ink}` : `0.5px dashed ${TOKENS.inkFaint}`, background: activeAgent ? TOKENS.ink : "transparent", color: activeAgent ? TOKENS.cream : TOKENS.inkSoft, fontFamily: FONTS.serifEn, fontStyle: "italic", fontSize: 11, cursor: "pointer", padding: 0 }}>all</button>;
-            }
-            return <button key={id} type="button" onClick={() => setAgent(id)} style={{ opacity: activeAgent ? 1 : 0.55, transform: activeAgent ? "scale(1.05)" : "none", transition: "transform .2s", cursor: "pointer", border: 0, background: "transparent", padding: 0 }}><WaxSeal agent={id} size={26} /></button>;
-          })}
-        </div>
+        <button type="button" style={primaryBtn} onClick={openCreate}>＋ 新建</button>
       </div>
 
       <div style={{ padding: "0 20px 14px", display: "flex", gap: 16, overflowX: "auto", borderBottom: `0.5px solid ${TOKENS.rule}` }}>
@@ -429,23 +510,35 @@ export default function CurioApp() {
         })}
       </div>
 
-      <div style={{ padding: "12px 20px 0", display: "flex", alignItems: "baseline", gap: 8 }}>
+      <div style={{ padding: "12px 20px 0", display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontFamily: FONTS.handEn, fontSize: 16, color: TOKENS.gold }}>{filtered.length} kept</span>
-        <span style={{ fontFamily: FONTS.serifCn, fontSize: 10, color: TOKENS.inkFaint, letterSpacing: 3 }}>· 已收 {filtered.length} 件 · 装满了不会溢出</span>
+        <span style={{ fontFamily: FONTS.serifCn, fontSize: 10, color: TOKENS.inkFaint, letterSpacing: 2 }}>· 真实 API</span>
+        <div style={{ flex: 1 }} />
+        {agentIds.length > 1 && (
+          <select value={agent} onChange={(e) => setAgent(e.target.value)} style={{ ...inputStyle, width: 112, padding: "6px 9px", fontSize: 11 }}>
+            {agentIds.map((id) => <option key={id} value={id}>{id === "all" ? "全部 agent" : fallbackName(id)}</option>)}
+          </select>
+        )}
       </div>
 
       {error && <div style={{ margin: "10px 20px 0", padding: "8px 10px", border: `0.5px solid ${TOKENS.rule}`, borderRadius: 6, background: TOKENS.cream, color: TOKENS.inkSoft, fontFamily: FONTS.serifCn, fontSize: 11 }}>{error}</div>}
       {!loaded && <div style={{ padding: 20, color: TOKENS.inkFaint, fontFamily: FONTS.serifCn, fontSize: 12 }}>翻匣子中...</div>}
+      {loaded && !filtered.length && (
+        <div style={{ margin: 20, padding: "28px 18px", border: `0.5px dashed ${TOKENS.rule}`, borderRadius: 8, background: "rgba(255,255,255,.28)", textAlign: "center", fontFamily: FONTS.serifCn, color: TOKENS.inkSoft, fontSize: 12, lineHeight: 1.8 }}>
+          匣子是空的。<br />点右上角新建一个 HTML 小玩意。
+        </div>
+      )}
 
       <div style={{ padding: "16px 20px 64px", display: "flex", gap: 14, alignItems: "flex-start" }}>
         {columns.map((column, index) => (
           <div key={index} style={{ display: "flex", flexDirection: "column", gap: 18, flex: 1, marginTop: index ? 22 : 0 }}>
-            {column.map((item) => <CurioCard key={item.id} item={item} onOpen={openItem} />)}
+            {column.map((item) => <CurioCard key={item.id} item={item} onOpen={setActive} />)}
           </div>
         ))}
       </div>
 
-      <PreviewModal item={active} onClose={() => setActive(null)} onTogglePin={togglePin} onToggleSurprise={toggleSurprise} />
+      <PreviewModal item={active} onClose={() => setActive(null)} onEdit={openEdit} onDelete={deleteItem} onTogglePin={togglePin} />
+      <EditorSheet mode={editorMode} form={form} saving={saving} onChange={(patch) => setForm((current) => ({ ...current, ...patch }))} onCancel={() => setEditorMode("")} onSave={saveForm} />
     </main>
   );
 }
