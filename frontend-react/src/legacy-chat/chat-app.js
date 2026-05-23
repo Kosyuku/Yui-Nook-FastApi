@@ -1890,7 +1890,10 @@
         const c = byId(state.currentContactId) || state.contacts[0];
         const quoteMoment = state.quoteMomentId ? getMoment(state.quoteMomentId) : null;
         const quoteMessage = state.quoteMessageId ? c.messages.find((item) => item.id === state.quoteMessageId) : null;
-        const messages = visibleChatMessages(c.messages);
+        const messages = visibleChatMessages([
+            ...(state.conversations?.[c.id] || []),
+            ...(Array.isArray(c.messages) ? c.messages : []),
+        ]);
         return `
       <section class="room-page room-theme-${c.theme}">
         <div class="messages-panel">
@@ -4636,7 +4639,14 @@
     }
 
     function messageTextValue(message = {}) {
-        return String(message.content ?? message.text ?? '').trim();
+        return String(
+            message.content
+            ?? message.text
+            ?? message.message
+            ?? message.body
+            ?? message.raw_content
+            ?? ''
+        ).trim();
     }
 
     function isRenderableMessage(message = {}) {
@@ -4700,7 +4710,7 @@
 
     function normalizeStoredMessage(message = {}) {
         const role = String(message.role || message.from || '').toLowerCase() === 'user' || message.from === 'me' ? 'user' : 'ai';
-        const content = String(message.content ?? message.text ?? '');
+        const content = messageTextValue(message);
         const createdAt = String(message.created_at || message.timestamp || '');
         const time = String(message.time || '');
         const stableId = [
