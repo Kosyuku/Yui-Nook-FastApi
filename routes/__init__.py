@@ -309,6 +309,7 @@ class MemoryUpdate(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     content: str
+    client_message_id: Optional[str] = None
     agent_id: Optional[str] = None
     model: Optional[str] = None
     temperature: Optional[float] = None
@@ -395,6 +396,7 @@ async def _run_codex_aftercare(
 class RPChatRequest(BaseModel):
     room_id: str
     content: str
+    client_message_id: Optional[str] = None
     agent_id: Optional[str] = None
     model: Optional[str] = None
     temperature: Optional[float] = None

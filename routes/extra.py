@@ -1660,15 +1660,17 @@ async def discover_provider_models(body: ProviderDiscoverPayload):
 def _sanitize_discovered_model_id(value: Any) -> str:
     if not isinstance(value, str):
         return ""
-    text = re.sub(r" +", " ", value.strip())
-    if not text or len(text) > 180:
+    text = value.strip()
+    if not text or len(text) > 120:
         return ""
     lowered = text.lower()
     if "<" in text or ">" in text:
         return ""
     if any(token in lowered for token in ("<!doctype", "<html", "</div", "</body")):
         return ""
-    if re.search(r"[\x00-\x1f\x7f]", text):
+    if re.search(r"[\x00-\x1f\x7f]|\s", text):
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._:/@+\-]+", text):
         return ""
     return text
 
