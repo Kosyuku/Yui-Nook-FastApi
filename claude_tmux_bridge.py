@@ -159,44 +159,68 @@ def _strip_ansi(text: str) -> str:
     return ansi.sub("", text)
 
 
+def _has_prompt(text: str) -> bool:
+    """检查 pane 里是否有 Claude Code 等待输入的提示符。"""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    recent = lines[-5:] if len(lines) >= 5 else lines
+    return any(re.match(r"^[>❯]\s*$", l) for l in recent)
+
+
+def _parse_bullet_blocks(text: str) -> list[str]:
+    """提取所有 ● 块（包含 ● 行及其后的缩进续行），返回每块合并后的文本。"""
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.match(r"^●\s*", stripped):
+            if current:
+                blocks.append("\n".join(current).strip())
+            current = [re.sub(r"^●\s*", "", stripped)]
+        elif current and line.startswith("  ") and stripped:
+            current.append(stripped)
+        elif current and not stripped:
+            pass  # 块内空行，保留
+        else:
+            if current:
+                blocks.append("\n".join(current).strip())
+                current = []
+    if current:
+        blocks.append("\n".join(current).strip())
+    return [b for b in blocks if b]
+
+
 def _extract_reply(before: str, after: str) -> str:
     """从 capture-pane 前后差异中提取 Claude 的回复。"""
     after_clean = _strip_ansi(after)
     before_clean = _strip_ansi(before)
 
+    before_blocks = _parse_bullet_blocks(before_clean)
+    after_blocks = _parse_bullet_blocks(after_clean)
+    new_blocks = after_blocks[len(before_blocks):]
+    if new_blocks:
+        return "\n".join(new_blocks).strip()
+
+    # fallback：用 before 末尾行定位截断点
     before_lines = [l for l in before_clean.splitlines() if l.strip()]
     after_lines = after_clean.splitlines()
 
+    new_lines = after_lines
     if before_lines:
         last_before = before_lines[-1].strip()
         cut = 0
         for i, line in enumerate(after_lines):
             if last_before in line:
                 cut = i + 1
-                break  # 用第一个匹配，避免把回复内容截掉
+                break
         new_lines = after_lines[cut:]
-    else:
-        new_lines = after_lines
 
-    # 优先提取 ● 开头的行（Claude Code 回复标记）
-    bullet_lines = []
-    for line in new_lines:
-        stripped = line.strip()
-        if re.match(r"^●\s*", stripped):
-            bullet_lines.append(re.sub(r"^●\s*", "", stripped))
-
-    if bullet_lines:
-        return "\n".join(bullet_lines).strip()
-
-    # fallback：过滤提示符和状态行
     reply_lines = []
     for line in new_lines:
         stripped = line.strip()
         if not stripped:
             continue
-        if re.match(r"^[>\$]\s*$", stripped):
+        if re.match(r"^[>❯$]\s*$", stripped):
             continue
-        # 跳过状态行（* Worked for Xs、* Sautéed for Xs 等）
         if re.match(r"^\*\s+\w", stripped):
             continue
         reply_lines.append(stripped)
@@ -205,7 +229,7 @@ def _extract_reply(before: str, after: str) -> str:
 
 
 def _wait_stable(session_name: str, timeout: int) -> str:
-    """轮询 capture-pane 直到输出稳定，返回最终 pane 内容。"""
+    """轮询 capture-pane 直到输出稳定且 Claude 在等待输入，返回最终 pane 内容。"""
     last_pane = ""
     stable_count = 0
     deadline = time.time() + timeout
@@ -213,9 +237,10 @@ def _wait_stable(session_name: str, timeout: int) -> str:
     while time.time() < deadline:
         time.sleep(POLL_INTERVAL)
         current = _capture_pane(session_name)
-        if _strip_ansi(current) == _strip_ansi(last_pane):
+        current_clean = _strip_ansi(current)
+        if current_clean == _strip_ansi(last_pane):
             stable_count += 1
-            if stable_count >= STABLE_ROUNDS:
+            if stable_count >= STABLE_ROUNDS and _has_prompt(current_clean):
                 return current
         else:
             stable_count = 0
@@ -330,7 +355,7 @@ def _claude_is_alive(session_name: str) -> bool:
     lines = [l.strip() for l in pane.splitlines() if l.strip()]
     # claude 等待输入时最后几行会有 > 提示符
     recent = lines[-5:] if len(lines) >= 5 else lines
-    return any(re.match(r"^>\s*$", l) for l in recent)
+    return any(re.match(r"^[>❯]\s*$", l) for l in recent)
 
 
 def keepalive_all_sessions() -> dict:

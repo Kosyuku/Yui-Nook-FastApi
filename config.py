@@ -179,6 +179,10 @@ class AppConfig:
     oauth_access_token_ttl_seconds: int = 3600
     oauth_refresh_token_ttl_seconds: int = 2592000
 
+    # Telegram bot
+    telegram_bot_token: str = ""
+    telegram_allowed_chat_ids: str = ""
+
     @classmethod
     def from_env(cls) -> "AppConfig":
         """从环境变量加载配置"""
@@ -342,6 +346,8 @@ class AppConfig:
             oauth_auth_code_ttl_seconds=int(os.getenv("OAUTH_AUTH_CODE_TTL_SECONDS", "600")),
             oauth_access_token_ttl_seconds=int(os.getenv("OAUTH_ACCESS_TOKEN_TTL_SECONDS", "3600")),
             oauth_refresh_token_ttl_seconds=int(os.getenv("OAUTH_REFRESH_TOKEN_TTL_SECONDS", "2592000")),
+            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_allowed_chat_ids=os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").strip(),
         )
 
         # 确保数据目录存在

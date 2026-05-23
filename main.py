@@ -14,6 +14,7 @@ import consciousness
 import conversation_summary
 import database as db
 import memory_async
+import telegram_bot
 from config import settings
 from models import init_router
 from routes import api
@@ -39,11 +40,13 @@ async def lifespan(app: FastAPI):
     conversation_summary.start_loop()
     await memory_async.start_worker()
     asyncio.create_task(routes._cc_keepalive_loop())
+    asyncio.create_task(telegram_bot.start(settings.telegram_bot_token))
     logger.info("Gateway ready")
     yield
     consciousness.stop_loop()
     conversation_summary.stop_loop()
     await memory_async.stop_worker()
+    await telegram_bot.stop()
     await db.close_db()
     logger.info("Pyro-Gemini gateway stopped")
 
