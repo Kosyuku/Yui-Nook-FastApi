@@ -4015,6 +4015,9 @@ async def add_message(
     *,
     agent_id: str | None = None,
 ) -> dict[str, Any]:
+    content = str(content or "").strip()
+    if not content:
+        raise ValueError("message content must not be empty")
     session = await get_session(session_id)
     resolved_agent_id = normalize_agent_id(agent_id or (session or {}).get("agent_id"))
     if _use_supabase_data():
@@ -4055,19 +4058,20 @@ async def add_message(
 
 async def get_messages(session_id: str, limit: int = 50) -> list[dict[str, Any]]:
     if _use_supabase_data():
-        return await _supabase_select(
+        rows = await _supabase_select(
             settings.supabase_messages_table,
             filters={"session_id": f"eq.{session_id}"},
             order="created_at.asc",
             limit=limit,
         )
+        return [row for row in rows if str(row.get("content") or "").strip()]
     db = await get_db()
     cursor = await db.execute(
         "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?",
         (session_id, limit),
     )
     rows = await cursor.fetchall()
-    return [dict(row) for row in rows]
+    return [dict(row) for row in rows if str(row["content"] or "").strip()]
 
 
 async def list_messages_for_agent(agent_id: str | None, limit: int = 200) -> list[dict[str, Any]]:
@@ -4085,6 +4089,8 @@ async def list_messages_for_agent(agent_id: str | None, limit: int = 200) -> lis
 
     def add_rows(rows: list[dict[str, Any]]) -> None:
         for row in rows or []:
+            if not str(row.get("content") or "").strip():
+                continue
             message_id = str(row.get("id") or "").strip()
             fallback_id = "|".join([
                 str(row.get("agent_id") or ""),
@@ -4192,14 +4198,14 @@ async def get_recent_messages(session_id: str, limit: int = 12) -> list[dict[str
             order="created_at.desc",
             limit=limit,
         )
-        return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+        return [{"role": row["role"], "content": row["content"]} for row in reversed(rows) if str(row.get("content") or "").strip()]
     db = await get_db()
     cursor = await db.execute(
         "SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
         (session_id, limit),
     )
     rows = await cursor.fetchall()
-    return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+    return [{"role": row["role"], "content": row["content"]} for row in reversed(rows) if str(row["content"] or "").strip()]
 
 
 COT_LOG_MAX_CONTENT_CHARS = 1200

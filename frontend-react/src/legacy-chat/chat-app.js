@@ -1890,24 +1890,18 @@
         const c = byId(state.currentContactId) || state.contacts[0];
         const quoteMoment = state.quoteMomentId ? getMoment(state.quoteMomentId) : null;
         const quoteMessage = state.quoteMessageId ? c.messages.find((item) => item.id === state.quoteMessageId) : null;
-        const codexAllowed = canToggleCodexForContact(c);
-        const codexActive = isCodexEnabledForContact(c);
-        const ccAllowed = canToggleCCForContact(c);
-        const ccActive = isCCEnabledForContact(c);
+        const messages = visibleChatMessages(c.messages);
         return `
       <section class="room-page room-theme-${c.theme}">
         <div class="messages-panel">
-          ${c.messages.map((m) => renderMessage(m, c)).join('')}
+          ${messages.map((m, index) => renderMessage(m, c, messageRenderMeta(messages, index))).join('')}
         </div>
         <div class="composer-zone">
-          <div class="action-scroll">${getContactQuickActions(c).map(renderActionChip).join('')}</div>
           ${quoteMessage ? renderMessageQuoteBar(quoteMessage, c) : quoteMoment ? renderQuoteBar(quoteMoment) : ''}
           <div class="composer-card">
             <div class="composer-input-wrap">
               <input class="chat-input" placeholder="\u8f93\u5165\u6d88\u606f..." value="" />
             </div>
-            ${codexAllowed ? `<button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}" onclick="window.__yuiToggleCodex?.(this,event)" onpointerdown="window.__yuiToggleCodex?.(this,event)">${codexActive ? 'Cx ON' : 'Cx'}</button>` : ''}
-            ${ccAllowed ? `<button class="codex-toggle cc-toggle ${ccActive ? 'active' : ''}" data-action="toggle-cc-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${ccActive}" aria-label="${ccActive ? '关闭 Claude Code' : '启用 Claude Code'}" onclick="window.__yuiToggleCC?.(this,event)" onpointerdown="window.__yuiToggleCC?.(this,event)">${ccActive ? 'CC ON' : 'CC'}</button>` : ''}
             <button class="icon-btn icon-circle soft-mini" data-action="expand-actions" aria-label="\u9644\u4ef6">${icon('attach')}</button>
             ${state.streamingAbortController
                 ? `<button class="icon-btn send-round send-stop-active" data-action="fake-send" aria-label="\u505c\u6b62">${icon('stop')}</button>`
@@ -1919,15 +1913,32 @@
     `;
     }
 
-    function renderMessage(message, contact) {
+    function visibleChatMessages(messages = []) {
+        return mergeMessageLists([], messages).map(contactMessageFromStored).filter(isRenderableMessage);
+    }
+
+    function messageRenderMeta(messages = [], index = 0) {
+        const message = messages[index] || {};
+        const prev = messages[index - 1] || null;
+        const gap = prev
+            ? Math.abs(comparableTime(message.created_at || message.timestamp) - comparableTime(prev.created_at || prev.timestamp))
+            : 0;
+        const showTime = !prev || !sameMessageMinute(prev, message) || gap > 5 * 60 * 1000;
+        return { showTime };
+    }
+
+    function renderMessage(message, contact, meta = {}) {
+        if (!isRenderableMessage(message)) return '';
         const roleClass = message.role === 'user' ? 'from-user' : 'from-ai';
-        const isCodexSource = String(message.source || message.provider || '').toLowerCase() === 'codex';
+        const msgSource = String(message.source || message.provider || '').toLowerCase();
+        const isCodexSource = msgSource === 'codex';
+        const isCCSource = msgSource === 'claude-code';
         const allowReasoning = !!contact?.settings?.reasoning_visibility;
         const avatar = message.role === 'ai'
             ? `<img class="bubble-avatar" src="${contact.avatar}" alt="${escapeHtml(contact.name)}" />`
             : '';
-        const sourceBadge = message.role === 'ai' && isCodexSource
-            ? '<span class="message-source-badge codex">Codex</span>'
+        const sourceBadge = message.role === 'ai' && (isCodexSource || isCCSource)
+            ? `<span class="message-source-badge ${isCodexSource ? 'codex' : 'claude-code'}">${isCodexSource ? 'Codex' : 'Claude'}</span>`
             : '';
         const cotButton = message.role === 'ai' && allowReasoning && message.thinking && !message.typing
             ? `<button class="bubble-cot-btn" data-action="toggle-thinking" data-id="${message.id}" aria-label="\u5c55\u5f00\u72ec\u767d">${icon('bubbleHeart')}</button>`
@@ -1941,24 +1952,27 @@
       `
             : '';
         const awaitingBody = message.role === 'ai' && message.streaming && !message.text;
-        const bubbleClassExtra = awaitingBody ? ' message-awaiting-text' : '';
+        const bubbleClassExtra = `${awaitingBody ? ' message-awaiting-text' : ''}${cotButton ? ' has-cot' : ''}`;
         const thinkingBlock = allowReasoning && message.thinking
             ? renderThinkingLine(message)
             : '';
         const toolLinesBlock = (message.toolCalls && message.toolCalls.length)
             ? renderToolLines(message.toolCalls)
             : '';
+        const text = messageTextValue(message);
+        const showSourceMeta = message.role === 'ai' && (sourceBadge || (meta.showTime && message.time));
         const bubbleWrap = `
           <div class="message-bubble-wrap">
-            ${message.role === 'user' ? `<time class="bubble-time">${escapeHtml(message.time)}</time>` : ''}
             <div class="message-bubble ${roleClass}${bubbleClassExtra}" ${message.role === 'ai' ? `data-msg-id="${message.id}" data-action="toggle-message-tools" data-id="${message.id}"` : ''}>
               ${cotButton}
-              ${sourceBadge}
               ${(message.typing || (message.streaming && !message.text))
                   ? `<div class="typing-dots"><span></span><span></span><span></span></div>`
-                  : `<div class="message-text">${escapeHtml(message.text)}</div>`}
+                  : `<div class="message-text">${escapeHtml(text)}</div>`}
             </div>
-            ${message.role === 'ai' && !message.typing ? `<time class="bubble-time">${escapeHtml(message.time)}</time>` : ''}
+            ${(showSourceMeta || (message.role === 'user' && meta.showTime && message.time)) ? `<div class="bubble-meta-row">
+              ${sourceBadge}
+              ${meta.showTime && message.time && !message.typing ? `<time class="bubble-time">${escapeHtml(message.time)}</time>` : ''}
+            </div>` : ''}
           </div>`;
         const colInner = message.role === 'ai' && (thinkingBlock || toolLinesBlock)
             ? `${thinkingBlock}${toolLinesBlock}${bubbleWrap}${bottomTools}`
@@ -3500,11 +3514,17 @@
         });
         const attachBtn = mount.querySelector('.soft-mini');
         if (attachBtn) attachBtn.addEventListener('click', (e) => { e.stopPropagation(); state.showAttach = !state.showAttach; render(); });
-        const codexBtn = mount.querySelector('.codex-toggle');
+        const codexBtn = mount.querySelector('.codex-toggle:not(.cc-toggle)');
         if (codexBtn) codexBtn.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
             toggleCurrentCodexMode();
+        });
+        const ccBtn = mount.querySelector('.cc-toggle');
+        if (ccBtn) ccBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleCurrentCCMode();
         });
         const contactRows = mount.querySelectorAll('.chat-list-item[data-contact-id]');
         contactRows.forEach((row) => {
@@ -4615,6 +4635,69 @@
         return Number.isFinite(parsed) ? parsed : 0;
     }
 
+    function messageTextValue(message = {}) {
+        return String(message.content ?? message.text ?? '').trim();
+    }
+
+    function isRenderableMessage(message = {}) {
+        return !!messageTextValue(message) || !!message.typing || !!message.streaming || !!message.thinking || (Array.isArray(message.toolCalls) && message.toolCalls.length > 0);
+    }
+
+    function compactMessageMinute(message = {}) {
+        const stamp = comparableTime(message.created_at || message.timestamp);
+        if (stamp) return Math.floor(stamp / 60000);
+        const raw = String(message.time || '').trim();
+        return raw ? raw : '';
+    }
+
+    function sameMessageMinute(a = {}, b = {}) {
+        const left = compactMessageMinute(a);
+        const right = compactMessageMinute(b);
+        return !!left && !!right && left === right;
+    }
+
+    function isSoftDuplicateMessage(a = {}, b = {}) {
+        const left = normalizeStoredMessage(a);
+        const right = normalizeStoredMessage(b);
+        if (left.role !== right.role) return false;
+        if (messageTextValue(left) !== messageTextValue(right)) return false;
+        if ((left.session_id || right.session_id) && left.session_id !== right.session_id) return false;
+        const at = comparableTime(left.created_at || left.timestamp);
+        const bt = comparableTime(right.created_at || right.timestamp);
+        if (at && bt) return Math.abs(at - bt) <= 2 * 60 * 1000;
+        return sameMessageMinute(left, right);
+    }
+
+    function messageMergeKeys(message = {}) {
+        const normalized = normalizeStoredMessage(message);
+        const keys = new Set();
+        if (normalized.id) keys.add(`id:${normalized.id}`);
+        if (normalized.client_message_id) keys.add(`client:${normalized.client_message_id}`);
+        const content = messageTextValue(normalized);
+        if (content) {
+            const session = normalized.session_id || normalized.agent_id || '';
+            const minute = compactMessageMinute(normalized);
+            keys.add(`soft:${session}|${normalized.role}|${minute}|${content}`);
+        }
+        return keys;
+    }
+
+    function upsertMessage(list = [], message = {}) {
+        const normalized = contactMessageFromStored(message);
+        const keys = messageMergeKeys(normalized);
+        let index = list.findIndex((item) => {
+            const itemKeys = messageMergeKeys(item);
+            return [...keys].some((key) => itemKeys.has(key));
+        });
+        if (index === -1) index = list.findIndex((item) => isSoftDuplicateMessage(item, normalized));
+        if (index === -1) {
+            list.push(normalized);
+        } else {
+            list[index] = contactMessageFromStored({ ...list[index], ...normalized });
+        }
+        return normalized;
+    }
+
     function normalizeStoredMessage(message = {}) {
         const role = String(message.role || message.from || '').toLowerCase() === 'user' || message.from === 'me' ? 'user' : 'ai';
         const content = String(message.content ?? message.text ?? '');
@@ -4630,6 +4713,7 @@
             id: String(message.id || stableId || `${role}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`),
             session_id: String(message.session_id || ''),
             agent_id: String(message.agent_id || ''),
+            client_message_id: String(message.client_message_id || message.clientMessageId || ''),
             role,
             content,
             text: content,
@@ -4657,20 +4741,30 @@
         if (!raw || typeof raw !== 'object') return {};
         return Object.fromEntries(Object.entries(raw).map(([contactId, messages]) => [
             String(contactId),
-            Array.isArray(messages) ? messages.map(normalizeStoredMessage) : [],
+            Array.isArray(messages) ? mergeMessageLists([], messages) : [],
         ]));
     }
 
     function mergeMessageLists(localMessages = [], remoteMessages = []) {
-        const map = new Map();
+        const merged = [];
+        const keyToIndex = new Map();
         [...localMessages, ...remoteMessages].forEach((message) => {
             const normalized = normalizeStoredMessage(message);
-            const existing = map.get(normalized.id);
+            if (!isRenderableMessage(normalized)) return;
+            const keys = [...messageMergeKeys(normalized)];
+            let existingIndex = keys.map((key) => keyToIndex.get(key)).find((index) => Number.isInteger(index));
+            if (!Number.isInteger(existingIndex)) {
+                existingIndex = merged.findIndex((item) => isSoftDuplicateMessage(item, normalized));
+            }
+            const existing = Number.isInteger(existingIndex) ? merged[existingIndex] : null;
             if (!existing || comparableTime(normalized.created_at) >= comparableTime(existing.created_at)) {
-                map.set(normalized.id, { ...existing, ...normalized });
+                const next = { ...existing, ...normalized };
+                const index = Number.isInteger(existingIndex) ? existingIndex : merged.length;
+                merged[index] = next;
+                [...messageMergeKeys(next)].forEach((key) => keyToIndex.set(key, index));
             }
         });
-        return [...map.values()].sort((a, b) => {
+        return merged.filter(Boolean).sort((a, b) => {
             const at = comparableTime(a.created_at);
             const bt = comparableTime(b.created_at);
             if (at || bt) return at - bt;
@@ -5463,8 +5557,8 @@
         if (!c || !room) return;
         const allowReasoning = !!c?.settings?.reasoning_visibility;
 
-        const userId = 'rp_u' + Date.now();
-        state.currentRpMessages.push({ id: userId, role: 'user', text, content: text, time: nowTimeStr(), timestamp: new Date().toISOString(), created_at: new Date().toISOString() });
+        const userId = `rp_u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        upsertMessage(state.currentRpMessages, { id: userId, client_message_id: userId, role: 'user', text, content: text, time: nowTimeStr(), timestamp: new Date().toISOString(), created_at: new Date().toISOString() });
         input.value = '';
         const aiId = 'rp_ai_' + Date.now();
         state.currentRpMessages.push({ id: aiId, role: 'ai', text: '', content: '', time: '', created_at: new Date().toISOString(), typing: true });
@@ -5477,6 +5571,7 @@
             room_id: state.currentRpRoomId,
             agent_id: room.agent_id || c.id,
             content: text,
+            client_message_id: userId,
             ...(c.persona ? { persona: c.persona } : {}),
             ...(c.settings.model ? { model: c.settings.model } : {}),
             ...buildChatTuning(c),
@@ -5486,6 +5581,7 @@
         const abortCtrl = new AbortController();
         state.streamingAbortController = abortCtrl;
         render();
+        let fullText = '';
 
         try {
             const resp = await requestChatStream(c, body, abortCtrl.signal, '/api/rp/chat');
@@ -5496,7 +5592,6 @@
             const reader = resp.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
-            let fullText = '';
             let fullThinking = '';
             let currentEventType = '';
 
@@ -5539,17 +5634,19 @@
             }
 
             const idx = state.currentRpMessages.findIndex((m) => m.id === aiId);
-            if (idx !== -1) {
+            if (idx !== -1 && fullText.trim()) {
                 state.currentRpMessages[idx] = {
                     ...state.currentRpMessages[idx],
-                    text: fullText || '\u2026',
-                    content: fullText || '\u2026',
+                    text: fullText,
+                    content: fullText,
                     ...(allowReasoning && fullThinking ? { thinking: fullThinking } : {}),
                     streaming: false,
                     typing: false,
                     time: nowTimeStr(),
                     created_at: new Date().toISOString(),
                 };
+            } else if (idx !== -1) {
+                state.currentRpMessages.splice(idx, 1);
             }
             state.streamingAbortController = null;
             await loadRpRooms(room.agent_id || c.id, { silent: true });
@@ -5558,17 +5655,22 @@
             render();
             scrollToBottom();
         } catch (err) {
+            const wasAborted = err.name === 'AbortError';
             const idx = state.currentRpMessages.findIndex((m) => m.id === aiId);
             if (idx !== -1) {
-                state.currentRpMessages[idx] = {
+                if (wasAborted && !fullText.trim()) {
+                    state.currentRpMessages.splice(idx, 1);
+                } else {
+                    state.currentRpMessages[idx] = {
                     id: aiId,
                     role: 'ai',
-                    text: err.name === 'AbortError' ? '\u2026' : `杩炴帴澶辫触锛?{err.message}`,
-                    content: err.name === 'AbortError' ? '\u2026' : `杩炴帴澶辫触锛?{err.message}`,
+                    text: err.name === 'AbortError' ? fullText : `连接失败：${err.message}`,
+                    content: err.name === 'AbortError' ? fullText : `连接失败：${err.message}`,
                     time: nowTimeStr(),
                     created_at: new Date().toISOString(),
                     typing: false,
                 };
+                }
             }
             state.streamingAbortController = null;
             if (state.currentRpRoomId) state.rpMessages[state.currentRpRoomId] = state.currentRpMessages.map(normalizeStoredMessage);
@@ -5603,8 +5705,8 @@
         if (!c) return;
         cancelAssistantPlayback();
 
-        const msgId = 'u' + Date.now();
-        c.messages.push({ id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
+        const msgId = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        upsertMessage(c.messages, { id: msgId, client_message_id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
         c.lastMessage = text;
         c.lastTime = '刚刚';
         input.value = '';
@@ -5638,6 +5740,7 @@
                     conversation_key: `yui:${c.id}`,
                     agent_id: c.id,
                     content: text,
+                    client_message_id: msgId,
                     reset: false,
                 }),
                 signal: abortCtrl.signal,
@@ -5645,7 +5748,7 @@
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
 
-            const reply = String(data.reply || '').trim() || '…';
+            const reply = String(data.reply || '').trim();
             const persistedUser = data.user_message && typeof data.user_message === 'object'
                 ? murmurHistoryMessageToStored(data.user_message, c.id)
                 : null;
@@ -5658,10 +5761,10 @@
                 : null;
             const userIdx = c.messages.findIndex((m) => m.id === msgId);
             if (userIdx !== -1 && persistedUser) {
-                c.messages[userIdx] = contactMessageFromStored(persistedUser);
+                c.messages[userIdx] = contactMessageFromStored({ ...persistedUser, client_message_id: msgId });
             }
             const idx = c.messages.findIndex((m) => m.id === aiId);
-            if (idx !== -1) {
+            if (idx !== -1 && reply) {
                 c.messages[idx] = {
                     ...(persistedAssistant ? contactMessageFromStored(persistedAssistant) : {}),
                     id: persistedAssistant?.id || aiId,
@@ -5674,8 +5777,10 @@
                     created_at: persistedAssistant?.created_at || new Date().toISOString(),
                     typing: false,
                 };
+            } else if (idx !== -1) {
+                c.messages.splice(idx, 1);
             }
-            c.lastMessage = reply;
+            c.lastMessage = reply || text;
             c.lastTime = nowTimeStr();
             syncConversationsFromContacts();
             queueLocalSyncIfChanged(120);
@@ -5686,8 +5791,11 @@
             if (!wasAborted) console.error('[cc chat] error:', err);
             const idx = c.messages.findIndex((m) => m.id === aiId);
             if (idx !== -1) {
-                const textOut = wasAborted ? '…' : `Claude Code 连接失败：${err.message}`;
-                c.messages[idx] = {
+                const textOut = wasAborted ? '' : `Claude Code 连接失败：${err.message}`;
+                if (!textOut) {
+                    c.messages.splice(idx, 1);
+                } else {
+                    c.messages[idx] = {
                     id: aiId,
                     role: 'ai',
                     text: textOut,
@@ -5698,6 +5806,7 @@
                     created_at: new Date().toISOString(),
                     typing: false,
                 };
+                }
             }
             syncConversationsFromContacts();
             queueLocalSyncIfChanged(120);
@@ -5716,8 +5825,8 @@
         if (!c) return;
         cancelAssistantPlayback();
 
-        const msgId = 'u' + Date.now();
-        c.messages.push({ id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
+        const msgId = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        upsertMessage(c.messages, { id: msgId, client_message_id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
         c.lastMessage = text;
         c.lastTime = '\u521a\u521a';
         input.value = '';
@@ -5751,6 +5860,7 @@
                     conversation_key: `yui:${c.id}`,
                     agent_id: c.id,
                     content: text,
+                    client_message_id: msgId,
                     reset: false,
                 }),
                 signal: abortCtrl.signal,
@@ -5758,7 +5868,7 @@
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
 
-            const reply = String(data.reply || '').trim() || '\u2026';
+            const reply = String(data.reply || '').trim();
             const persistedUser = data.user_message && typeof data.user_message === 'object'
                 ? murmurHistoryMessageToStored(data.user_message, c.id)
                 : null;
@@ -5771,10 +5881,10 @@
                 : null;
             const userIdx = c.messages.findIndex((m) => m.id === msgId);
             if (userIdx !== -1 && persistedUser) {
-                c.messages[userIdx] = contactMessageFromStored(persistedUser);
+                c.messages[userIdx] = contactMessageFromStored({ ...persistedUser, client_message_id: msgId });
             }
             const idx = c.messages.findIndex((m) => m.id === aiId);
-            if (idx !== -1) {
+            if (idx !== -1 && reply) {
                 c.messages[idx] = {
                     ...(persistedAssistant ? contactMessageFromStored(persistedAssistant) : {}),
                     id: persistedAssistant?.id || aiId,
@@ -5787,8 +5897,10 @@
                     created_at: persistedAssistant?.created_at || new Date().toISOString(),
                     typing: false,
                 };
+            } else if (idx !== -1) {
+                c.messages.splice(idx, 1);
             }
-            c.lastMessage = reply;
+            c.lastMessage = reply || text;
             c.lastTime = nowTimeStr();
             syncConversationsFromContacts();
             queueLocalSyncIfChanged(120);
@@ -5799,8 +5911,11 @@
             if (!wasAborted) console.error('[codex chat] error:', err);
             const idx = c.messages.findIndex((m) => m.id === aiId);
             if (idx !== -1) {
-                const textOut = wasAborted ? '\u2026' : `Codex \u8fde\u63a5\u5931\u8d25\uff1a${err.message}`;
-                c.messages[idx] = {
+                const textOut = wasAborted ? '' : `Codex \u8fde\u63a5\u5931\u8d25\uff1a${err.message}`;
+                if (!textOut) {
+                    c.messages.splice(idx, 1);
+                } else {
+                    c.messages[idx] = {
                     id: aiId,
                     role: 'ai',
                     text: textOut,
@@ -5811,6 +5926,7 @@
                     created_at: new Date().toISOString(),
                     typing: false,
                 };
+                }
             }
             syncConversationsFromContacts();
             queueLocalSyncIfChanged(120);
@@ -5843,8 +5959,8 @@
         }
 
         // Push user message
-        const msgId = 'u' + Date.now();
-        c.messages.push({ id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
+        const msgId = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        upsertMessage(c.messages, { id: msgId, client_message_id: msgId, session_id: sessionId, agent_id: c.id, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
         c.lastMessage = text;
         c.lastTime = '\u521a\u521a';
         input.value = '';
@@ -5903,6 +6019,7 @@
             session_id: sessionId,
             agent_id: c.id,
             content: text,
+            client_message_id: msgId,
             ...(c.persona ? { persona: c.persona } : {}),
             ...(c.settings.model ? { model: c.settings.model } : {}),
             ...buildChatTuning(c),
@@ -6013,9 +6130,7 @@
             _cancelThinkingFlush();
             state.streamingAbortController = null;
             const idx = aiIdx();
-            // If model only generated thinking/tool_calls and no text, don't show '...'
-            // as the answer; show a neutral placeholder instead
-            const finalText = fullText || (allowReasoning && fullThinking ? '' : '\u2026');
+            const finalText = fullText.trim();
             c.lastMessage = finalText || '\u5df2\u5904\u7406';
             c.lastTime = nowTimeStr();
             const thinkEl = root()?.querySelector(`#thinking-${aiId}`);
@@ -6037,7 +6152,7 @@
                     toolCalls: fullToolCalls
                 });
             } else {
-                if (idx !== -1) {
+                if (idx !== -1 && finalText) {
                     c.messages[idx] = {
                         id: aiId,
                         role: 'ai',
@@ -6049,6 +6164,8 @@
                         created_at: new Date().toISOString(),
                         typing: false,
                     };
+                } else if (idx !== -1) {
+                    c.messages.splice(idx, 1);
                 }
                 syncConversationsFromContacts();
                 queueLocalSyncIfChanged(120);
@@ -6065,17 +6182,20 @@
             if (!wasAborted) console.error('[chat SSE] error:', err);
             const idx = c.messages.findIndex(m => m.id === aiId);
             if (idx !== -1) {
-                c.messages[idx] = {
+                const textOut = wasAborted
+                    ? fullText.trim()
+                    : `\u8fde\u63a5\u5931\u8d25\uff1a${err.message}\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002`;
+                if (!textOut) {
+                    c.messages.splice(idx, 1);
+                } else {
+                    c.messages[idx] = {
                     id: aiId, role: 'ai',
-                    text: wasAborted
-                        ? (fullText || '\u2026')
-                        : `\u8fde\u63a5\u5931\u8d25\uff1a${err.message}\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002`,
-                    content: wasAborted
-                        ? (fullText || '\u2026')
-                        : `\u8fde\u63a5\u5931\u8d25\uff1a${err.message}\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002`,
+                    text: textOut,
+                    content: textOut,
                     ...(allowReasoning && fullThinking ? { thinking: fullThinking } : {}),
                     time: nowTimeStr(), created_at: new Date().toISOString(), typing: false,
                 };
+                }
             }
             if (wasAborted && fullText) {
                 c.lastMessage = fullText;
@@ -6250,7 +6370,7 @@
             _cancelRerollFlush();
             state.streamingAbortController = null;
             const curIdx = c.messages.findIndex(m => m.id === rerollId);
-            const rerollText = fullText || '\u2026';
+            const rerollText = fullText.trim();
             const thinkElFinal = root()?.querySelector(`#thinking-${rerollId}`);
             if (thinkElFinal) thinkElFinal.classList.remove('thinking-active');
             const wrapperElFinal = root()?.querySelector(`#cot-wrapper-${rerollId}`);
@@ -6269,7 +6389,7 @@
                     toolCalls: fullToolCalls,
                 });
             } else {
-                if (curIdx !== -1) {
+                if (curIdx !== -1 && rerollText) {
                     c.messages[curIdx] = {
                         ...c.messages[curIdx],
                         text: rerollText,
@@ -6277,6 +6397,8 @@
                         ...(fullToolCalls ? { toolCalls: fullToolCalls } : {}),
                         streaming: false,
                     };
+                } else if (curIdx !== -1) {
+                    c.messages.splice(curIdx, 1);
                 }
                 render();
             }
@@ -6289,13 +6411,18 @@
             if (!wasAborted) console.error('[reroll SSE] error:', err);
             const curIdx = c.messages.findIndex(m => m.id === rerollId);
             if (curIdx !== -1) {
-                c.messages[curIdx] = {
+                const textOut = wasAborted ? fullText.trim() : `\u91cd\u8bd5\u5931\u8d25\uff1a${err.message}`;
+                if (!textOut) {
+                    c.messages.splice(curIdx, 1);
+                } else {
+                    c.messages[curIdx] = {
                     ...c.messages[curIdx],
-                    text: wasAborted ? (fullText || '\u2026') : `\u91cd\u8bd5\u5931\u8d25\uff1a${err.message}`,
+                    text: textOut,
                     ...(fullThinking ? { thinking: fullThinking } : {}),
                     ...(fullToolCalls ? { toolCalls: fullToolCalls } : {}),
                     streaming: false,
                 };
+                }
             }
             render();
         }
@@ -6312,20 +6439,36 @@
 
     // Attach panel
     function renderAttachPanel() {
+        const c = byId(state.currentContactId) || state.contacts[0] || {};
+        const codexAllowed = state.currentView !== 'rpRoom' && canToggleCodexForContact(c);
+        const codexActive = isCodexEnabledForContact(c);
+        const ccAllowed = state.currentView !== 'rpRoom' && canToggleCCForContact(c);
+        const ccActive = isCCEnabledForContact(c);
+        const modeToggles = [
+            codexAllowed ? `<button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id || '')}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>` : '',
+            ccAllowed ? `<button class="codex-toggle cc-toggle ${ccActive ? 'active' : ''}" data-action="toggle-cc-mode" data-contact-id="${escapeHtml(c.id || '')}" type="button" aria-pressed="${ccActive}" aria-label="${ccActive ? '关闭 Claude Code' : '启用 Claude Code'}">${ccActive ? 'CC ON' : 'CC'}</button>` : '',
+        ].filter(Boolean).join('');
+        const quickActions = state.currentView === 'room'
+            ? getContactQuickActions(c).map(renderActionChip).join('')
+            : '';
         return `
       <div class="attach-panel glass-frost">
-        <button class="attach-option" data-action="attach-option" data-label="\u56fe\u7247">
-          <span class="attach-icon">\ud83d\uddbc\ufe0f</span><span>\u56fe\u7247</span>
-        </button>
-        <button class="attach-option" data-action="attach-option" data-label="\u6587\u4ef6">
-          <span class="attach-icon">\ud83d\udcc4</span><span>\u6587\u4ef6</span>
-        </button>
-        <button class="attach-option" data-action="attach-option" data-label="\u8bed\u97f3">
-          <span class="attach-icon">\ud83c\udfa4</span><span>\u8bed\u97f3</span>
-        </button>
-        <button class="attach-option" data-action="attach-option" data-label="\u62cd\u7167">
-          <span class="attach-icon">\ud83d\udcf8</span><span>\u62cd\u7167</span>
-        </button>
+        ${modeToggles ? `<div class="attach-mode-row">${modeToggles}</div>` : ''}
+        <div class="attach-grid">
+          <button class="attach-option" data-action="attach-option" data-label="\u56fe\u7247">
+            <span class="attach-icon">\ud83d\uddbc\ufe0f</span><span>\u56fe\u7247</span>
+          </button>
+          <button class="attach-option" data-action="attach-option" data-label="\u6587\u4ef6">
+            <span class="attach-icon">\ud83d\udcc4</span><span>\u6587\u4ef6</span>
+          </button>
+          <button class="attach-option" data-action="attach-option" data-label="\u8bed\u97f3">
+            <span class="attach-icon">\ud83c\udfa4</span><span>\u8bed\u97f3</span>
+          </button>
+          <button class="attach-option" data-action="attach-option" data-label="\u62cd\u7167">
+            <span class="attach-icon">\ud83d\udcf8</span><span>\u62cd\u7167</span>
+          </button>
+        </div>
+        ${quickActions ? `<div class="action-scroll attach-action-scroll">${quickActions}</div>` : ''}
       </div>
     `;
     }
@@ -9056,8 +9199,10 @@
 
     let lastCodexToggleEventAt = 0;
 
+    let lastCCToggleEventAt = 0;
+
     function handleCodexTogglePress(event) {
-        const target = event.target?.closest?.('.codex-toggle');
+        const target = event.target?.closest?.('.codex-toggle:not(.cc-toggle)');
         if (!target) return;
         const now = Date.now();
         if (now - lastCodexToggleEventAt < 320) {
@@ -9073,8 +9218,26 @@
         toggleCurrentCodexMode(target.dataset.contactId);
     }
 
+    function handleCCTogglePress(event) {
+        const target = event.target?.closest?.('.cc-toggle');
+        if (!target) return;
+        const now = Date.now();
+        if (now - lastCCToggleEventAt < 320) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation?.();
+            return;
+        }
+        lastCCToggleEventAt = now;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        toggleCurrentCCMode(target.dataset.contactId);
+    }
+
     ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach((eventName) => {
         document.addEventListener(eventName, handleCodexTogglePress, true);
+        document.addEventListener(eventName, handleCCTogglePress, true);
     });
 
     document.addEventListener('mousedown', (event) => {
