@@ -4864,7 +4864,7 @@
     function murmurHistoryMessageToStored(message = {}, contactId = '') {
         const role = String(message.role || '').toLowerCase() === 'user' ? 'user' : 'ai';
         const createdAt = String(message.created_at || '');
-        const content = String(message.content || '');
+        const content = messageTextValue(message);
         const model = String(message.model || '');
         return normalizeStoredMessage({
             id: message.id || `${contactId}|${role}|${createdAt}|${content}`,
@@ -4890,7 +4890,14 @@
             const data = await resp.json().catch(() => ({}));
             const history = (Array.isArray(data?.messages) ? data.messages : [])
                 .map((message) => murmurHistoryMessageToStored(message, contact.id))
-                .filter((message) => message.content);
+                .filter(isRenderableMessage);
+            if (window.__YUI_CHAT_DEBUG__) {
+                console.info('[murmur] history loaded', {
+                    agent_id: contact.id,
+                    raw: Array.isArray(data?.messages) ? data.messages.length : 0,
+                    renderable: history.length,
+                });
+            }
             if (!history.length) return;
 
             const beforeHash = snapshotHash({ conversations: state.conversations?.[contact.id] || [] });
