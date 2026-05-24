@@ -5369,6 +5369,7 @@
                 persistLocalSnapshot();
                 scheduleSyncPush(100);
             }
+            void hydrateVisibleContactHistories(contacts);
             render();
         } catch (error) {
             if (!silent) console.warn('[agents] load contacts failed', error);
@@ -5403,6 +5404,7 @@
                 persistLocalSnapshot();
                 scheduleSyncPush(100);
             }
+            void hydrateVisibleContactHistories(contacts);
             render();
         } catch (error) {
             if (!silent) console.warn('[murmur] load message agents failed', error);
@@ -5453,12 +5455,28 @@
             persistLocalSnapshot();
             scheduleSyncPush(100);
         }
+        void hydrateVisibleContactHistories(contacts);
         render();
     }
 
     async function loadContactsFromAllSources() {
         await loadContactsFromAgents();
         await loadContactsFromMessageAgents();
+        await hydrateVisibleContactHistories(state.contacts);
+    }
+
+    async function hydrateVisibleContactHistories(contacts = []) {
+        const ids = [...new Set((contacts || []).map((contact) => contact?.id).filter(Boolean))];
+        for (const id of ids) {
+            if (state.historyLoadingContactIds[id]) continue;
+            state.historyLoadingContactIds[id] = true;
+            try {
+                const count = await loadMurmurHistoryForContact(id);
+                if (count) state.historyLoadedContactIds[id] = true;
+            } finally {
+                delete state.historyLoadingContactIds[id];
+            }
+        }
     }
 
     function queueLocalSyncIfChanged(delay = 800) {
