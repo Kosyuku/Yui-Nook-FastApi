@@ -92,14 +92,15 @@ async def gateway_auth(request: Request, call_next):
 app.include_router(api)
 app.include_router(extra_api)
 
-frontend_dir = Path(__file__).parent.parent / "frontend"
-if frontend_dir.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
-
 
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "gateway": "pyro-gemini", "version": "0.2.0"}
+
+
+frontend_dir = Path(__file__).parent.parent / "frontend"
+if frontend_dir.exists():
+    app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
 
 if __name__ == "__main__":
