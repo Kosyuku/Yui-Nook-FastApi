@@ -261,6 +261,8 @@
             token: '',
             timer: null,
         },
+        historyLoadingContactIds: {},
+        historyLoadedContactIds: {},
         rpCurtainRunning: false,
     };
     const agentPersonaSaveTimers = new Map();
@@ -1031,6 +1033,7 @@
     `;
         bind();
         scrollToBottom();
+        ensureRoomHistoryLoaded(activeContact);
         if (!['room', 'rpRoom'].includes(state.currentView)) {
             restoreBodyScroll(savedScroll);
         }
@@ -1897,6 +1900,20 @@
         const conversations = state.conversations || {};
         const buckets = contactMessageKeys(contact).flatMap((key) => conversations[key] || []);
         return mergeMessageLists(buckets, Array.isArray(contact.messages) ? contact.messages : []);
+    }
+
+    function ensureRoomHistoryLoaded(contact = {}) {
+        if (state.currentView !== 'room' || !contact?.id) return;
+        if (conversationMessagesForContact(contact).length) return;
+        if (state.historyLoadingContactIds[contact.id] || state.historyLoadedContactIds[contact.id]) return;
+        state.historyLoadingContactIds[contact.id] = true;
+        loadMurmurHistoryForContact(contact.id)
+            .then((count) => {
+                if (count) state.historyLoadedContactIds[contact.id] = true;
+            })
+            .finally(() => {
+                delete state.historyLoadingContactIds[contact.id];
+            });
     }
 
     function renderActionChip(action) {
@@ -4903,7 +4920,7 @@
 
     async function loadMurmurHistoryForContact(contactId, { silent = true } = {}) {
         const contact = byId(contactId);
-        if (!contact?.id) return;
+        if (!contact?.id) return 0;
         try {
             const agentIds = contactMessageKeys(contact);
             const rawHistory = [];
@@ -4926,7 +4943,7 @@
                     renderable: history.length,
                 });
             }
-            if (!history.length) return;
+            if (!history.length) return 0;
 
             const beforeHash = snapshotHash({ conversations: conversationMessagesForContact(contact) });
             const merged = mergeMessageLists(conversationMessagesForContact(contact), history);
@@ -4944,8 +4961,10 @@
                 scheduleSyncPush(300);
             }
             if (state.currentContactId === contact.id && state.currentView === 'room') render();
+            return history.length;
         } catch (error) {
             if (!silent) console.warn('[murmur] history load failed', error);
+            return 0;
         }
     }
 
