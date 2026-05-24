@@ -4800,14 +4800,14 @@
             const normalized = normalizeStoredMessage(message);
             if (!isRenderableMessage(normalized)) return;
             const keys = [...messageMergeKeys(normalized)];
-            let existingIndex = keys.map((key) => keyToIndex.get(key)).find((index) => Number.isInteger(index));
-            if (!Number.isInteger(existingIndex)) {
+            let existingIndex = keys.map((key) => keyToIndex.get(key)).find((index) => index >= 0);
+            if (!(existingIndex >= 0)) {
                 existingIndex = merged.findIndex((item) => isSoftDuplicateMessage(item, normalized));
             }
-            const existing = Number.isInteger(existingIndex) ? merged[existingIndex] : null;
+            const existing = existingIndex >= 0 ? merged[existingIndex] : null;
             if (!existing || comparableTime(normalized.created_at) >= comparableTime(existing.created_at)) {
                 const next = { ...existing, ...normalized };
-                const index = Number.isInteger(existingIndex) ? existingIndex : merged.length;
+                const index = existingIndex >= 0 ? existingIndex : merged.length;
                 merged[index] = next;
                 [...messageMergeKeys(next)].forEach((key) => keyToIndex.set(key, index));
             }
@@ -4924,10 +4924,14 @@
         try {
             const agentIds = contactMessageKeys(contact);
             const rawHistory = [];
+            console.info('[murmur] history request', { contact_id: contact.id, tried: agentIds });
             for (const agentId of agentIds) {
                 const params = new URLSearchParams({ agent_id: agentId, limit: '200' });
                 const resp = await fetch(`${API_BASE}/api/murmur/messages?${params.toString()}`);
-                if (!resp.ok) continue;
+                if (!resp.ok) {
+                    console.warn('[murmur] history fetch failed', { agent_id: agentId, status: resp.status });
+                    continue;
+                }
                 const data = await resp.json().catch(() => ({}));
                 const rows = Array.isArray(data?.messages) ? data.messages : [];
                 rawHistory.push(...rows);
@@ -4935,14 +4939,13 @@
             const history = mergeMessageLists([], rawHistory
                 .map((message) => murmurHistoryMessageToStored(message, contact.id))
                 .filter(isRenderableMessage));
-            if (window.__YUI_CHAT_DEBUG__) {
-                console.info('[murmur] history loaded', {
-                    agent_id: contact.id,
-                    tried: agentIds,
-                    raw: rawHistory.length,
-                    renderable: history.length,
-                });
-            }
+            console.info('[murmur] history loaded', {
+                agent_id: contact.id,
+                tried: agentIds,
+                raw: rawHistory.length,
+                renderable: history.length,
+                first: history[0] || null,
+            });
             if (!history.length) return 0;
 
             const beforeHash = snapshotHash({ conversations: conversationMessagesForContact(contact) });
@@ -4963,7 +4966,7 @@
             if (state.currentContactId === contact.id && state.currentView === 'room') render();
             return history.length;
         } catch (error) {
-            if (!silent) console.warn('[murmur] history load failed', error);
+            console.error('[murmur] history load failed', error);
             return 0;
         }
     }
