@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import subprocess
@@ -9,12 +10,16 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 WORK_DIR: str = os.getenv('CLAUDE_TMUX_CWD', '/opt/Yui-Nook-FastApi')
-DEFAULT_TIMEOUT: int = int(os.getenv('CLAUDE_TMUX_TIMEOUT', '120'))
+DEFAULT_TIMEOUT: int = int(os.getenv('CLAUDE_TMUX_TIMEOUT', '300'))
 POLL_INTERVAL: float = 0.4
 STABLE_ROUNDS: int = 4
 COMPACT_EVERY: int = int(os.getenv('CLAUDE_TMUX_COMPACT_EVERY', '30'))
 COMPACT_TIMEOUT: int = int(os.getenv('CLAUDE_TMUX_COMPACT_TIMEOUT', '60'))
+# 抓 capture-pane 时往回滚多少行（工具调用产生大量输出时 50 行可见区不够）
+SCROLL_LINES: int = int(os.getenv('CLAUDE_TMUX_SCROLL_LINES', '300'))
 META_PATH: Path = Path(__file__).resolve().parent / 'data' / 'claude_tmux_meta.json'
 
 
@@ -105,7 +110,7 @@ def _create_session(name: str) -> None:
 
 
 def _capture_pane(name: str) -> str:
-    r = _tmux('capture-pane', '-t', name, '-p', '-e')
+    r = _tmux('capture-pane', '-t', name, '-p', '-e', '-S', f'-{SCROLL_LINES}')
     return r.stdout or ''
 
 
@@ -215,6 +220,11 @@ def _extract_reply(before: str, after: str) -> str:
             continue
         if re.match(r'^\*\s+\w', stripped):
             continue
+        # 过滤工具调用提示行（对用户不可见的内部状态）
+        if re.match(r'^Called\s+.+\(ctrl\+o', stripped):
+            continue
+        if re.match(r'^\(ctrl\+o', stripped):
+            continue
         reply_lines.append(stripped)
 
     return '\n'.join(reply_lines).strip()
@@ -248,10 +258,20 @@ def _wait_for_reply(session_name: str, before_pane: str, timeout: float) -> str:
         if re.match(r'^[✻✽]\s+', l.strip())
     }
 
+    # 如果 Claude 已经在我们开始等之前就回复完了，直接返回
+    _early = _capture_pane(session_name)
+    _early_clean = _strip_ansi(_early)
+    if _early_clean != before_clean and _has_prompt(_early_clean):
+        logger.info('[%s] early-done detected, returning immediately', session_name)
+        return _early
+
     deadline = time.time() + timeout
+    # spinner 未出现时的兜底：消息发出 N 秒后若 pane 有变化就不再等 ✻
+    thinking_fallback_at = time.time() + 12
     last_pane = ''
     stable_count = 0
     thinking_seen = False
+    t0 = time.time()
 
     while time.time() < deadline:
         time.sleep(POLL_INTERVAL)
@@ -259,25 +279,35 @@ def _wait_for_reply(session_name: str, before_pane: str, timeout: float) -> str:
         current_clean = _strip_ansi(current)
 
         if not thinking_seen:
+            # 正常路径：看到 ✻ 状态行
             for line in current_clean.splitlines():
                 stripped = line.strip()
                 if re.match(r'^[✻✽]\s+', stripped) and stripped not in before_status:
                     thinking_seen = True
-                    stable_count = 0
-                    last_pane = current
+                    logger.info('[%s] thinking_seen via spinner (%.1fs)', session_name, time.time() - t0)
                     break
+            # 兜底路径：超过等待时间后只要 pane 发生变化就认为开始处理了
+            if not thinking_seen and time.time() > thinking_fallback_at:
+                if current_clean != before_clean:
+                    thinking_seen = True
+                    logger.info('[%s] thinking_seen via fallback (%.1fs)', session_name, time.time() - t0)
 
-        if not thinking_seen:
+            if thinking_seen:
+                stable_count = 0
+                last_pane = current
             continue
 
         if current_clean == _strip_ansi(last_pane):
             stable_count += 1
             if stable_count >= STABLE_ROUNDS and _has_prompt(current_clean):
+                logger.info('[%s] stable+prompt after %.1fs', session_name, time.time() - t0)
                 return current
         else:
             stable_count = 0
         last_pane = current
 
+    elapsed = time.time() - t0
+    logger.warning('[%s] timed out after %.1fs (thinking_seen=%s)', session_name, elapsed, thinking_seen)
     return _capture_pane(session_name)
 
 
@@ -304,11 +334,38 @@ async def _lock_for(key: str) -> asyncio.Lock:
     return lock
 
 
+async def _progress_loop(
+    session_name: str,
+    before_pane: str,
+    stop: asyncio.Event,
+    callback,
+    interval: float = 3.0,
+) -> None:
+    """每 interval 秒抓一次 pane，把当前部分回复交给 callback。"""
+    last_sent = ''
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(asyncio.shield(stop.wait()), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop.is_set():
+            break
+        current = await asyncio.to_thread(_capture_pane, session_name)
+        partial = _extract_reply(before_pane, current)
+        if partial and partial != last_sent:
+            last_sent = partial
+            try:
+                await callback(partial)
+            except Exception:
+                pass
+
+
 async def claude_tmux_chat(
     conversation_key: str,
     content: str,
     reset: bool = False,
     timeout_seconds: float = DEFAULT_TIMEOUT,
+    on_progress=None,
 ) -> TmuxBridgeResult:
     key = conversation_key.strip()
     if not key:
@@ -337,13 +394,35 @@ async def claude_tmux_chat(
 
         await asyncio.to_thread(_dismiss_prompts, session_name)
         before_pane = await asyncio.to_thread(_capture_pane, session_name)
+        logger.info('[%s] sending msg #%d (len=%d)', session_name, meta.message_count + 1, len(content))
         await asyncio.to_thread(_send_message, session_name, content)
-        reply_pane = await asyncio.to_thread(
-            _wait_for_reply, session_name, before_pane, timeout_seconds
-        )
+
+        stop_event = asyncio.Event()
+        progress_task = None
+        if on_progress is not None:
+            progress_task = asyncio.create_task(
+                _progress_loop(session_name, before_pane, stop_event, on_progress)
+            )
+
+        try:
+            reply_pane = await asyncio.to_thread(
+                _wait_for_reply, session_name, before_pane, timeout_seconds
+            )
+        finally:
+            stop_event.set()
+            if progress_task:
+                try:
+                    await asyncio.wait_for(progress_task, timeout=2)
+                except Exception:
+                    pass
 
         reply = _extract_reply(before_pane, reply_pane)
+        logger.info('[%s] extract_reply len=%d before_lines=%d after_lines=%d',
+                    session_name, len(reply),
+                    len([l for l in _strip_ansi(before_pane).splitlines() if l.strip()]),
+                    len([l for l in _strip_ansi(reply_pane).splitlines() if l.strip()]))
         if not reply:
+            logger.warning('[%s] empty reply — sending fallback', session_name)
             reply = '（Claude 没有回复，可能还在思考中）'
 
         meta.message_count += 1

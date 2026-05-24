@@ -37,12 +37,31 @@ def _allowed_ids() -> set[int]:
     return ids
 
 
-async def _send(client: httpx.AsyncClient, token: str, chat_id: int, text: str) -> None:
+def _fmt(text: str) -> str:
+    """段落间加空行，让多段回复在 TG 里更好读。"""
+    lines = text.split('\n')
+    return '\n\n'.join(line for line in lines if line.strip()) if len(lines) > 1 else text
+
+
+async def _send(client: httpx.AsyncClient, token: str, chat_id: int, text: str) -> int | None:
+    """发送消息，返回 message_id（失败返回 None）。"""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        await client.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+        r = await client.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+        data = r.json()
+        if data.get("ok"):
+            return data["result"]["message_id"]
     except Exception as e:
         logger.error("sendMessage failed: %s", e)
+    return None
+
+
+async def _edit(client: httpx.AsyncClient, token: str, chat_id: int, message_id: int, text: str) -> None:
+    url = f"https://api.telegram.org/bot{token}/editMessageText"
+    try:
+        await client.post(url, json={"chat_id": chat_id, "message_id": message_id, "text": text}, timeout=10)
+    except Exception as e:
+        logger.error("editMessageText failed: %s", e)
 
 
 async def _handle(client: httpx.AsyncClient, token: str, message: dict) -> None:
@@ -59,15 +78,33 @@ async def _handle(client: httpx.AsyncClient, token: str, message: dict) -> None:
     if text.startswith("/"):
         return
 
+    # 先发占位消息，拿到 message_id 用于后续 edit
+    placeholder_id = await _send(client, token, chat_id, "…")
+
+    last_partial: dict = {"text": ""}
+
+    async def on_progress(partial: str) -> None:
+        if partial == last_partial["text"] or placeholder_id is None:
+            return
+        last_partial["text"] = partial
+        await _edit(client, token, chat_id, placeholder_id, partial + "\n▌")
+
     conversation_key = f"tg_{chat_id}"
     try:
-        result = await claude_tmux_chat(conversation_key=conversation_key, content=text)
+        result = await claude_tmux_chat(
+            conversation_key=conversation_key,
+            content=text,
+            on_progress=on_progress,
+        )
         reply = result.reply or "……"
     except Exception as e:
         logger.exception("claude_tmux_chat failed for %s", conversation_key)
         reply = f"出错了：{e}"
 
-    await _send(client, token, chat_id, reply)
+    if placeholder_id:
+        await _edit(client, token, chat_id, placeholder_id, _fmt(reply))
+    else:
+        await _send(client, token, chat_id, _fmt(reply))
 
 
 async def _poll_loop(token: str) -> None:
