@@ -114,12 +114,21 @@ def _capture_pane(name: str) -> str:
     return r.stdout or ''
 
 
-def _dismiss_prompts(name: str) -> None:
-    """清掉可能拦截输入的交互式对话框（评分、确认等）。"""
+_RATING_PROMPTS = (
+    'How is Claude doing this session',
+    'How are you enjoying Claude',
+    'Rate your experience',
+)
+
+
+def _dismiss_prompts(name: str) -> bool:
+    """清掉可能拦截输入的交互式对话框（评分、确认等）。返回是否触发了关闭。"""
     pane = _strip_ansi(_capture_pane(name))
-    if 'How is Claude doing this session' in pane:
+    if any(p in pane for p in _RATING_PROMPTS):
         _tmux('send-keys', '-t', name, '0', 'Enter')
-        time.sleep(1.5)
+        time.sleep(1.0)
+        return True
+    return False
 
 
 def _send_message(name: str, message: str) -> None:
@@ -220,10 +229,14 @@ def _extract_reply(before: str, after: str) -> str:
             continue
         if re.match(r'^\*\s+\w', stripped):
             continue
-        # 过滤工具调用提示行（对用户不可见的内部状态）
+        # 过滤工具调用提示行和打分框（对用户不可见的内部状态）
         if re.match(r'^Called\s+.+\(ctrl\+o', stripped):
             continue
         if re.match(r'^\(ctrl\+o', stripped):
+            continue
+        if any(p in stripped for p in _RATING_PROMPTS):
+            continue
+        if re.match(r'^\d+\.\s+(😞|😐|😊|Don\'t ask)', stripped):
             continue
         reply_lines.append(stripped)
 
@@ -277,6 +290,14 @@ def _wait_for_reply(session_name: str, before_pane: str, timeout: float) -> str:
         time.sleep(POLL_INTERVAL)
         current = _capture_pane(session_name)
         current_clean = _strip_ansi(current)
+
+        # 随时检测打分框/确认框，立即关掉
+        if any(p in current_clean for p in _RATING_PROMPTS):
+            logger.info('[%s] rating prompt detected, dismissing', session_name)
+            _tmux('send-keys', '-t', session_name, '0', 'Enter')
+            time.sleep(1.0)
+            stable_count = 0
+            continue
 
         if not thinking_seen:
             # 正常路径：看到 ✻ 状态行

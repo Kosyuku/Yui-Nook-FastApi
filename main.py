@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import consciousness
@@ -73,6 +75,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_GATEWAY_SECRET = os.getenv("GATEWAY_SECRET", "").strip()
+# 不需要鉴权的路径前缀（健康检查、activity-events 来自 iOS 快捷指令）
+_AUTH_EXEMPT = {"/api/health", "/api/activity-events"}
+
+@app.middleware("http")
+async def gateway_auth(request: Request, call_next):
+    path = request.url.path
+    if _GATEWAY_SECRET and path.startswith("/api") and path not in _AUTH_EXEMPT:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or auth[7:] != _GATEWAY_SECRET:
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
 
 app.include_router(api)
 app.include_router(extra_api)

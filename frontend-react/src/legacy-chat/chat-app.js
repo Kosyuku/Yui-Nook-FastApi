@@ -4679,11 +4679,11 @@
     function messageTextValue(message = {}) {
         return String(
             message.content
-            ?? message.text
-            ?? message.message
-            ?? message.body
-            ?? message.raw_content
-            ?? ''
+            || message.text
+            || message.message
+            || message.body
+            || message.raw_content
+            || ''
         ).trim();
     }
 
