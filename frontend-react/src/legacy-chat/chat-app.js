@@ -1878,6 +1878,14 @@
         loadAgentPersona(contactId);
     }
 
+    function scheduleCurrentRoomHistoryHydration(delay = 80) {
+        window.setTimeout(() => {
+            const contact = byId(state.currentContactId) || state.contacts[0];
+            if (!contact?.id) return;
+            void loadMurmurHistoryForContact(contact.id, { silent: false });
+        }, delay);
+    }
+
     function contactMessageKeys(contact = {}) {
         const rawKeys = [
             contact?.id,
@@ -4924,10 +4932,14 @@
         try {
             const agentIds = contactMessageKeys(contact);
             const rawHistory = [];
+            console.info('[murmur] history request', { contact_id: contact.id, tried: agentIds });
             for (const agentId of agentIds) {
                 const params = new URLSearchParams({ agent_id: agentId, limit: '200' });
                 const resp = await fetch(`${API_BASE}/api/murmur/messages?${params.toString()}`);
-                if (!resp.ok) continue;
+                if (!resp.ok) {
+                    console.warn('[murmur] history request failed', { agent_id: agentId, status: resp.status });
+                    continue;
+                }
                 const data = await resp.json().catch(() => ({}));
                 const rows = Array.isArray(data?.messages) ? data.messages : [];
                 rawHistory.push(...rows);
@@ -4935,14 +4947,13 @@
             const history = mergeMessageLists([], rawHistory
                 .map((message) => murmurHistoryMessageToStored(message, contact.id))
                 .filter(isRenderableMessage));
-            if (window.__YUI_CHAT_DEBUG__) {
-                console.info('[murmur] history loaded', {
-                    agent_id: contact.id,
-                    tried: agentIds,
-                    raw: rawHistory.length,
-                    renderable: history.length,
-                });
-            }
+            console.info('[murmur] history loaded', {
+                agent_id: contact.id,
+                tried: agentIds,
+                raw: rawHistory.length,
+                renderable: history.length,
+                first: history[0] || null,
+            });
             if (!history.length) return 0;
 
             const beforeHash = snapshotHash({ conversations: conversationMessagesForContact(contact) });
@@ -5463,6 +5474,7 @@
         await loadContactsFromAgents();
         await loadContactsFromMessageAgents();
         await hydrateVisibleContactHistories(state.contacts);
+        scheduleCurrentRoomHistoryHydration(120);
     }
 
     async function hydrateVisibleContactHistories(contacts = []) {
