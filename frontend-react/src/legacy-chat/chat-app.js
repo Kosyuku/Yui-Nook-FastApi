@@ -1875,6 +1875,30 @@
         loadAgentPersona(contactId);
     }
 
+    function contactMessageKeys(contact = {}) {
+        const rawKeys = [
+            contact?.id,
+            contact?.agent_id,
+            contact?.agentId,
+            contact?.handle,
+            String(contact?.handle || '').replace(/^@+/, ''),
+        ];
+        const keys = [];
+        rawKeys.forEach((key) => {
+            const raw = String(key || '').trim();
+            if (!raw) return;
+            keys.push(raw);
+            keys.push(normalizeNewContactAgentId(raw));
+        });
+        return [...new Set(keys.filter(Boolean))];
+    }
+
+    function conversationMessagesForContact(contact = {}) {
+        const conversations = state.conversations || {};
+        const buckets = contactMessageKeys(contact).flatMap((key) => conversations[key] || []);
+        return mergeMessageLists(buckets, Array.isArray(contact.messages) ? contact.messages : []);
+    }
+
     function renderActionChip(action) {
         const label = escapeHtml(action?.label || '');
         const iconName = action?.icon || 'more';
@@ -1890,10 +1914,7 @@
         const c = byId(state.currentContactId) || state.contacts[0];
         const quoteMoment = state.quoteMomentId ? getMoment(state.quoteMomentId) : null;
         const quoteMessage = state.quoteMessageId ? c.messages.find((item) => item.id === state.quoteMessageId) : null;
-        const messages = visibleChatMessages([
-            ...(state.conversations?.[c.id] || []),
-            ...(Array.isArray(c.messages) ? c.messages : []),
-        ]);
+        const messages = visibleChatMessages(conversationMessagesForContact(c));
         return `
       <section class="room-page room-theme-${c.theme}">
         <div class="messages-panel">
@@ -4884,24 +4905,31 @@
         const contact = byId(contactId);
         if (!contact?.id) return;
         try {
-            const params = new URLSearchParams({ agent_id: contact.id, limit: '200' });
-            const resp = await fetch(`${API_BASE}/api/murmur/messages?${params.toString()}`);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const data = await resp.json().catch(() => ({}));
-            const history = (Array.isArray(data?.messages) ? data.messages : [])
+            const agentIds = contactMessageKeys(contact);
+            const rawHistory = [];
+            for (const agentId of agentIds) {
+                const params = new URLSearchParams({ agent_id: agentId, limit: '200' });
+                const resp = await fetch(`${API_BASE}/api/murmur/messages?${params.toString()}`);
+                if (!resp.ok) continue;
+                const data = await resp.json().catch(() => ({}));
+                const rows = Array.isArray(data?.messages) ? data.messages : [];
+                rawHistory.push(...rows);
+            }
+            const history = mergeMessageLists([], rawHistory
                 .map((message) => murmurHistoryMessageToStored(message, contact.id))
-                .filter(isRenderableMessage);
+                .filter(isRenderableMessage));
             if (window.__YUI_CHAT_DEBUG__) {
                 console.info('[murmur] history loaded', {
                     agent_id: contact.id,
-                    raw: Array.isArray(data?.messages) ? data.messages.length : 0,
+                    tried: agentIds,
+                    raw: rawHistory.length,
                     renderable: history.length,
                 });
             }
             if (!history.length) return;
 
-            const beforeHash = snapshotHash({ conversations: state.conversations?.[contact.id] || [] });
-            const merged = mergeMessageLists(state.conversations?.[contact.id] || contact.messages || [], history);
+            const beforeHash = snapshotHash({ conversations: conversationMessagesForContact(contact) });
+            const merged = mergeMessageLists(conversationMessagesForContact(contact), history);
             state.conversations = { ...(state.conversations || {}), [contact.id]: merged };
             contact.messages = merged.map(contactMessageFromStored);
             const last = contact.messages[contact.messages.length - 1];
