@@ -2536,6 +2536,26 @@ async def list_curio_items(
     return {"items": items, "total": len(items)}
 
 
+@extra_api.get("/artifacts")
+async def list_artifacts(
+    type: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    tag: Optional[str] = None,
+    pinned: Optional[bool] = None,
+    limit: int = Query(default=80, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    items = await db.list_artifact_items(
+        type=type,
+        agent_id=agent_id,
+        tag=tag,
+        pinned=pinned,
+        limit=limit,
+        offset=offset,
+    )
+    return {"items": [_artifact_api_item(item) for item in items], "total": len(items)}
+
+
 @extra_api.post("/curio/items")
 async def create_curio_item(body: CurioItemCreate):
     try:
@@ -2545,12 +2565,39 @@ async def create_curio_item(body: CurioItemCreate):
     return {"item": item}
 
 
+def _artifact_api_item(item: dict[str, Any]) -> dict[str, Any]:
+    storage_mode = str(item.get("storage_mode") or "inline")
+    content = str(item.get("content") or "")
+    return {
+        **item,
+        "storage_mode": storage_mode,
+        "object_key": str(item.get("object_key") or (content if storage_mode == "r2" else "")),
+    }
+
+
+@extra_api.post("/artifacts")
+async def create_artifact(body: CurioItemCreate):
+    try:
+        item = await db.create_artifact_item(**_prepare_curio_create_payload(body))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"item": _artifact_api_item(item)}
+
+
 @extra_api.get("/curio/items/{item_id}")
 async def get_curio_item(item_id: str):
     item = await db.get_artifact_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="artifact 不存在")
     return {"item": item}
+
+
+@extra_api.get("/artifacts/{item_id}")
+async def get_artifact(item_id: str):
+    item = await db.get_artifact_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    return {"item": _artifact_api_item(item)}
 
 
 @extra_api.get("/curio/items/{item_id}/url")
@@ -2587,8 +2634,31 @@ async def update_curio_item(item_id: str, body: CurioItemUpdate):
     return {"ok": True}
 
 
+@extra_api.patch("/artifacts/{item_id}")
+async def update_artifact(item_id: str, body: CurioItemUpdate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="没有需要更新的字段")
+    try:
+        ok = await db.update_artifact_item(item_id, **updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not ok:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    item = await db.get_artifact_item(item_id)
+    return {"ok": True, "item": _artifact_api_item(item) if item else None}
+
+
 @extra_api.delete("/curio/items/{item_id}")
 async def delete_curio_item(item_id: str):
+    ok = await db.delete_artifact_item(item_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    return {"ok": True}
+
+
+@extra_api.delete("/artifacts/{item_id}")
+async def delete_artifact(item_id: str):
     ok = await db.delete_artifact_item(item_id)
     if not ok:
         raise HTTPException(status_code=404, detail="artifact 不存在")
@@ -2603,12 +2673,30 @@ async def pin_curio_item(item_id: str):
     return {"ok": True}
 
 
+@extra_api.post("/artifacts/{item_id}/pin")
+async def pin_artifact(item_id: str):
+    ok = await db.update_artifact_item(item_id, is_pinned=True)
+    if not ok:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    item = await db.get_artifact_item(item_id)
+    return {"ok": True, "item": _artifact_api_item(item) if item else None}
+
+
 @extra_api.delete("/curio/items/{item_id}/pin")
 async def unpin_curio_item(item_id: str):
     ok = await db.update_artifact_item(item_id, is_pinned=False)
     if not ok:
         raise HTTPException(status_code=404, detail="artifact 不存在")
     return {"ok": True}
+
+
+@extra_api.delete("/artifacts/{item_id}/pin")
+async def unpin_artifact(item_id: str):
+    ok = await db.update_artifact_item(item_id, is_pinned=False)
+    if not ok:
+        raise HTTPException(status_code=404, detail="artifact 不存在")
+    item = await db.get_artifact_item(item_id)
+    return {"ok": True, "item": _artifact_api_item(item) if item else None}
 
 
 @extra_api.post("/curio/upload")
