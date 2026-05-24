@@ -309,7 +309,7 @@ async def claude_tmux_chat(
     content: str,
     reset: bool = False,
     timeout_seconds: float = DEFAULT_TIMEOUT,
-):
+) -> TmuxBridgeResult:
     key = conversation_key.strip()
     if not key:
         raise ValueError('conversation_key is required')
@@ -349,7 +349,7 @@ async def claude_tmux_chat(
         meta.message_count += 1
         _save_session_meta(key, meta)
 
-        yield TmuxBridgeResult(
+        return TmuxBridgeResult(
             conversation_key=key,
             session_name=session_name,
             reply=reply,
