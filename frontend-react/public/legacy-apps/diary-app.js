@@ -201,6 +201,20 @@
   // ─── Amber label colors ───────────────────────────────────────
   const AMBER_LABEL_COLORS = ['#a78ec7', '#e07b8a', '#e0a87b', '#7bbce0', '#7be0a8', '#c7a78e', '#b5b5b5'];
 
+  // ─── Predefined extraction tags ──────────────────────────────
+  const AMBER_PRESET_TAGS = [
+    { key: 'fact',     name: 'fact',     color: '#a78ec7' },
+    { key: 'taste',    name: 'taste',    color: '#e07b8a' },
+    { key: 'mood',     name: 'mood',     color: '#7bbce0' },
+    { key: 'stance',   name: 'stance',   color: '#e0a87b' },
+    { key: 'lore',     name: 'lore',     color: '#7be0a8' },
+    { key: 'moment',   name: 'moment',   color: '#c7a78e' },
+    { key: 'ritual',   name: 'ritual',   color: '#b5a8d4' },
+    { key: 'intimate', name: 'intimate', color: '#e07ba8' },
+    { key: 'project',  name: 'project',  color: '#7bc0e0' },
+    { key: 'creation', name: 'creation', color: '#c7b87b' },
+  ];
+
   // ─── State ────────────────────────────────────────────────────
   const state = {
     mountEl: null,
@@ -1211,6 +1225,35 @@
           </div>`;
     }).join('');
 
+    // Tag statistics bars — preset tags + custom labels
+    const tagStatsHtml = (() => {
+      const byCategory = s.by_category || {};
+      const presetRows = AMBER_PRESET_TAGS.map((t) => ({
+        name: t.name, color: t.color, count: byCategory[t.key] || 0, preset: true,
+      }));
+      const customRows = labels.map((l) => ({
+        name: l.name, color: l.color, count: l.count, preset: false,
+      }));
+      const allRows = [...presetRows, ...customRows];
+      const maxCount = Math.max(...allRows.map((r) => r.count), 1);
+      const renderRow = (r) => {
+        const pct = Math.max(r.count > 0 ? 3 : 0, Math.round((r.count / maxCount) * 100));
+        return `
+          <div class="ambs-tag-bar-row${r.count === 0 ? ' is-empty' : ''}">
+            <span class="ambs-tag-bar-name">${escapeHtml(r.name)}</span>
+            <div class="ambs-tag-bar-track">
+              <div class="ambs-tag-bar-fill" style="width:${pct}%;background:${escapeHtml(r.color)}"></div>
+            </div>
+            <span class="ambs-tag-bar-count">${r.count || ''}</span>
+          </div>`;
+      };
+      const presetHtml = presetRows.map(renderRow).join('');
+      const customHtml = customRows.length
+        ? `<div class="ambs-tag-bar-divider"></div>${customRows.map(renderRow).join('')}`
+        : '';
+      return presetHtml + customHtml;
+    })();
+
     const body = `
         ${loading && !stats ? '<p class="ambs-loading">加载中…</p>' : ''}
         <div class="ambs-module">
@@ -1237,6 +1280,14 @@
           ${newLabelForm}
           ${labelsHtml}
           ${!labels.length && !state.amberNewLabelOpen ? '<p class="ambs-empty">还没有标签，建一个吧</p>' : ''}
+        </div>
+
+        <div class="ambs-module">
+          <div class="ambs-module-hd">
+            <span class="ambs-module-title">标签统计</span>
+            <span class="ambs-module-badge">${AMBER_PRESET_TAGS.length + labels.length}</span>
+          </div>
+          <div class="ambs-tag-bars">${tagStatsHtml}</div>
         </div>`;
 
     return `

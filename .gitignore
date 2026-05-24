@@ -14,6 +14,8 @@ service-account.json
 
 # ── Claude Code local settings ───────────────────────────────────────────────
 .claude/settings.local.json
+.claude/worktrees/
+*.bak
 
 # ── Python ───────────────────────────────────────────────────────────────────
 # 鈹€鈹€ Claude Code local settings 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€

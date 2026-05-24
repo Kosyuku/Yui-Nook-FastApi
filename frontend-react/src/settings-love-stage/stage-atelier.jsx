@@ -48,6 +48,7 @@ const DEFAULT_LOVE_WIDGET_CONFIG = {
   glass: 84,
   accentIdx: 0,
   wallIdx: 0,
+  customWallpaper: '',
   order: null,
   info: {
     startDate: '2026-03-01',
@@ -126,6 +127,7 @@ function StageAtelierScreen({ onClose } = {}) {
   const [glass, setGlass] = use4(initialConfig.glass);
   const [accentIdx, setAccentIdx] = use4(initialConfig.accentIdx);
   const [wallIdx, setWallIdx] = use4(initialConfig.wallIdx);
+  const [customWallpaper, setCustomWallpaper] = use4(initialConfig.customWallpaper || '');
   const PALETTES = [
     { name: '茉莉粉紫', en: 'jasmine', colors: ['#E8DEF5', '#B7A3D9', '#8E76B8', '#E8B5B5'], bg: 'linear-gradient(180deg, #C9B8E0, #DCC4D6, #E8C8B8)' },
     { name: '盛夏鹅黄', en: 'midsummer', colors: ['#F5EBD4', '#E8D5A8', '#B08458', '#D9A5A0'], bg: 'linear-gradient(180deg, #F5EBD4, #E8D5A8, #D9A5A0)' },
@@ -133,7 +135,7 @@ function StageAtelierScreen({ onClose } = {}) {
     { name: '初春鼠尾草', en: 'sage', colors: ['#DDE8D7', '#B5C8B0', '#7B9676', '#F4DCC4'], bg: 'linear-gradient(180deg, #DDE8D7, #B5C8B0, #F4DCC4)' },
   ];
   const accent = PALETTES[accentIdx].colors[2];
-  const wall = PALETTES[wallIdx].bg;
+  const wall = customWallpaper ? `url("${customWallpaper}") center / cover no-repeat` : PALETTES[wallIdx].bg;
   const [info, setInfo] = use4(initialConfig.info);
 
   const days = calcDaysTogether(info.startDate);
@@ -165,6 +167,7 @@ function StageAtelierScreen({ onClose } = {}) {
         if (typeof remote.glass === 'number') setGlass(remote.glass);
         if (typeof remote.accentIdx === 'number') setAccentIdx(remote.accentIdx);
         if (typeof remote.wallIdx === 'number') setWallIdx(remote.wallIdx);
+        if (typeof remote.customWallpaper === 'string') setCustomWallpaper(remote.customWallpaper);
       })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -273,7 +276,7 @@ function StageAtelierScreen({ onClose } = {}) {
   };
 
   const currentConfig = (liveInfo = {}) => ({
-    tab, widgetId, size, aiId, order, glass, accentIdx, wallIdx,
+    tab, widgetId, size, aiId, order, glass, accentIdx, wallIdx, customWallpaper,
     aiLabel: currentAi.label,
     aiTone: currentAi.tone,
     info: { ...info, ...liveInfo },
@@ -302,6 +305,7 @@ function StageAtelierScreen({ onClose } = {}) {
     setGlass(next.glass);
     setAccentIdx(next.accentIdx);
     setWallIdx(next.wallIdx);
+    setCustomWallpaper(next.customWallpaper || '');
     setInfo(next.info);
     saveLoveWidgetConfig(next);
   };
@@ -349,7 +353,7 @@ function StageAtelierScreen({ onClose } = {}) {
       </div>
 
       {tab === 'desktop' ? (
-        <DesktopTab T={T} F={F} accent={accent} accentIdx={accentIdx} setAccentIdx={setAccentIdx} wall={wall} wallIdx={wallIdx} setWallIdx={setWallIdx} PALETTES={PALETTES} />
+        <DesktopTab T={T} F={F} accent={accent} accentIdx={accentIdx} setAccentIdx={setAccentIdx} wall={wall} wallIdx={wallIdx} setWallIdx={setWallIdx} customWallpaper={customWallpaper} setCustomWallpaper={setCustomWallpaper} PALETTES={PALETTES} />
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <DesktopStage {...{ T, F, Widget, widgetProps, effectiveSize, meta, glass }} />
@@ -438,9 +442,9 @@ function DesktopStage({ T, F, Widget, widgetProps, effectiveSize, meta, glass })
             <div style={{ fontFamily: F.serifCn, fontSize: 12, color: T.inkSoft, marginTop: 2 }}>{meta?.tagline}</div>
           </div>
 
-          {/* solo 缩略卡片，错落 */}
-          <div style={{ background: T.card, borderRadius: 6, padding: 8, transform: 'rotate(-2deg)', boxShadow: '0 4px 12px -8px rgba(110,100,140,0.4)', alignSelf: 'flex-start' }}>
-            <div style={{ width: 110, height: 60, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.cardSoft, borderRadius: 4 }}>
+          {/* solo 缩略预览 */}
+          <div style={{ padding: 0, transform: 'rotate(-2deg)', alignSelf: 'flex-start' }}>
+            <div style={{ width: 110, height: 60, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div style={{ transform: 'scale(0.30)', transformOrigin: 'center' }}>
                 <Widget {...widgetProps} size={effectiveSize === 'L' ? 'M' : effectiveSize} />
               </div>
@@ -506,7 +510,7 @@ function CreamDrawer({
 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '6px 14px 10px' }}>
         {drawerSection === 'layout' && <LayoutPanelLight {...{ T, F, META, RENDERERS, widgetId, setWidgetId, widgetProps, order, draggingId, setDraggingId, handleReorder }} />}
-        {drawerSection === 'size' && <SizePanelLight {...{ T, F, size, setSize, supportedSizes, effectiveSize }} />}
+        {drawerSection === 'size' && <SizePanelLight {...{ T, F, size, setSize, supportedSizes, effectiveSize, glass, setGlass }} />}
         {drawerSection === 'ai' && <AiPanelLight {...{ T, F, ais, aiId, setAiId, pickAiLine, info, setInfo, dailyLines, dailyLinesLoading }} />}
         {drawerSection === 'info' && <InfoPanelLight {...{ T, F, info, setInfo, glass, setGlass }} />}
       </div>
@@ -540,11 +544,11 @@ function LayoutPanelLight({ T, F, META, RENDERERS, widgetId, setWidgetId, widget
               onClick={() => setWidgetId(id)}
               style={{
                 position: 'relative',
-                background: active ? T.lilacWash : T.cardSoft,
+                background: active ? 'rgba(232,222,245,0.34)' : 'transparent',
                 border: active ? `1.5px solid ${T.lilacDeep}` : `1px solid ${T.rule}`,
                 borderRadius: 8, padding: 10, cursor: 'pointer',
                 transform: active ? 'rotate(0)' : `rotate(${(i % 2 === 0 ? -1 : 1) * 1.2}deg)`,
-                boxShadow: active ? '0 6px 14px -8px rgba(142,118,184,0.4)' : '0 2px 8px -6px rgba(110,100,140,0.3)',
+                boxShadow: active ? '0 0 0 3px rgba(142,118,184,0.10)' : 'none',
                 opacity: draggingId === id ? 0.5 : 1, transition: 'border-color 0.15s, box-shadow 0.15s',
               }}>
               <div style={{ height: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
@@ -659,8 +663,6 @@ function AiPanelLight({ T, F, ais, aiId, setAiId, pickAiLine, info, setInfo, dai
 }
 
 function InfoPanelLight({ T, F, info, setInfo, glass, setGlass }) {
-  const leftInput = useRef4(null);
-  const rightInput = useRef4(null);
   const compressAvatar = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = reject;
@@ -712,29 +714,26 @@ function InfoPanelLight({ T, F, info, setInfo, glass, setGlass }) {
       {/* 头像替换 */}
       <div style={{ marginTop: 18 }}>
         <PanelHeader F={F} T={T} cn="头像" en="avatar" />
-        {/* 隐藏的 file input 放在 button 外面，避免嵌套 interactive element */}
-        <input ref={leftInput} type="file" accept="image/*" style={{ display: 'none' }}
-          onChange={e => { pickAvatar('leftAvatar', e.target.files?.[0]); e.target.value = ''; }} />
-        <input ref={rightInput} type="file" accept="image/*" style={{ display: 'none' }}
-          onChange={e => { pickAvatar('rightAvatar', e.target.files?.[0]); e.target.value = ''; }} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
           {[
-            { side: '左', tone: 'butter', label: info.leftName.charAt(0), key: 'leftAvatar', src: info.leftAvatar, ref: leftInput },
-            { side: '右', tone: 'lilac',  label: info.rightName.charAt(0), key: 'rightAvatar', src: info.rightAvatar, ref: rightInput },
+            { side: '左', tone: 'butter', label: info.leftName.charAt(0), key: 'leftAvatar', src: info.leftAvatar },
+            { side: '右', tone: 'lilac',  label: info.rightName.charAt(0), key: 'rightAvatar', src: info.rightAvatar },
           ].map((a, i) => (
-            <button key={a.key} onClick={() => a.ref.current?.click()} style={{
+            <label key={a.key} style={{
               background: T.cardSoft, border: `1px solid ${T.rule}`,
               borderRadius: 8, padding: 10, cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: 10,
               transform: `rotate(${i % 2 === 0 ? -0.8 : 0.8}deg)`,
               boxShadow: '0 2px 8px -6px rgba(110,100,140,0.3)',
             }}>
+              <input type="file" accept="image/*" style={visuallyHiddenFileInput}
+                onChange={e => { pickAvatar(a.key, e.target.files?.[0]); e.target.value = ''; }} />
               <window.AvatarPlaceholder tone={a.tone} size={36} label={a.label} src={a.src} />
               <div style={{ textAlign: 'left' }}>
                 <div style={{ fontFamily: F.serifCn, fontSize: 13, fontWeight: 500, color: T.ink }}>{a.side}头像</div>
                 <div style={{ fontFamily: F.serifCn, fontSize: 10, color: T.inkSoft, marginTop: 2 }}>点击替换 ↻</div>
               </div>
-            </button>
+            </label>
           ))}
         </div>
       </div>
@@ -750,6 +749,15 @@ function InfoPanelLight({ T, F, info, setInfo, glass, setGlass }) {
     </div>
   );
 }
+
+const visuallyHiddenFileInput = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  opacity: 0,
+  overflow: 'hidden',
+  pointerEvents: 'none',
+};
 
 function PanelHeader({ cn, en, F, T }) {
   return (
@@ -778,7 +786,7 @@ function lightInput(F, T) {
 }
 
 // ============ 桌面 Tab ============
-function DesktopTab({ T, F, accent, accentIdx, setAccentIdx, wall, wallIdx, setWallIdx, PALETTES }) {
+function DesktopTab({ T, F, accent, accentIdx, setAccentIdx, wall, wallIdx, setWallIdx, customWallpaper, setCustomWallpaper, PALETTES }) {
   const [sub, setSub] = use4('home');
   const subs = [
     { id: 'home', label: '主页面', en: 'home' },
@@ -804,7 +812,7 @@ function DesktopTab({ T, F, accent, accentIdx, setAccentIdx, wall, wallIdx, setW
         })}
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 18px 18px', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
-        {sub === 'home' && <HomeSubTab T={T} F={F} accent={accent} wall={wall} wallIdx={wallIdx} setWallIdx={setWallIdx} PALETTES={PALETTES} />}
+        {sub === 'home' && <HomeSubTab T={T} F={F} accent={accent} wall={wall} wallIdx={wallIdx} setWallIdx={setWallIdx} customWallpaper={customWallpaper} setCustomWallpaper={setCustomWallpaper} PALETTES={PALETTES} />}
         {sub === 'app' && <AppSubTab T={T} F={F} accent={accent} />}
         {sub === 'theme' && <ThemeSubTab T={T} F={F} accent={accent} accentIdx={accentIdx} setAccentIdx={setAccentIdx} PALETTES={PALETTES} />}
       </div>
@@ -812,7 +820,7 @@ function DesktopTab({ T, F, accent, accentIdx, setAccentIdx, wall, wallIdx, setW
   );
 }
 
-function HomeSubTab({ T, F, accent, wall, wallIdx, setWallIdx, PALETTES }) {
+function HomeSubTab({ T, F, accent, wall, wallIdx, setWallIdx, customWallpaper, setCustomWallpaper, PALETTES }) {
   const [page, setPage] = use4(0);
   const [fontScale, setFontScale] = use4(100);
   const [mode, setMode] = use4('sys');
@@ -835,7 +843,13 @@ function HomeSubTab({ T, F, accent, wall, wallIdx, setWallIdx, PALETTES }) {
     );
   };
 
-  const wallName = PALETTES[wallIdx]?.name || '雾紫韵';
+  const wallName = customWallpaper ? '自定义图片' : (PALETTES[wallIdx]?.name || '雾紫韵');
+  const pickWallpaper = (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = event => setCustomWallpaper(String(event.target?.result || ''));
+    reader.readAsDataURL(file);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -890,14 +904,18 @@ function HomeSubTab({ T, F, accent, wall, wallIdx, setWallIdx, PALETTES }) {
               {PALETTES.map((p, i) => {
                 const sel = wallIdx === i;
                 return (
-                  <button key={i} onClick={() => setWallIdx(i)} style={{ all: 'unset', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                  <button key={i} onClick={() => { setWallIdx(i); setCustomWallpaper(''); }} style={{ all: 'unset', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
                     <div style={{ width: '100%', aspectRatio: '9/16', borderRadius: 8, background: p.bg, border: sel ? `2px solid ${accent}` : `1px solid ${T.rule}`, boxShadow: sel ? `0 4px 12px -4px ${accent}66` : 'none', boxSizing: 'border-box' }} />
                     <div style={{ fontFamily: F.serifCn, fontSize: 10, color: sel ? accent : T.inkSoft, fontWeight: sel ? 500 : 400 }}>{p.name}</div>
                   </button>
                 );
               })}
             </div>
-            <button style={{ width: '100%', marginTop: 10, padding: '10px', background: 'transparent', border: `1.5px dashed ${T.ruleStrong}`, borderRadius: 8, fontFamily: F.serifCn, fontSize: 12, color: T.inkSoft, cursor: 'pointer' }}>+ 上传自己的图片</button>
+            <label style={{ width: '100%', marginTop: 10, padding: '10px', background: 'transparent', border: `1.5px dashed ${T.ruleStrong}`, borderRadius: 8, fontFamily: F.serifCn, fontSize: 12, color: T.inkSoft, cursor: 'pointer', display: 'grid', placeItems: 'center', boxSizing: 'border-box', position: 'relative' }}>
+              + 上传自己的图片
+              <input type="file" accept="image/*" style={visuallyHiddenFileInput}
+                onChange={e => { pickWallpaper(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
           </div>
         )}
 
@@ -963,6 +981,15 @@ function AppSubTab({ T, F }) {
     const next=[...list]; const [m]=next.splice(from,1); next.splice(to,0,m); setList(next);
   };
   const removeItem = (list, setList, id) => setList(list.filter(x=>x.id!==id));
+  const setCustomIcon = (list, setList, id, file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = event => {
+      const image = String(event.target?.result || '');
+      setList(list.map(item => item.id === id ? { ...item, image, custom: true } : item));
+    };
+    reader.readAsDataURL(file);
+  };
 
   const Tile = ({ a, list, setList, isDock }) => (
     <div
@@ -985,7 +1012,9 @@ function AppSubTab({ T, F }) {
         fontFamily: F.serifCn, fontSize: 20, fontWeight: 500,
         boxShadow: '0 3px 10px -4px rgba(110,100,140,0.4)', position: 'relative',
       }}>
-        {a.glyph}
+        {a.image ? (
+          <img src={a.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 12, display: 'block' }} />
+        ) : a.glyph}
         {edit && (
           <button onClick={(e)=>{e.stopPropagation();removeItem(list,setList,a.id);}} style={{
             position: 'absolute', top: -6, left: -6, width: 18, height: 18, borderRadius: '50%',
@@ -996,13 +1025,17 @@ function AppSubTab({ T, F }) {
           }}>×</button>
         )}
         {edit && (
-          <button title="上传自定义图标" onClick={(e)=>e.stopPropagation()} style={{
+          <label title="上传自定义图标" onClick={(e)=>e.stopPropagation()} style={{
             position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: '50%',
             background: T.butter, border: 'none', color: '#fff',
             fontSize: 10, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: '0 2px 6px -2px rgba(0,0,0,0.2)',
-          }}>☆</button>
+          }}>
+            ☆
+            <input type="file" accept="image/*" style={visuallyHiddenFileInput}
+              onChange={e => { setCustomIcon(list, setList, a.id, e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
         )}
       </div>
       <div style={{ fontFamily: F.serifCn, fontSize: 10, color: T.ink, textAlign: 'center', maxWidth: 56, overflow:'hidden', textOverflow:'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
@@ -1231,4 +1264,3 @@ function ToggleRow({ label, value, onChange, F, T }) {
 window.StageAtelierScreen = StageAtelierScreen;
 
 export default StageAtelierScreen;
-

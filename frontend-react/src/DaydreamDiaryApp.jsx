@@ -42,6 +42,19 @@ const MEMORY_CATEGORY_LABELS = {
 };
 const MEMORY_AGENT_LABELS = {};
 const AGENT_BOOK_PROFILES = {};
+
+const PRESET_TAGS = [
+  { key: "fact",     color: "#a78ec7" },
+  { key: "taste",    color: "#e07b8a" },
+  { key: "mood",     color: "#7bbce0" },
+  { key: "stance",   color: "#e0a87b" },
+  { key: "lore",     color: "#7be0a8" },
+  { key: "moment",   color: "#c7a78e" },
+  { key: "ritual",   color: "#b5a8d4" },
+  { key: "intimate", color: "#e07ba8" },
+  { key: "project",  color: "#7bc0e0" },
+  { key: "creation", color: "#c7b87b" },
+];
 const ENTRY_DRAFT_STORAGE_KEY = "daydream-entry-draft-v1";
 
 const DEMO_ENTRIES = {
@@ -886,8 +899,8 @@ function MemoryPanel({ memories, books, apiBase = "", agentNames = {}, onLoad })
 
   return (
     <div style={{ height: "100%", minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "10px 20px calc(110px + env(safe-area-inset-bottom, 0px))", background: "#faf9f7", fontFamily: F.serifCn, color: "#3b3633" }}>
-      <header style={{ padding: "10px 4px 20px" }}>
-        <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", marginBottom: 24 }}>
+      <header style={{ padding: "0 4px 10px" }}>
+        <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", marginBottom: amberView === "stats" ? 10 : 18 }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
             <h1 style={{ fontFamily: F.serifEn, fontSize: 42, fontStyle: "italic", fontWeight: 500, color: "#3b3633", margin: 0, lineHeight: 1, letterSpacing: "0.02em" }}>Amber</h1>
             <span style={{ fontSize: 14, color: "rgba(160,150,145,0.8)", letterSpacing: "0.2em" }}>{amberView === "stats" ? "统计" : "语珀"}</span>
@@ -987,6 +1000,46 @@ function MemoryPanel({ memories, books, apiBase = "", agentNames = {}, onLoad })
               <p style={{ margin: 0, padding: "10px 15px 14px", color: "rgba(180,170,165,0.72)", fontSize: 13 }}>还没有标签，建一个吧</p>
             )}
           </AmberModule>
+          {(() => {
+            const catMap = new Map(stats.categories.map((c) => [c.name, c.count]));
+            const presetRows = PRESET_TAGS.map((t) => ({ name: t.key, color: t.color, count: catMap.get(t.key) || 0 }));
+            const customRows = customTags.map((t) => ({ name: t.name, color: t.color || "#b5b5b5", count: Number(t.count || 0) }));
+            const allRows = [...presetRows, ...customRows];
+            const maxCount = Math.max(...allRows.map((r) => r.count), 1);
+            const rowStyle = (empty) => ({ display: "flex", alignItems: "center", gap: 8, opacity: empty ? 0.38 : 1 });
+            const nameStyle = { width: 64, fontSize: 12, color: "rgba(80,58,105,.72)", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "right" };
+            const trackStyle = { flex: 1, height: 7, background: "rgba(200,170,210,.15)", borderRadius: 4, overflow: "hidden" };
+            const countStyle = { width: 24, fontSize: 11, color: "rgba(120,92,148,.55)", flexShrink: 0, textAlign: "right" };
+            return (
+              <AmberModule title="标签统计" badge={PRESET_TAGS.length + customTags.length}>
+                <div style={{ padding: "10px 14px 14px", display: "flex", flexDirection: "column", gap: 9 }}>
+                  {presetRows.map((r) => (
+                    <div key={r.name} style={rowStyle(r.count === 0)}>
+                      <span style={nameStyle}>{r.name}</span>
+                      <div style={trackStyle}>
+                        <div style={{ height: "100%", borderRadius: 4, opacity: 0.72, width: `${Math.max(r.count > 0 ? 3 : 0, Math.round((r.count / maxCount) * 100))}%`, background: r.color, transition: "width .4s ease" }} />
+                      </div>
+                      <span style={countStyle}>{r.count || ""}</span>
+                    </div>
+                  ))}
+                  {customRows.length > 0 && (
+                    <>
+                      <div style={{ height: 1, background: "rgba(200,170,210,.15)", margin: "0" }} />
+                      {customRows.map((r) => (
+                        <div key={r.name} style={rowStyle(r.count === 0)}>
+                          <span style={nameStyle}>{r.name}</span>
+                          <div style={trackStyle}>
+                            <div style={{ height: "100%", borderRadius: 4, opacity: 0.72, width: `${Math.max(r.count > 0 ? 3 : 0, Math.round((r.count / maxCount) * 100))}%`, background: r.color, transition: "width .4s ease" }} />
+                          </div>
+                          <span style={countStyle}>{r.count || ""}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </AmberModule>
+            );
+          })()}
         </section>
       ) : (
         <section style={{ display: "flex", flexDirection: "column" }}>

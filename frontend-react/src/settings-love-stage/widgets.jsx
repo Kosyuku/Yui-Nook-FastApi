@@ -19,6 +19,15 @@ const glassMix = (g, baseSolid, glassRGB = '255,255,255', glassAlpha = 0.32) => 
   };
 };
 
+const glassAlpha = (glass, min = 0.34, max = 1) => {
+  const value = Math.max(0, Math.min(100, Number(glass) || 0)) / 100;
+  return min + (max - min) * value;
+};
+
+const glassCream = (glass, min = 0.42) => `rgba(245,239,232,${glassAlpha(glass, min, 1)})`;
+
+const glassWhite = (glass, min = 0.32) => `rgba(255,255,255,${glassAlpha(glass, min, 1)})`;
+
 // 占位头像（用 SVG，因为这是真实的应用元素）
 const AvatarPlaceholder = ({ tone = 'lilac', size = 40, label = '', src = '', side = '' }) => {
   const T = window.SET_TOKENS;
@@ -158,7 +167,9 @@ const WidgetBubble = ({ size = 'M', leftLabel = '酒', rightLabel = '彦', days 
         {/* 气泡 */}
         <div style={{
           flex: 1, position: 'relative',
-          background: T.cream,
+          background: glassCream(glass, 0.46),
+          backdropFilter: glass < 100 ? 'blur(14px) saturate(140%)' : 'none',
+          WebkitBackdropFilter: glass < 100 ? 'blur(14px) saturate(140%)' : 'none',
           border: `1px solid ${T.rule}`,
           borderRadius: '4px 16px 16px 16px',
           padding: size === 'S' ? '8px 10px' : '12px 14px',
@@ -171,7 +182,7 @@ const WidgetBubble = ({ size = 'M', leftLabel = '酒', rightLabel = '彦', days 
           {/* 气泡尖角 */}
           <div style={{
             position: 'absolute', left: -6, top: 8,
-            width: 8, height: 8, background: T.cream,
+            width: 8, height: 8, background: glassCream(glass, 0.46),
             borderLeft: `1px solid ${T.rule}`, borderBottom: `1px solid ${T.rule}`,
             transform: 'rotate(45deg)',
           }} />
@@ -270,10 +281,10 @@ const WidgetLetter = ({ size = 'M', leftLabel = '酒', rightLabel = '彦', days 
   return (
     <div style={{
       width: dims.w, height: dims.h, borderRadius: 12,
-      background: glass >= 100 ? T.cream : `rgba(245,239,232,${0.7 * a + 0.4})`,
+      background: glassCream(glass, 0.42),
       backdropFilter: glass < 100 ? 'blur(20px) saturate(140%)' : 'none',
       WebkitBackdropFilter: glass < 100 ? 'blur(20px) saturate(140%)' : 'none',
-      backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent ${size === 'L' ? 28 : 18}px, ${T.rule} ${size === 'L' ? 28 : 18}px, ${T.rule} ${size === 'L' ? 29 : 19}px)`,
+      backgroundImage: `repeating-linear-gradient(0deg, transparent, transparent ${size === 'L' ? 28 : 18}px, rgba(214,204,198,${glassAlpha(glass, 0.28, 1)}) ${size === 'L' ? 28 : 18}px, rgba(214,204,198,${glassAlpha(glass, 0.28, 1)}) ${size === 'L' ? 29 : 19}px)`,
       padding: size === 'S' ? 12 : 18,
       boxShadow: '0 8px 24px -16px rgba(110,100,140,0.4), inset 0 0 0 1px rgba(110,100,120,0.1)',
       position: 'relative', overflow: 'hidden',
@@ -367,7 +378,7 @@ const WidgetPolaroid = ({ size = 'M', leftLabel = '酒', rightLabel = '彦', day
       position: 'relative', overflow: 'hidden', fontFamily: F.sansCn,
       transform: 'rotate(-1.2deg)',
     }}>
-      <div style={{ background: `linear-gradient(135deg, ${T.lilacWash}, ${T.blushSoft})`, borderRadius: 4, padding: size === 'S' ? 8 : 14, height: size === 'S' ? '64%' : '70%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: size === 'S' ? 6 : 14, position: 'relative' }}>
+      <div style={{ background: `linear-gradient(135deg, rgba(232,222,245,${glassAlpha(glass, 0.34, 1)}), rgba(245,222,222,${glassAlpha(glass, 0.34, 1)}))`, backdropFilter: glass < 100 ? 'blur(12px) saturate(135%)' : 'none', WebkitBackdropFilter: glass < 100 ? 'blur(12px) saturate(135%)' : 'none', borderRadius: 4, padding: size === 'S' ? 8 : 14, height: size === 'S' ? '64%' : '70%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: size === 'S' ? 6 : 14, position: 'relative' }}>
         <AvatarPlaceholder tone={leftTone} size={av} label={leftLabel} src={leftAvatar} side="left" />
         <AvatarPlaceholder tone={rightTone} size={av} label={rightLabel} src={rightAvatar} side="right" />
         <span style={{ position: 'absolute', top: 6, right: 8, fontFamily: F.mono, fontSize: 9, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.1em' }}>D-{days}</span>

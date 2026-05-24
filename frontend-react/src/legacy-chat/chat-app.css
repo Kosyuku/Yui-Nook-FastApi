@@ -5681,3 +5681,542 @@ button.model-choice-item {
   border-color: var(--chat-ui-border);
   color: var(--chat-ui-text);
 }
+
+/* Keep the add-contact form compact on narrow screens. */
+.new-contact-card .ai-input {
+  min-height: 42px !important;
+  height: 42px !important;
+  padding: 0 14px !important;
+  border-radius: 13px !important;
+  font-size: 15px !important;
+  line-height: 42px !important;
+  background: rgba(251, 250, 251, 0.96) !important;
+}
+
+.new-contact-card .ai-input::placeholder {
+  color: rgba(151, 133, 141, 0.58);
+}
+
+.new-contact-card .new-contact-field {
+  padding-top: 8px;
+  padding-bottom: 9px;
+}
+
+.new-contact-card .new-contact-avatar-preview {
+  width: 58px;
+  height: 58px;
+  border-radius: 15px;
+}
+
+.new-contact-card .new-contact-avatar-box .bottom-tab {
+  min-height: 38px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+
+/* Contact settings visual tightening */
+.contact-settings-page .settings-tabs {
+  gap: 0 !important;
+  padding: 3px !important;
+  border-radius: 16px !important;
+  background: rgba(255, 255, 255, 0.64) !important;
+}
+
+.contact-settings-page .settings-tab {
+  height: 34px !important;
+  border-radius: 13px !important;
+  font-size: 12px !important;
+  box-shadow: none !important;
+}
+
+.contact-settings-page .settings-tab:not(.active) {
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
+.contact-settings-page .settings-tab.active {
+  background: linear-gradient(180deg, rgba(231, 205, 255, 0.92), rgba(220, 184, 248, 0.82)) !important;
+}
+
+.contact-settings-page .contact-avatar-row {
+  align-items: center;
+  gap: 10px;
+}
+
+.contact-settings-avatar-preview {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  object-fit: cover;
+  flex: 0 0 42px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 4px 10px rgba(156, 126, 140, 0.12);
+}
+
+.contact-settings-page .persona-textarea {
+  min-height: 118px !important;
+  padding: 12px 14px !important;
+  font-size: 14px !important;
+  line-height: 1.55 !important;
+}
+
+.contact-settings-page .persona-textarea::placeholder {
+  font-size: 14px !important;
+  line-height: 1.55 !important;
+}
+
+/* Avatar cropper: fixed circular viewport, contained mobile dialog */
+.avatar-cropper-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(12px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom));
+  background: rgba(47, 35, 42, 0.28);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+
+.avatar-cropper-card {
+  width: min(92vw, 380px) !important;
+  max-height: 90vh !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 0 !important;
+  border-radius: 24px !important;
+  overflow: hidden !important;
+  background: rgba(252, 249, 252, 0.96) !important;
+  border: 1px solid rgba(255, 255, 255, 0.68) !important;
+  box-shadow: 0 18px 42px rgba(74, 48, 62, 0.2) !important;
+}
+
+.avatar-cropper-head,
+.avatar-cropper-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.avatar-cropper-head {
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(190, 168, 180, 0.16);
+}
+
+.avatar-cropper-head strong {
+  display: block;
+  font-size: 16px;
+  color: rgba(60, 45, 54, 0.96);
+}
+
+.avatar-cropper-head span {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(108, 86, 98, 0.72);
+}
+
+.avatar-cropper-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 16px 12px;
+  overflow: hidden;
+}
+
+.avatar-cropper-viewport {
+  position: relative;
+  width: clamp(220px, 68vw, 268px);
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  overflow: hidden;
+  background: rgba(238, 228, 235, 0.9);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.78),
+    0 10px 28px rgba(88, 63, 77, 0.16);
+  touch-action: none;
+  cursor: grab;
+}
+
+.avatar-cropper-viewport:active {
+  cursor: grabbing;
+}
+
+.avatar-cropper-viewport::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow:
+    inset 0 0 0 1px rgba(118, 86, 104, 0.18),
+    0 0 0 999px rgba(42, 30, 38, 0.08);
+  pointer-events: none;
+}
+
+.avatar-cropper-image {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  display: block;
+  object-fit: cover;
+  transform-origin: center;
+  user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;
+}
+
+.avatar-cropper-controls {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.avatar-cropper-controls label {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(83, 64, 72, 0.74);
+}
+
+.avatar-cropper-controls input {
+  width: 100%;
+  min-width: 0;
+  accent-color: #8f6bd8;
+}
+
+.avatar-cropper-actions {
+  justify-content: flex-end;
+  border-top: 1px solid rgba(190, 168, 180, 0.16);
+  padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  background: rgba(252, 249, 252, 0.98);
+}
+
+.avatar-cropper-actions .ghost-action,
+.avatar-cropper-actions .bottom-tab {
+  min-height: 40px !important;
+  padding: 0 16px !important;
+  border-radius: 14px !important;
+}
+
+.avatar-cropper-actions .bottom-tab {
+  flex: 1 1 auto;
+  max-width: 168px;
+}
+
+/* Contact profile tightening */
+.profile-page {
+  padding-top: 16px;
+}
+
+.profile-card {
+  position: relative;
+  max-width: 360px;
+  margin: 0 auto;
+  padding: 22px 18px 18px !important;
+  border-radius: 24px !important;
+  background: rgba(252, 250, 253, 0.88) !important;
+  border: 1px solid rgba(255, 255, 255, 0.58) !important;
+  box-shadow: 0 10px 26px rgba(96, 74, 88, 0.1) !important;
+  overflow: hidden;
+}
+
+.profile-aura {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(227, 206, 250, 0.34), rgba(227, 206, 250, 0) 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+
+.profile-portrait,
+.profile-main-copy,
+.profile-info-grid,
+.profile-actions {
+  position: relative;
+  z-index: 1;
+}
+
+.profile-portrait {
+  width: 96px;
+  aspect-ratio: 1 / 1;
+  margin: 0 auto 12px;
+}
+
+.profile-avatar-large {
+  width: 100% !important;
+  height: 100% !important;
+  aspect-ratio: 1 / 1;
+  display: block;
+  margin: 0 !important;
+  border-radius: 24px !important;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 8px 20px rgba(136, 105, 123, 0.14) !important;
+}
+
+.profile-online-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 5px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #69c78c;
+  border: 2px solid rgba(252, 250, 253, 0.96);
+  box-shadow: 0 2px 6px rgba(85, 140, 105, 0.2);
+}
+
+.profile-name {
+  font-size: 19px !important;
+  line-height: 1.25;
+  color: rgba(50, 38, 46, 0.96);
+}
+
+.profile-handle {
+  margin-top: 5px !important;
+  font-size: 13px;
+  color: rgba(92, 75, 86, 0.62);
+}
+
+.profile-bio {
+  margin: 11px auto 14px !important;
+  max-width: 280px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(76, 60, 70, 0.76);
+}
+
+.profile-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 14px 0 16px;
+}
+
+.profile-info-item {
+  min-width: 0;
+  padding: 10px 8px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.54);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.profile-info-item span {
+  display: block;
+  font-size: 11px;
+  color: rgba(96, 77, 88, 0.58);
+}
+
+.profile-info-item strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.25;
+  color: rgba(57, 43, 52, 0.88);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-actions {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 10px;
+}
+
+.profile-action {
+  min-height: 42px;
+  border-radius: 15px;
+  border: 1px solid rgba(216, 198, 210, 0.54);
+  background: rgba(255, 255, 255, 0.66);
+  color: rgba(66, 50, 60, 0.86);
+  font-size: 13px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  box-shadow: 0 5px 12px rgba(128, 104, 119, 0.08);
+}
+
+.profile-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.profile-action.primary {
+  color: #fff;
+  border-color: rgba(142, 101, 214, 0.32);
+  background: linear-gradient(180deg, rgba(150, 113, 224, 0.96), rgba(124, 91, 202, 0.92));
+}
+
+@media (max-height: 640px) {
+  .avatar-cropper-body {
+    gap: 10px;
+    padding-top: 12px;
+  }
+
+  .avatar-cropper-viewport {
+    width: clamp(200px, 58vh, 248px);
+  }
+
+  .avatar-cropper-head,
+  .avatar-cropper-actions {
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+}
+
+/* Mirage room dialog compact layout */
+.rp-room-dialog-card {
+  width: min(82vw, 360px) !important;
+  max-width: 360px !important;
+  padding: 18px 18px 16px !important;
+  border-radius: 20px !important;
+}
+
+.rp-room-dialog-card h4 {
+  margin: 0 0 8px !important;
+  font-size: 17px !important;
+  line-height: 1.2 !important;
+}
+
+.rp-room-dialog-fields {
+  display: grid;
+  gap: 8px;
+  text-align: left;
+}
+
+.rp-room-dialog-card .ai-input {
+  height: 42px !important;
+  min-height: 42px !important;
+  padding: 0 14px !important;
+  border-radius: 13px !important;
+  font-size: 15px !important;
+  line-height: 42px !important;
+}
+
+.rp-room-dialog-card .persona-textarea {
+  min-height: 96px !important;
+  height: 96px !important;
+  padding: 12px 14px !important;
+  border-radius: 13px !important;
+  font-size: 15px !important;
+  line-height: 1.45 !important;
+}
+
+.rp-room-dialog-card .ai-input::placeholder,
+.rp-room-dialog-card .persona-textarea::placeholder {
+  font-size: 15px !important;
+  color: rgba(148, 132, 140, 0.58);
+}
+
+.rp-room-dialog-actions {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px !important;
+  margin-top: 14px !important;
+}
+
+.rp-room-dialog-actions .rp-room-dialog-btn {
+  width: 100% !important;
+  height: 40px !important;
+  min-height: 40px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 13px !important;
+  font-size: 13px !important;
+  line-height: 40px !important;
+  transform: none !important;
+}
+
+.rp-room-dialog-actions .rp-room-dialog-btn:active,
+.rp-room-dialog-actions .rp-room-dialog-btn:focus {
+  transform: none !important;
+}
+
+/* Let the chat wallpaper show through the header and composer. */
+.chat-shell.mode-normal .room-hero-inner {
+  background: rgba(255, 255, 255, 0.42) !important;
+  border-color: rgba(255, 255, 255, 0.5) !important;
+  box-shadow:
+    0 6px 18px rgba(154, 126, 140, 0.08),
+    inset 0 1px 0 rgba(255,255,255,0.5) !important;
+}
+
+.chat-shell.mode-normal .composer-zone {
+  background: linear-gradient(180deg, rgba(250, 248, 250, 0), rgba(250, 248, 250, 0.34) 44%, rgba(250, 248, 250, 0.46)) !important;
+}
+
+.chat-shell.mode-normal .action-chip,
+.chat-shell.mode-normal .composer-input-wrap,
+.chat-shell.mode-normal .composer-card .soft-mini {
+  background: rgba(255, 255, 255, 0.48) !important;
+  border-color: rgba(232, 219, 225, 0.58) !important;
+  box-shadow: 0 3px 10px rgba(181, 146, 159, 0.045) !important;
+}
+
+#chat-app-root[data-theme] .chat-shell.mode-normal .room-hero {
+  position: sticky;
+  background: transparent !important;
+}
+
+#chat-app-root[data-theme] .chat-shell.mode-normal .room-hero::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -18px;
+  height: 18px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(244, 250, 254, 0.24), rgba(244, 250, 254, 0));
+}
+
+#chat-app-root[data-theme] .chat-shell.mode-normal .room-hero-inner {
+  background: rgba(255, 255, 255, 0.34) !important;
+  border-color: rgba(255, 255, 255, 0.42) !important;
+  box-shadow:
+    0 4px 14px rgba(120, 150, 170, 0.055),
+    inset 0 1px 0 rgba(255,255,255,0.38) !important;
+}
+
+#chat-app-root[data-theme] .chat-shell.mode-normal .composer-zone {
+  position: relative;
+  background: rgba(250, 248, 250, 0.18) !important;
+}
+
+#chat-app-root[data-theme] .chat-shell.mode-normal .composer-zone::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -34px;
+  height: 34px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(250, 248, 250, 0), rgba(250, 248, 250, 0.18));
+}
+
+.chat-shell .room-profile-avatar {
+  width: 38px !important;
+  height: 38px !important;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  display: block;
+}

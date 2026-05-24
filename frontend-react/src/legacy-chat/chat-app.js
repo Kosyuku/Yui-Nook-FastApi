@@ -1941,6 +1941,10 @@
         const quoteMoment = state.quoteMomentId ? getMoment(state.quoteMomentId) : null;
         const quoteMessage = state.quoteMessageId ? c.messages.find((item) => item.id === state.quoteMessageId) : null;
         const messages = visibleChatMessages(conversationMessagesForContact(c));
+        const codexAllowed = state.currentView !== 'rpRoom' && canToggleCodexForContact(c);
+        const codexActive = isCodexEnabledForContact(c);
+        const ccAllowed = state.currentView !== 'rpRoom' && canToggleCCForContact(c);
+        const ccActive = isCCEnabledForContact(c);
         return `
       <section class="room-page room-theme-${c.theme}">
         <div class="messages-panel">
@@ -1952,6 +1956,8 @@
             <div class="composer-input-wrap">
               <input class="chat-input" placeholder="\u8f93\u5165\u6d88\u606f..." value="" />
             </div>
+            ${codexAllowed ? `<button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>` : ''}
+            ${ccAllowed ? `<button class="codex-toggle cc-toggle ${ccActive ? 'active' : ''}" data-action="toggle-cc-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${ccActive}" aria-label="${ccActive ? '关闭 Claude Code' : '启用 Claude Code'}">${ccActive ? 'CC ON' : 'CC'}</button>` : ''}
             <button class="icon-btn icon-circle soft-mini" data-action="expand-actions" aria-label="\u9644\u4ef6">${icon('attach')}</button>
             ${state.streamingAbortController
                 ? `<button class="icon-btn send-round send-stop-active" data-action="fake-send" aria-label="\u505c\u6b62">${icon('stop')}</button>`
@@ -2299,31 +2305,34 @@
 
     function renderAvatarCropperDialog() {
         const crop = state.avatarCropper || {};
-        const x = Number.isFinite(Number(crop.x)) ? Number(crop.x) : 50;
-        const y = Number.isFinite(Number(crop.y)) ? Number(crop.y) : 50;
-        const zoom = Number.isFinite(Number(crop.zoom)) ? Number(crop.zoom) : 1;
+        const x = normalizeCropPercent(crop.x);
+        const y = normalizeCropPercent(crop.y);
+        const zoom = normalizeCropZoom(crop.zoom);
         return `
       <div class="avatar-cropper-overlay" data-action="cancel-avatar-cropper">
         <section class="avatar-cropper-card glass-frost" data-action="noop" role="dialog" aria-modal="true" aria-label="调整头像">
           <div class="avatar-cropper-head">
             <div>
               <strong>调整头像</strong>
-              <span>拖下面三个条，别再让脸被切得离谱。</span>
+              <span>拖动图片，圆框里是什么就保存什么。</span>
             </div>
             <button class="icon-btn icon-circle" data-action="cancel-avatar-cropper" aria-label="关闭">${icon('close')}</button>
           </div>
-          <div class="avatar-cropper-preview">
-            <img
-              class="avatar-cropper-image"
-              src="${escapeHtml(crop.src || '')}"
-              alt="头像预览"
-              style="object-position:${x}% ${y}%; transform:scale(${zoom});"
-            />
-          </div>
-          <div class="avatar-cropper-controls">
-            <label><span>左右</span><input type="range" min="0" max="100" step="1" value="${x}" data-action="avatar-cropper-range" data-key="x" /></label>
-            <label><span>上下</span><input type="range" min="0" max="100" step="1" value="${y}" data-action="avatar-cropper-range" data-key="y" /></label>
-            <label><span>缩放</span><input type="range" min="1" max="2.4" step="0.01" value="${zoom}" data-action="avatar-cropper-range" data-key="zoom" /></label>
+          <div class="avatar-cropper-body">
+            <div class="avatar-cropper-viewport" data-action="drag-avatar-cropper">
+              <img
+                class="avatar-cropper-image"
+                src="${escapeHtml(crop.src || '')}"
+                alt="头像预览"
+                draggable="false"
+                style="object-position:${x}% ${y}%; transform:scale(${zoom});"
+              />
+            </div>
+            <div class="avatar-cropper-controls">
+              <label><span>左右</span><input type="range" min="0" max="100" step="1" value="${x}" data-action="avatar-cropper-range" data-key="x" /></label>
+              <label><span>上下</span><input type="range" min="0" max="100" step="1" value="${y}" data-action="avatar-cropper-range" data-key="y" /></label>
+              <label><span>缩放</span><input type="range" min="1" max="2.4" step="0.01" value="${zoom}" data-action="avatar-cropper-range" data-key="zoom" /></label>
+            </div>
           </div>
           <div class="avatar-cropper-actions">
             <button class="ghost-action" data-action="cancel-avatar-cropper">取消</button>
@@ -3432,6 +3441,72 @@
         render();
     }
 
+    function normalizeCropPercent(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return 50;
+        return Math.min(100, Math.max(0, numeric));
+    }
+
+    function normalizeCropZoom(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return 1;
+        return Math.min(2.4, Math.max(1, numeric));
+    }
+
+    function updateAvatarCropperPreview() {
+        const crop = state.avatarCropper;
+        if (!crop) return;
+        crop.x = normalizeCropPercent(crop.x);
+        crop.y = normalizeCropPercent(crop.y);
+        crop.zoom = normalizeCropZoom(crop.zoom);
+        const mount = root();
+        const preview = mount?.querySelector('.avatar-cropper-image');
+        if (preview) {
+            preview.style.objectPosition = `${crop.x}% ${crop.y}%`;
+            preview.style.transform = `scale(${crop.zoom})`;
+        }
+        mount?.querySelectorAll('[data-action="avatar-cropper-range"]').forEach((input) => {
+            const key = input.dataset.key;
+            if (key && key in crop) input.value = String(crop[key]);
+        });
+    }
+
+    function handleAvatarCropperPointerDown(event) {
+        const viewport = event.target?.closest?.('.avatar-cropper-viewport');
+        const crop = state.avatarCropper;
+        if (!viewport || !crop) return;
+        event.preventDefault();
+        state.avatarCropDrag = {
+            pointerId: event.pointerId,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            startX: normalizeCropPercent(crop.x),
+            startY: normalizeCropPercent(crop.y),
+        };
+        viewport.setPointerCapture?.(event.pointerId);
+    }
+
+    function handleAvatarCropperPointerMove(event) {
+        const drag = state.avatarCropDrag;
+        const crop = state.avatarCropper;
+        const viewport = root()?.querySelector('.avatar-cropper-viewport');
+        if (!drag || !crop || !viewport || drag.pointerId !== event.pointerId) return;
+        event.preventDefault();
+        const rect = viewport.getBoundingClientRect();
+        const zoom = normalizeCropZoom(crop.zoom);
+        const xDelta = rect.width ? ((event.clientX - drag.startClientX) / rect.width) * 100 / zoom : 0;
+        const yDelta = rect.height ? ((event.clientY - drag.startClientY) / rect.height) * 100 / zoom : 0;
+        crop.x = normalizeCropPercent(drag.startX - xDelta);
+        crop.y = normalizeCropPercent(drag.startY - yDelta);
+        updateAvatarCropperPreview();
+    }
+
+    function handleAvatarCropperPointerUp(event) {
+        const drag = state.avatarCropDrag;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        state.avatarCropDrag = null;
+    }
+
     function readAvatarFile(file, kind) {
         if (!file) return;
         const reader = new FileReader();
@@ -3455,12 +3530,12 @@
                     reject(new Error('canvas unavailable'));
                     return;
                 }
-                const zoom = Math.max(1, Number(crop.zoom) || 1);
+                const zoom = normalizeCropZoom(crop.zoom);
                 const baseScale = Math.max(size / img.naturalWidth, size / img.naturalHeight);
                 const drawW = img.naturalWidth * baseScale * zoom;
                 const drawH = img.naturalHeight * baseScale * zoom;
-                const xRatio = Math.min(100, Math.max(0, Number(crop.x) || 50)) / 100;
-                const yRatio = Math.min(100, Math.max(0, Number(crop.y) || 50)) / 100;
+                const xRatio = normalizeCropPercent(crop.x) / 100;
+                const yRatio = normalizeCropPercent(crop.y) / 100;
                 const drawX = (size - drawW) * xRatio;
                 const drawY = (size - drawH) * yRatio;
                 ctx.imageSmoothingEnabled = true;
@@ -3512,6 +3587,10 @@
         mount.dataset.bound = '1';
         mount.addEventListener('click', handleClick);
         mount.addEventListener('input', handleInput);
+        mount.addEventListener('pointerdown', handleAvatarCropperPointerDown);
+        mount.addEventListener('pointermove', handleAvatarCropperPointerMove);
+        mount.addEventListener('pointerup', handleAvatarCropperPointerUp);
+        mount.addEventListener('pointercancel', handleAvatarCropperPointerUp);
 
         // Long-press AI bubble to quote/reply
         let pressTimer;
@@ -3653,6 +3732,7 @@
 
         if (action === 'cancel-avatar-cropper') {
             state.avatarCropper = null;
+            state.avatarCropDrag = null;
             render();
             return;
         }
@@ -4562,12 +4642,8 @@
             const crop = state.avatarCropper;
             if (!crop) return;
             const key = target.dataset.key;
-            crop[key] = key === 'zoom' ? Number(target.value) : Math.round(Number(target.value));
-            const preview = root()?.querySelector('.avatar-cropper-image');
-            if (preview) {
-                preview.style.objectPosition = `${crop.x}% ${crop.y}%`;
-                preview.style.transform = `scale(${crop.zoom})`;
-            }
+            crop[key] = key === 'zoom' ? normalizeCropZoom(target.value) : normalizeCropPercent(target.value);
+            updateAvatarCropperPreview();
             return;
         }
         if (target?.id === 'nc-name' || target?.id === 'nc-agent-id' || target?.id === 'nc-bio') {
@@ -4597,7 +4673,11 @@
     document.addEventListener('DOMContentLoaded', () => {
         loadLocalSnapshot();
         openChatAppDefault();
-        pullRemoteSnapshot().finally(() => loadContactsFromAllSources());
+        pullRemoteSnapshot().finally(async () => {
+            await loadContactsFromAllSources();
+            startProactivePolling();
+            await pollProactiveMessages({ silent: true });
+        });
     });
 
     // 鍚庣閰嶇疆
@@ -4612,6 +4692,8 @@
     let localPersistTimer = null;
     let syncInFlight = false;
     let syncApplyingRemote = false;
+    let proactivePollTimer = null;
+    let proactivePollInFlight = false;
     let lastLocalSnapshotHash = '';
     let defaultContactHashes = null;
     let defaultMomentHashes = null;
@@ -4978,6 +5060,96 @@
             console.error('[murmur] history load failed', error);
             return 0;
         }
+    }
+
+    function proactiveMessageToStored(message = {}) {
+        const agentId = String(message.agent_id || message.agentId || '').trim();
+        const content = String(message.content || '').trim();
+        const createdAt = String(message.created_at || message.createdAt || new Date().toISOString());
+        return normalizeStoredMessage({
+            id: message.id ? `proactive_${message.id}` : `proactive_${agentId}_${createdAt}_${content}`,
+            agent_id: agentId,
+            role: 'ai',
+            content,
+            created_at: createdAt,
+            source: 'proactive',
+        });
+    }
+
+    async function markProactiveRead(messageId) {
+        const id = String(messageId || '').trim();
+        if (!id) return;
+        try {
+            await fetch(`${API_BASE}/api/proactive/${encodeURIComponent(id)}/read`, { method: 'POST' });
+        } catch (error) {
+            console.warn('[proactive] mark read failed', error);
+        }
+    }
+
+    async function pollProactiveMessages({ silent = true } = {}) {
+        if (proactivePollInFlight) return;
+        proactivePollInFlight = true;
+        try {
+            const resp = await fetch(`${API_BASE}/api/proactive?limit=20`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json().catch(() => ({}));
+            const messages = Array.isArray(data?.messages) ? data.messages : [];
+            if (!messages.length) return;
+
+            let changed = false;
+            for (const item of messages) {
+                const stored = proactiveMessageToStored(item);
+                const agentId = stored.agent_id || String(item.agent_id || '').trim();
+                if (!agentId || !stored.content) {
+                    await markProactiveRead(item.id);
+                    continue;
+                }
+
+                let contact = byId(agentId);
+                if (!contact) {
+                    contact = mergeContact({
+                        id: agentId,
+                        agent_id: agentId,
+                        name: String(item.agent_name || item.display_name || agentId),
+                        handle: `@${agentId}`,
+                        messages: [],
+                    });
+                }
+
+                const beforeCount = (state.conversations?.[contact.id] || contact.messages || []).length;
+                const merged = mergeMessageLists(state.conversations?.[contact.id] || contact.messages || [], [stored]);
+                state.conversations = { ...(state.conversations || {}), [contact.id]: merged };
+                contact.messages = merged.map(contactMessageFromStored);
+                const last = contact.messages[contact.messages.length - 1];
+                if (last) {
+                    contact.lastMessage = last.text || '';
+                    contact.lastTime = last.time || '';
+                }
+                if (merged.length > beforeCount && !(state.currentView === 'room' && state.currentContactId === contact.id)) {
+                    contact.unread = Number(contact.unread || 0) + 1;
+                }
+                changed = true;
+                await markProactiveRead(item.id);
+            }
+
+            if (changed) {
+                hydrateContactsFromConversations();
+                persistLocalSnapshot();
+                render();
+                if (state.currentView === 'room') scrollToBottom();
+            }
+        } catch (error) {
+            if (!silent) console.warn('[proactive] poll failed', error);
+        } finally {
+            proactivePollInFlight = false;
+        }
+    }
+
+    function startProactivePolling() {
+        if (proactivePollTimer) return;
+        proactivePollTimer = window.setInterval(() => {
+            pollProactiveMessages({ silent: true });
+        }, 15000);
     }
 
     function mergeMoments(localMoments = [], remoteMoments = []) {
