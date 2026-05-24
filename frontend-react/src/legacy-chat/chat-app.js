@@ -1878,6 +1878,15 @@
         loadAgentPersona(contactId);
     }
 
+    function scheduleCurrentRoomHistoryHydration(delay = 80) {
+        window.setTimeout(() => {
+            const contact = byId(state.currentContactId) || state.contacts[0];
+            if (!contact?.id) return;
+            void loadMurmurHistoryForContact(contact.id, { silent: false });
+        }, delay);
+    }
+
+
     function contactMessageKeys(contact = {}) {
         const rawKeys = [
             contact?.id,
@@ -5458,13 +5467,15 @@
             persistLocalSnapshot();
             scheduleSyncPush(100);
         }
+        void hydrateVisibleContactHistories(contacts);
         render();
     }
 
     async function loadContactsFromAllSources() {
         await loadContactsFromAgents();
         await loadContactsFromMessageAgents();
-        void hydrateVisibleContactHistories(state.contacts);
+        await hydrateVisibleContactHistories(state.contacts);
+        scheduleCurrentRoomHistoryHydration(120);
     }
 
     async function hydrateVisibleContactHistories(contacts = []) {
