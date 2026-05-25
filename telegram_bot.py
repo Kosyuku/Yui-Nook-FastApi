@@ -75,6 +75,20 @@ async def _handle(client: httpx.AsyncClient, token: str, message: dict) -> None:
         await _send(client, token, chat_id, "不认识你。")
         return
 
+    if text.startswith("/model"):
+        parts = text.split()
+        aliases = {"opus": "claude-opus-4-7", "sonnet": "claude-sonnet-4-6", "haiku": "claude-haiku-4-5-20251001"}
+        model_name = parts[1].lower() if len(parts) > 1 else ""
+        model_id = aliases.get(model_name, model_name)
+        from claude_tmux_bridge import _get_session_meta, _session_exists, _tmux
+        meta = _get_session_meta(f"tg_{chat_id}")
+        if _session_exists(meta.session_name):
+            _tmux("send-keys", "-t", meta.session_name, f"/model {model_id}", "Enter")
+            await _send(client, token, chat_id, f"已切换到 {model_id}")
+        else:
+            await _send(client, token, chat_id, "session 还没建立，发条消息先。")
+        return
+
     if text.startswith("/"):
         return
 

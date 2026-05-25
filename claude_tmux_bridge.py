@@ -238,6 +238,9 @@ def _extract_reply(before: str, after: str) -> str:
             continue
         if re.match(r'^\d+\.\s+(😞|😐|😊|Don\'t ask)', stripped):
             continue
+        # 过滤 Claude Code UI 横线分隔符（────────）
+        if re.match(r'^[─━]{5,}$', stripped):
+            continue
         reply_lines.append(stripped)
 
     return '\n'.join(reply_lines).strip()

@@ -795,7 +795,7 @@ async def chat(body: ChatRequest):
                         usage_info = _usage_payload_from_chunk(chunk)
                     elif isinstance(chunk, str):
                         full_response.append(chunk)
-                        yield {"event": "message", "data": chunk}
+                        yield {"event": "message", "data": jsonlib.dumps({"content": chunk}, ensure_ascii=False)}
 
             except Exception as e:
                 logger.exception("Chat stream error")
@@ -818,7 +818,7 @@ async def chat(body: ChatRequest):
                 if complete_text:
                     reasoning_used_as_text = True
                     logger.info("Chat stream used reasoning as visible fallback for provider=%s", model_info)
-                    yield {"event": "message", "data": complete_text}
+                    yield {"event": "message", "data": jsonlib.dumps({"content": complete_text}, ensure_ascii=False)}
 
             if not tool_calls_buffer and b"<execute>" in complete_text.encode('utf-8'):
                 import re as regex
@@ -1304,7 +1304,7 @@ async def rp_chat(body: RPChatRequest):
                     usage_info = _usage_payload_from_chunk(chunk)
                 elif isinstance(chunk, str):
                     full_response.append(chunk)
-                    yield {"event": "message", "data": chunk}
+                    yield {"event": "message", "data": jsonlib.dumps({"content": chunk}, ensure_ascii=False)}
         except Exception as e:
             logger.exception("RP chat stream error")
             yield {"event": "error", "data": str(e)}
