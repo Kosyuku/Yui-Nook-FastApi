@@ -58,6 +58,13 @@ async def run_once(agent_id: str | None = None):
     await phase2_produce_snapshot(agent_id=resolved_agent_id)
     await phase3_extract_memories(agent_id=resolved_agent_id)
 
+    try:
+        from consciousness.proactive import run_proactive_check
+        result = await run_proactive_check(resolved_agent_id)
+        logger.info("  -> proactive check: should_output=%s reason=%s", result.should_output, result.reason_type)
+    except Exception as exc:
+        logger.warning("  -> proactive check failed: %s", exc)
+
     logger.info("Consciousness loop: finished")
 
 
