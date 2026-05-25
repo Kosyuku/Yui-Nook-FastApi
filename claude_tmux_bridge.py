@@ -241,6 +241,11 @@ def _extract_reply(before: str, after: str) -> str:
         # 过滤 Claude Code UI 横线分隔符（────────）
         if re.match(r'^[─━]{5,}$', stripped):
             continue
+        # 过滤 Claude Code 底部状态栏 / tmux 警告
+        if re.search(r'for shortcuts|← for agents|Auto-update failed|claude doctor|focus-events|tmux\.conf', stripped):
+            continue
+        if re.match(r'^✗\s+', stripped):
+            continue
         reply_lines.append(stripped)
 
     return '\n'.join(reply_lines).strip()

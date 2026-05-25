@@ -6204,37 +6204,30 @@
         }
     }
 
-    //  Send message (SSE streaming) 
-    async function doSendMessage() {
-        const input = root()?.querySelector('.chat-input');
-        const text = input?.value?.trim();
-        if (!text) return;
-        const c = byId(state.currentContactId);
+    // 缓冲消息池：contactId -> {texts, timer, listener}
+    const _chatMsgBuffers = {};
+    const CHAT_BUFFER_DEBOUNCE = 1500;
+
+    async function _flushChatBuffer(contactId) {
+        const buf = _chatMsgBuffers[contactId];
+        if (!buf || !buf.texts.length) return;
+        const texts = buf.texts.splice(0);
+        if (buf.timer) { clearTimeout(buf.timer); buf.timer = null; }
+        if (buf.listener) {
+            root()?.querySelector('.chat-input')?.removeEventListener('input', buf.listener);
+            buf.listener = null;
+        }
+        delete _chatMsgBuffers[contactId];
+
+        const c = byId(contactId);
         if (!c) return;
-        cancelAssistantPlayback();
         const allowReasoning = !!c?.settings?.reasoning_visibility;
 
         let sessionId = '';
-        try {
-            sessionId = await ensureContactSession(c);
-        } catch (err) {
-            console.error('[session] create failed:', err);
-            state.toast = `鏃犳硶鍒涘缓浼氳瘽锛?{err.message}`;
-            render();
-            window.setTimeout(() => { state.toast = ''; render(); }, 1500);
-            return;
-        }
+        try { sessionId = await ensureContactSession(c); } catch (err) { return; }
 
-        // Push user message
+        const text = texts.join('\n');
         const msgId = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        upsertMessage(c.messages, { id: msgId, client_message_id: msgId, session_id: sessionId, agent_id: c.id, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
-        c.lastMessage = text;
-        c.lastTime = '\u521a\u521a';
-        input.value = '';
-        syncConversationsFromContacts();
-        queueLocalSyncIfChanged(120);
-        render();
-        scrollToBottom();
 
         // Push AI typing placeholder
         const aiId = 'ai_' + Date.now();
@@ -6472,6 +6465,50 @@
             queueLocalSyncIfChanged(120);
             render();
         }
+    }
+
+    //  Send message (SSE streaming)
+    async function doSendMessage() {
+        const input = root()?.querySelector('.chat-input');
+        const rawText = input?.value?.trim();
+        if (!rawText) return;
+        const c = byId(state.currentContactId);
+        if (!c) return;
+        cancelAssistantPlayback();
+
+        // Show user message immediately
+        let sessionId = '';
+        try { sessionId = await ensureContactSession(c); } catch (err) {
+            state.toast = '\u65e0\u6cd5\u521b\u5efa\u4f1a\u8bdd\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002';
+            render();
+            window.setTimeout(() => { state.toast = ''; render(); }, 1500);
+            return;
+        }
+        const uMsgId = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        upsertMessage(c.messages, { id: uMsgId, client_message_id: uMsgId, session_id: sessionId, agent_id: c.id, role: 'user', text: rawText, content: rawText, time: nowTimeStr(), created_at: new Date().toISOString() });
+        c.lastMessage = rawText;
+        c.lastTime = '\u521a\u521a';
+        input.value = '';
+        syncConversationsFromContacts();
+        queueLocalSyncIfChanged(120);
+        render();
+        scrollToBottom();
+
+        // Buffer: debounce AI request, extend timer while user is typing
+        if (!_chatMsgBuffers[c.id]) _chatMsgBuffers[c.id] = { texts: [], timer: null, listener: null };
+        const buf = _chatMsgBuffers[c.id];
+        buf.texts.push(rawText);
+        if (buf.timer) clearTimeout(buf.timer);
+        if (!buf.listener) {
+            buf.listener = () => {
+                const b = _chatMsgBuffers[c.id];
+                if (!b?.texts.length) return;
+                clearTimeout(b.timer);
+                b.timer = setTimeout(() => _flushChatBuffer(c.id), CHAT_BUFFER_DEBOUNCE);
+            };
+            input.addEventListener('input', buf.listener);
+        }
+        buf.timer = setTimeout(() => _flushChatBuffer(c.id), CHAT_BUFFER_DEBOUNCE);
     }
 
     // Re-roll AI message (SSE streaming)

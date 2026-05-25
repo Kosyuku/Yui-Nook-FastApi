@@ -757,3 +757,12 @@
   window.closeTagModal = closeTagModal;
   window.confirmCustomTag = confirmCustomTag;
 })();
+
+
+
+
+
+
+
+
+

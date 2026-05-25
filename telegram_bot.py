@@ -11,11 +11,23 @@ import database as db
 from claude_tmux_bridge import claude_tmux_chat
 
 PROACTIVE_PUSH_INTERVAL = 30  # 秒
+BUFFER_DEBOUNCE = 1.5  # 秒：最后一条消息后等待时间
 
 logger = logging.getLogger(__name__)
 
 _task: asyncio.Task | None = None
 _proactive_task: asyncio.Task | None = None
+
+# chat_id -> {"texts": [...], "handle": asyncio.TimerHandle}
+_buffers: dict[int, dict] = {}
+
+
+async def _wait_and_flush(chat_id: int, flush_fn) -> None:
+    try:
+        await asyncio.sleep(BUFFER_DEBOUNCE)
+        await flush_fn(chat_id)
+    except asyncio.CancelledError:
+        pass
 
 
 def _token() -> str:
@@ -92,33 +104,44 @@ async def _handle(client: httpx.AsyncClient, token: str, message: dict) -> None:
     if text.startswith("/"):
         return
 
-    # 先发占位消息，拿到 message_id 用于后续 edit
-    placeholder_id = await _send(client, token, chat_id, "…")
+    # 缓冲消息池：debounce BUFFER_DEBOUNCE 秒，合并连续消息后再发给 AI
+    buf = _buffers.setdefault(chat_id, {"texts": [], "task": None})
+    if buf["task"] is not None:
+        buf["task"].cancel()
+    buf["texts"].append(text)
 
-    last_partial: dict = {"text": ""}
-
-    async def on_progress(partial: str) -> None:
-        if partial == last_partial["text"] or placeholder_id is None:
+    async def _flush(cid: int) -> None:
+        entry = _buffers.pop(cid, None)
+        if not entry:
             return
-        last_partial["text"] = partial
-        await _edit(client, token, chat_id, placeholder_id, partial + "\n▌")
+        combined = "\n".join(entry["texts"])
+        placeholder_id = await _send(client, token, cid, "…")
+        last_partial: dict = {"text": ""}
 
-    conversation_key = f"tg_{chat_id}"
-    try:
-        result = await claude_tmux_chat(
-            conversation_key=conversation_key,
-            content=text,
-            on_progress=on_progress,
-        )
-        reply = result.reply or "……"
-    except Exception as e:
-        logger.exception("claude_tmux_chat failed for %s", conversation_key)
-        reply = f"出错了：{e}"
+        async def on_progress(partial: str) -> None:
+            if partial == last_partial["text"] or placeholder_id is None:
+                return
+            last_partial["text"] = partial
+            await _edit(client, token, cid, placeholder_id, partial + "\n▌")
 
-    if placeholder_id:
-        await _edit(client, token, chat_id, placeholder_id, _fmt(reply))
-    else:
-        await _send(client, token, chat_id, _fmt(reply))
+        conversation_key = f"tg_{cid}"
+        try:
+            result = await claude_tmux_chat(
+                conversation_key=conversation_key,
+                content=combined,
+                on_progress=on_progress,
+            )
+            reply = result.reply or "……"
+        except Exception as e:
+            logger.exception("claude_tmux_chat failed for %s", conversation_key)
+            reply = f"出错了：{e}"
+
+        if placeholder_id:
+            await _edit(client, token, cid, placeholder_id, _fmt(reply))
+        else:
+            await _send(client, token, cid, _fmt(reply))
+
+    buf["task"] = asyncio.create_task(_wait_and_flush(chat_id, _flush))
 
 
 async def _poll_loop(token: str) -> None:
