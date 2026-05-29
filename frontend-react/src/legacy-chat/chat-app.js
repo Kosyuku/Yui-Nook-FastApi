@@ -283,6 +283,8 @@
         { key: 'pink', name: '蜜桃粉', desc: '更甜一点的粉色聊天氛围', roomTheme: 'rose', aliases: ['奶茶'] },
         { key: 'dark', name: '夜色', desc: '低亮度深色聊天界面', roomTheme: 'rose', aliases: [] },
         { key: 'glass', name: '玻璃雾', desc: '通透轻雾感的玻璃界面', roomTheme: 'mist', aliases: ['晴空'] },
+        { key: 'windowsill', name: '窗台', desc: '鼠尾草·陶土·亚麻 · 冷静工具感', roomTheme: 'rose', aliases: ['Windowsill'] },
+        { key: 'tape', name: '磁带', desc: '磨砂玻璃·铬色·等宽字 · 软件诚实', roomTheme: 'mist', aliases: ['Tape'] },
     ];
 
     function normalizeChatThemeKey(value) {

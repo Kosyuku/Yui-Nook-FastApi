@@ -6220,3 +6220,228 @@ button.model-choice-item {
   object-fit: cover;
   display: block;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   窗台 · Windowsill theme — sage / clay / linen / botanical calm
+   ═══════════════════════════════════════════════════════════════ */
+
+#chat-app-root[data-theme="windowsill"] {
+  --chat-ui-bg:
+    radial-gradient(ellipse at 50% 0%, rgba(143,166,120,0.10), transparent 55%),
+    radial-gradient(ellipse at 100% 100%, rgba(201,152,120,0.08), transparent 50%),
+    linear-gradient(180deg, #F1EAD9 0%, #EDE5D2 100%);
+  --chat-ui-surface: rgba(251, 247, 236, 0.92);
+  --chat-ui-surface-strong: rgba(255, 252, 244, 0.98);
+  --chat-ui-border: rgba(44, 51, 40, 0.10);
+  --chat-ui-border-soft: rgba(44, 51, 40, 0.08);
+  --chat-ui-text: #2C3328;
+  --chat-ui-muted: #5A6450;
+  --chat-ui-accent: #5A6E45;
+  --chat-ui-accent-soft: #DCE3CC;
+  --chat-ui-ai-bubble: rgba(251, 247, 236, 0.98);
+  --chat-ui-user-bubble: rgba(220, 227, 204, 0.92);
+  --chat-ui-input: rgba(244, 236, 218, 0.96);
+  --chat-ui-send: rgba(143, 166, 120, 0.92);
+  --chat-ui-shadow: 0 1px 2px rgba(44,51,40,0.04), 0 8px 22px -10px rgba(44,51,40,0.12);
+  --chat-ui-dot: rgba(143, 166, 120, 0.10);
+}
+
+/* Graph-paper lines for Windowsill chat body */
+#chat-app-root[data-theme="windowsill"] .room-page {
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 23px, rgba(143,166,120,0.10) 23px 24px),
+    repeating-linear-gradient(90deg, transparent 0 23px, rgba(143,166,120,0.08) 23px 24px);
+  background-size: auto;
+}
+
+/* Windowsill AI bubble — serif tone + clay tag */
+#chat-app-root[data-theme="windowsill"] .message-bubble.from-ai {
+  font-family: "Noto Serif SC", "Source Han Serif CN", serif;
+  border-radius: 12px;
+  border: 1px solid rgba(44,51,40,0.10);
+}
+
+#chat-app-root[data-theme="windowsill"] .message-bubble.from-user {
+  font-family: "Noto Serif SC", "Source Han Serif CN", serif;
+  border-radius: 12px;
+  border: 1px solid rgba(143,166,120,0.30);
+}
+
+/* Windowsill source badge accent (clay tone) */
+#chat-app-root[data-theme="windowsill"] .message-source-badge {
+  color: #C99878;
+  background: rgba(232,213,188,0.35);
+  border: 1px solid rgba(201,152,120,0.40);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+/* Windowsill send button accent */
+#chat-app-root[data-theme="windowsill"] .mini-send,
+#chat-app-root[data-theme="windowsill"] .send-btn {
+  background: rgba(143, 166, 120, 0.92) !important;
+  border-color: rgba(90,110,69,0.3) !important;
+}
+
+/* Windowsill header serif title */
+#chat-app-root[data-theme="windowsill"] .chat-page-title {
+  font-family: "Cormorant Garamond", "Noto Serif SC", serif;
+  font-style: italic;
+  font-weight: 500;
+}
+
+/* Windowsill nav tab active label */
+#chat-app-root[data-theme="windowsill"] .nav-tab-btn.active {
+  color: #5A6E45 !important;
+}
+
+/* Windowsill accent links & active states */
+#chat-app-root[data-theme="windowsill"] .theme-choice-item.active,
+#chat-app-root[data-theme="windowsill"] .chat-list-item:active,
+#chat-app-root[data-theme="windowsill"] .topic-row:active {
+  background: rgba(220, 227, 204, 0.80) !important;
+  border-color: rgba(143,166,120,0.35) !important;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   磁带 · Tape theme — Y2K aero glass, chrome lilac, mono-honest
+   ═══════════════════════════════════════════════════════════════ */
+
+#chat-app-root[data-theme="tape"] {
+  --chat-ui-bg:
+    radial-gradient(circle at 20% 15%, rgba(197,184,232,0.85) 0%, transparent 45%),
+    radial-gradient(circle at 80% 25%, rgba(184,216,232,0.75) 0%, transparent 40%),
+    radial-gradient(circle at 30% 80%, rgba(232,197,216,0.80) 0%, transparent 45%),
+    radial-gradient(circle at 85% 90%, rgba(197,184,232,0.70) 0%, transparent 35%),
+    #ECE6F0;
+  --chat-ui-surface: rgba(255, 255, 255, 0.45);
+  --chat-ui-surface-strong: rgba(255, 255, 255, 0.65);
+  --chat-ui-border: rgba(255, 255, 255, 0.85);
+  --chat-ui-border-soft: rgba(90, 74, 142, 0.25);
+  --chat-ui-text: #2A2540;
+  --chat-ui-muted: #8E76B8;
+  --chat-ui-accent: #9B7FD9;
+  --chat-ui-accent-soft: rgba(155, 127, 217, 0.15);
+  --chat-ui-ai-bubble: rgba(255, 255, 255, 0.52);
+  --chat-ui-user-bubble: rgba(197, 184, 232, 0.60);
+  --chat-ui-input: rgba(255, 255, 255, 0.50);
+  --chat-ui-send: rgba(155, 127, 217, 0.90);
+  --chat-ui-shadow: inset 0 1px 0 rgba(255,255,255,0.9), inset 0 0 0 0.5px rgba(255,255,255,0.5), 0 4px 14px -4px rgba(90,74,142,0.18);
+  --chat-ui-dot: rgba(90, 74, 142, 0.25);
+}
+
+/* Tape: diagonal scan grain overlay on the whole shell */
+#chat-app-root[data-theme="tape"] .chat-shell {
+  background: var(--chat-ui-bg);
+}
+#chat-app-root[data-theme="tape"] .chat-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,0.04) 6px 7px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Tape: fine dot grid for chat body */
+#chat-app-root[data-theme="tape"] .room-page {
+  background-image: radial-gradient(rgba(90,74,142,0.25) 0.8px, transparent 0.8px);
+  background-size: 14px 14px;
+  opacity-override: none;
+}
+
+/* Tape: glass morphism surfaces */
+#chat-app-root[data-theme="tape"] .chat-page-header,
+#chat-app-root[data-theme="tape"] .bottom-nav,
+#chat-app-root[data-theme="tape"] .chat-list-card,
+#chat-app-root[data-theme="tape"] .settings-group,
+#chat-app-root[data-theme="tape"] .ai-panel,
+#chat-app-root[data-theme="tape"] .glass-frost {
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  background: rgba(255, 255, 255, 0.45) !important;
+  border: 1px solid rgba(255,255,255,0.85) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), inset 0 0 0 0.5px rgba(255,255,255,0.5), 0 4px 14px -4px rgba(90,74,142,0.18) !important;
+}
+
+/* Tape AI bubble — glass strong */
+#chat-app-root[data-theme="tape"] .message-bubble.from-ai {
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  background: rgba(255, 255, 255, 0.55) !important;
+  border: 1px solid rgba(255,255,255,0.88) !important;
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 4px 14px -4px rgba(90,74,142,0.18);
+}
+
+/* Tape user bubble — lilac tint glass */
+#chat-app-root[data-theme="tape"] .message-bubble.from-user {
+  backdrop-filter: blur(10px) saturate(160%);
+  -webkit-backdrop-filter: blur(10px) saturate(160%);
+  background: linear-gradient(135deg, rgba(197,184,232,0.70), rgba(155,127,217,0.50)) !important;
+  border: 1px solid rgba(255,255,255,0.85) !important;
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+}
+
+/* Tape input area */
+#chat-app-root[data-theme="tape"] .composer-input-wrap,
+#chat-app-root[data-theme="tape"] .sheet-composer,
+#chat-app-root[data-theme="tape"] .ai-input {
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  background: rgba(255,255,255,0.50) !important;
+  border: 1px solid rgba(255,255,255,0.85) !important;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+/* Tape send / mini buttons — lilac gradient */
+#chat-app-root[data-theme="tape"] .mini-send,
+#chat-app-root[data-theme="tape"] .send-btn {
+  background: linear-gradient(135deg, rgba(155,127,217,0.9), rgba(90,74,142,0.9)) !important;
+  border: 1.5px solid rgba(255,255,255,0.7) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 4px 12px rgba(90,74,142,0.35) !important;
+  color: #fff !important;
+}
+
+/* Tape title — mono uppercase */
+#chat-app-root[data-theme="tape"] .chat-page-title {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+/* Tape active nav */
+#chat-app-root[data-theme="tape"] .nav-tab-btn.active {
+  color: #5A4A8E !important;
+}
+
+/* Tape active states */
+#chat-app-root[data-theme="tape"] .theme-choice-item.active,
+#chat-app-root[data-theme="tape"] .chat-list-item:active,
+#chat-app-root[data-theme="tape"] .topic-row:active {
+  background: rgba(155,127,217,0.18) !important;
+  border-color: rgba(90,74,142,0.40) !important;
+}
+
+/* Tape source badge */
+#chat-app-root[data-theme="tape"] .message-source-badge {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.10em;
+  color: #5A4A8E;
+  background: rgba(155,127,217,0.15);
+  border: 1px solid rgba(90,74,142,0.25);
+}
+
+/* Tape online dot glow */
+#chat-app-root[data-theme="tape"] .status-dot {
+  background: #7BD9A8;
+  box-shadow: 0 0 6px #7BD9A8;
+}
