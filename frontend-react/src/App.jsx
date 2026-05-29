@@ -274,7 +274,7 @@ const builtinApps = [
   { id: "inbox", label: "Glean", glyph: "拾", type: "应用" },
   { id: "curio", label: "Curio", glyph: "匣", type: "应用" },
   { id: "parlor", label: "Parlor", glyph: "炉", type: "应用", iconSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60"><rect width="60" height="60" rx="14" fill="#FEF0E4"/><path d="M30 12 C26 19 20 24 22 32 C23 37 26 41 30 41 C34 41 37 37 38 32 C40 24 34 19 30 12Z" stroke="#E07840" stroke-width="2.5" stroke-linejoin="round" fill="#FEF0E4"/><path d="M30 23 C28 26 27 30 28 33 C29 35 30 37 30 37" stroke="#E07840" stroke-width="2" stroke-linecap="round" fill="none"/><line x1="16" y1="46" x2="44" y2="44" stroke="#C4784A" stroke-width="3.5" stroke-linecap="round"/><line x1="19" y1="50" x2="41" y2="50" stroke="#C4784A" stroke-width="3.5" stroke-linecap="round"/></svg>` },
-  { id: "grimoire", label: "魔典", glyph: "典", type: "应用" },
+  { id: "grimoire", label: "魔典", glyph: "典", type: "应用", iconSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60"><rect width="60" height="60" rx="14" fill="#2C3E5C"/><rect x="10" y="11" width="34" height="42" rx="3" fill="#3A4D6F"/><rect x="10" y="11" width="5" height="42" rx="2" fill="#1F2A3E"/><rect x="14" y="15" width="26" height="0.8" fill="#C5A572" opacity="0.9"/><rect x="14" y="49" width="26" height="0.8" fill="#C5A572" opacity="0.9"/><rect x="14" y="17.5" width="26" height="0.4" fill="#C5A572" opacity="0.5"/><rect x="14" y="47" width="26" height="0.4" fill="#C5A572" opacity="0.5"/><text x="30" y="36" font-family="Georgia,serif" font-style="italic" font-size="18" fill="#C5A572" text-anchor="middle" dominant-baseline="middle" opacity="0.95">⊹</text></svg>` },
 ];
 
 const appTitles = Object.fromEntries(builtinApps.map((app) => [app.id, app.label]));
