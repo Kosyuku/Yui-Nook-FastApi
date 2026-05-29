@@ -578,6 +578,50 @@ CREATE TABLE IF NOT EXISTS parlor_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_parlor_turns_round_id
     ON parlor_turns(round_id, turn_number);
+
+CREATE TABLE IF NOT EXISTS grimoire_tomes (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL DEFAULT '',
+    title_en    TEXT NOT NULL DEFAULT '',
+    sub         TEXT NOT NULL DEFAULT '',
+    spine       TEXT NOT NULL DEFAULT '#2C3E5C',
+    cover       TEXT NOT NULL DEFAULT '#3A4D6F',
+    gilt        TEXT NOT NULL DEFAULT '#C5A572',
+    sigil       TEXT NOT NULL DEFAULT '⊹',
+    sigil_style TEXT NOT NULL DEFAULT 'serifEn',
+    kind        TEXT NOT NULL DEFAULT '虚构世界',
+    count       INTEGER NOT NULL DEFAULT 0,
+    palette     TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_grimoire_tomes_updated_at
+    ON grimoire_tomes(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS grimoire_entries (
+    id           TEXT PRIMARY KEY,
+    tome_id      TEXT NOT NULL,
+    type         TEXT NOT NULL DEFAULT 'lore',
+    title        TEXT NOT NULL DEFAULT '',
+    title_en     TEXT NOT NULL DEFAULT '',
+    sub          TEXT NOT NULL DEFAULT '',
+    cover        TEXT NOT NULL DEFAULT '#3A4D6F',
+    cover_ink    TEXT NOT NULL DEFAULT '#F1E4BD',
+    cover_glyph  TEXT NOT NULL DEFAULT '·',
+    status       TEXT NOT NULL DEFAULT 'seed',
+    tags         TEXT NOT NULL DEFAULT '[]',
+    fields       TEXT NOT NULL DEFAULT '{}',
+    body         TEXT NOT NULL DEFAULT '',
+    relations    TEXT NOT NULL DEFAULT '[]',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_grimoire_entries_tome_id
+    ON grimoire_entries(tome_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_grimoire_entries_status
+    ON grimoire_entries(status);
+CREATE INDEX IF NOT EXISTS idx_grimoire_entries_type
+    ON grimoire_entries(type);
 """
 
 
@@ -8151,3 +8195,259 @@ async def list_parlor_turns(round_id: str, limit: int = 100, offset: int = 0, re
     rows = await cursor.fetchall()
     return [item for item in (_normalize_parlor_turn(dict(row)) for row in rows) if item]
 
+
+# ==================== Grimoire ====================
+
+def _normalize_grimoire_tome(row: dict[str, Any]) -> dict[str, Any] | None:
+    if not row:
+        return None
+    palette = row.get("palette") or "{}"
+    if isinstance(palette, str):
+        try:
+            palette = json.loads(palette)
+        except Exception:
+            palette = {}
+    return {
+        "id": str(row.get("id") or ""),
+        "title": str(row.get("title") or ""),
+        "titleEn": str(row.get("title_en") or ""),
+        "sub": str(row.get("sub") or ""),
+        "spine": str(row.get("spine") or "#2C3E5C"),
+        "cover": str(row.get("cover") or "#3A4D6F"),
+        "gilt": str(row.get("gilt") or "#C5A572"),
+        "sigil": str(row.get("sigil") or "⊹"),
+        "sigilStyle": str(row.get("sigil_style") or "serifEn"),
+        "kind": str(row.get("kind") or ""),
+        "count": int(row.get("count") or 0),
+        "palette": palette if isinstance(palette, dict) else {},
+        "lastEdited": str(row.get("updated_at") or ""),
+        "created_at": str(row.get("created_at") or ""),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+def _normalize_grimoire_entry(row: dict[str, Any]) -> dict[str, Any] | None:
+    if not row:
+        return None
+    for field in ("tags", "fields", "relations"):
+        val = row.get(field) or ("[]" if field != "fields" else "{}")
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except Exception:
+                val = [] if field != "fields" else {}
+        row[field] = val
+    return {
+        "id": str(row.get("id") or ""),
+        "tome": str(row.get("tome_id") or ""),
+        "type": str(row.get("type") or "lore"),
+        "title": str(row.get("title") or ""),
+        "titleEn": str(row.get("title_en") or ""),
+        "sub": str(row.get("sub") or ""),
+        "cover": str(row.get("cover") or "#3A4D6F"),
+        "coverInk": str(row.get("cover_ink") or "#F1E4BD"),
+        "coverGlyph": str(row.get("cover_glyph") or "·"),
+        "status": str(row.get("status") or "seed"),
+        "tags": row["tags"],
+        "fields": row["fields"],
+        "body": str(row.get("body") or ""),
+        "relations": row["relations"],
+        "updated": str(row.get("updated_at") or ""),
+        "created_at": str(row.get("created_at") or ""),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+async def list_grimoire_tomes() -> list[dict[str, Any]]:
+    conn = await get_db()
+    cursor = await conn.execute("SELECT * FROM grimoire_tomes ORDER BY updated_at DESC")
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_grimoire_tome(dict(row)) for row in rows) if item]
+
+
+async def get_grimoire_tome(tome_id: str) -> dict[str, Any] | None:
+    conn = await get_db()
+    cursor = await conn.execute("SELECT * FROM grimoire_tomes WHERE id = ?", (tome_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    return _normalize_grimoire_tome(dict(row))
+
+
+async def create_grimoire_tome(**kwargs) -> dict[str, Any]:
+    now = _now()
+    tome_id = kwargs.get("id") or _new_id()
+    palette = kwargs.get("palette") or {}
+    payload = {
+        "id": tome_id,
+        "title": str(kwargs.get("title") or ""),
+        "title_en": str(kwargs.get("titleEn") or kwargs.get("title_en") or ""),
+        "sub": str(kwargs.get("sub") or ""),
+        "spine": str(kwargs.get("spine") or "#2C3E5C"),
+        "cover": str(kwargs.get("cover") or "#3A4D6F"),
+        "gilt": str(kwargs.get("gilt") or "#C5A572"),
+        "sigil": str(kwargs.get("sigil") or "⊹"),
+        "sigil_style": str(kwargs.get("sigilStyle") or kwargs.get("sigil_style") or "serifEn"),
+        "kind": str(kwargs.get("kind") or ""),
+        "count": int(kwargs.get("count") or 0),
+        "palette": json.dumps(palette, ensure_ascii=False) if isinstance(palette, dict) else "{}",
+        "created_at": now,
+        "updated_at": now,
+    }
+    conn = await get_db()
+    await conn.execute(
+        "INSERT INTO grimoire_tomes (id, title, title_en, sub, spine, cover, gilt, sigil, sigil_style, kind, count, palette, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (payload["id"], payload["title"], payload["title_en"], payload["sub"], payload["spine"],
+         payload["cover"], payload["gilt"], payload["sigil"], payload["sigil_style"],
+         payload["kind"], payload["count"], payload["palette"], payload["created_at"], payload["updated_at"]),
+    )
+    await conn.commit()
+    return _normalize_grimoire_tome(payload) or payload
+
+
+async def update_grimoire_tome(tome_id: str, **kwargs) -> dict[str, Any] | None:
+    now = _now()
+    row = await get_grimoire_tome(tome_id)
+    if not row:
+        return None
+    updatable = ["title", "titleEn", "sub", "spine", "cover", "gilt", "sigil", "sigilStyle", "kind", "count", "palette"]
+    db_key_map = {"titleEn": "title_en", "sigilStyle": "sigil_style"}
+    sets, vals = [], []
+    for key in updatable:
+        if key in kwargs:
+            db_key = db_key_map.get(key, key.lower())
+            val = kwargs[key]
+            if key == "palette" and isinstance(val, dict):
+                val = json.dumps(val, ensure_ascii=False)
+            sets.append(f"{db_key} = ?")
+            vals.append(val)
+    if not sets:
+        return row
+    vals += [now, tome_id]
+    conn = await get_db()
+    await conn.execute(f"UPDATE grimoire_tomes SET {', '.join(sets)}, updated_at = ? WHERE id = ?", vals)
+    await conn.commit()
+    return await get_grimoire_tome(tome_id)
+
+
+async def delete_grimoire_tome(tome_id: str) -> bool:
+    conn = await get_db()
+    result = await conn.execute("DELETE FROM grimoire_tomes WHERE id = ?", (tome_id,))
+    await conn.execute("DELETE FROM grimoire_entries WHERE tome_id = ?", (tome_id,))
+    await conn.commit()
+    return result.rowcount > 0
+
+
+async def list_grimoire_entries(tome_id: str | None = None) -> list[dict[str, Any]]:
+    conn = await get_db()
+    if tome_id:
+        cursor = await conn.execute("SELECT * FROM grimoire_entries WHERE tome_id = ? ORDER BY updated_at DESC", (tome_id,))
+    else:
+        cursor = await conn.execute("SELECT * FROM grimoire_entries ORDER BY updated_at DESC")
+    rows = await cursor.fetchall()
+    return [item for item in (_normalize_grimoire_entry(dict(row)) for row in rows) if item]
+
+
+async def get_grimoire_entry(entry_id: str) -> dict[str, Any] | None:
+    conn = await get_db()
+    cursor = await conn.execute("SELECT * FROM grimoire_entries WHERE id = ?", (entry_id,))
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    return _normalize_grimoire_entry(dict(row))
+
+
+async def create_grimoire_entry(**kwargs) -> dict[str, Any]:
+    now = _now()
+    entry_id = kwargs.get("id") or _new_id()
+    tags = kwargs.get("tags") or []
+    fields = kwargs.get("fields") or {}
+    relations = kwargs.get("relations") or []
+    payload = {
+        "id": entry_id,
+        "tome_id": str(kwargs.get("tome") or kwargs.get("tome_id") or ""),
+        "type": str(kwargs.get("type") or "lore"),
+        "title": str(kwargs.get("title") or ""),
+        "title_en": str(kwargs.get("titleEn") or kwargs.get("title_en") or ""),
+        "sub": str(kwargs.get("sub") or ""),
+        "cover": str(kwargs.get("cover") or "#3A4D6F"),
+        "cover_ink": str(kwargs.get("coverInk") or kwargs.get("cover_ink") or "#F1E4BD"),
+        "cover_glyph": str(kwargs.get("coverGlyph") or kwargs.get("cover_glyph") or "·"),
+        "status": str(kwargs.get("status") or "seed"),
+        "tags": json.dumps(tags, ensure_ascii=False),
+        "fields": json.dumps(fields, ensure_ascii=False),
+        "body": str(kwargs.get("body") or ""),
+        "relations": json.dumps(relations, ensure_ascii=False),
+        "created_at": now,
+        "updated_at": now,
+    }
+    conn = await get_db()
+    await conn.execute(
+        "INSERT INTO grimoire_entries (id, tome_id, type, title, title_en, sub, cover, cover_ink, cover_glyph, status, tags, fields, body, relations, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (payload["id"], payload["tome_id"], payload["type"], payload["title"], payload["title_en"],
+         payload["sub"], payload["cover"], payload["cover_ink"], payload["cover_glyph"],
+         payload["status"], payload["tags"], payload["fields"], payload["body"],
+         payload["relations"], payload["created_at"], payload["updated_at"]),
+    )
+    # Update tome count
+    await conn.execute(
+        "UPDATE grimoire_tomes SET count = (SELECT COUNT(*) FROM grimoire_entries WHERE tome_id = ?), updated_at = ? WHERE id = ?",
+        (payload["tome_id"], now, payload["tome_id"]),
+    )
+    await conn.commit()
+    result = {**payload, "tags": tags, "fields": fields, "relations": relations}
+    return _normalize_grimoire_entry(result) or result
+
+
+async def update_grimoire_entry(entry_id: str, **kwargs) -> dict[str, Any] | None:
+    now = _now()
+    row = await get_grimoire_entry(entry_id)
+    if not row:
+        return None
+    key_map = {
+        "titleEn": "title_en", "coverInk": "cover_ink", "coverGlyph": "cover_glyph",
+        "tome": "tome_id",
+    }
+    sets, vals = [], []
+    for key, val in kwargs.items():
+        db_key = key_map.get(key, key.lower())
+        if key in ("tags", "fields", "relations") and (isinstance(val, list) or isinstance(val, dict)):
+            val = json.dumps(val, ensure_ascii=False)
+        sets.append(f"{db_key} = ?")
+        vals.append(val)
+    if not sets:
+        return row
+    vals += [now, entry_id]
+    conn = await get_db()
+    await conn.execute(f"UPDATE grimoire_entries SET {', '.join(sets)}, updated_at = ? WHERE id = ?", vals)
+    # Update tome count
+    if "tome_id" in [key_map.get(k, k.lower()) for k in kwargs]:
+        tome_id = kwargs.get("tome") or kwargs.get("tome_id") or row.get("tome")
+    else:
+        tome_id = row.get("tome")
+    if tome_id:
+        await conn.execute(
+            "UPDATE grimoire_tomes SET count = (SELECT COUNT(*) FROM grimoire_entries WHERE tome_id = ?), updated_at = ? WHERE id = ?",
+            (tome_id, now, tome_id),
+        )
+    await conn.commit()
+    return await get_grimoire_entry(entry_id)
+
+
+async def delete_grimoire_entry(entry_id: str) -> bool:
+    row = await get_grimoire_entry(entry_id)
+    if not row:
+        return False
+    tome_id = row.get("tome")
+    now = _now()
+    conn = await get_db()
+    result = await conn.execute("DELETE FROM grimoire_entries WHERE id = ?", (entry_id,))
+    if tome_id:
+        await conn.execute(
+            "UPDATE grimoire_tomes SET count = (SELECT COUNT(*) FROM grimoire_entries WHERE tome_id = ?), updated_at = ? WHERE id = ?",
+            (tome_id, now, tome_id),
+        )
+    await conn.commit()
+    return result.rowcount > 0

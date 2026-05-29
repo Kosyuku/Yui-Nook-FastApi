@@ -3042,3 +3042,136 @@ async def dismiss_memory_candidate(log_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="候选不存在")
     return {"ok": True}
+
+
+# ==================== Grimoire 魔典 ====================
+
+class GrimTomeCreate(BaseModel):
+    title: str
+    titleEn: str = ""
+    sub: str = ""
+    spine: str = "#2C3E5C"
+    cover: str = "#3A4D6F"
+    gilt: str = "#C5A572"
+    sigil: str = "⊹"
+    sigilStyle: str = "serifEn"
+    kind: str = "虚构世界"
+    palette: dict = {}
+
+
+class GrimTomeUpdate(BaseModel):
+    title: Optional[str] = None
+    titleEn: Optional[str] = None
+    sub: Optional[str] = None
+    spine: Optional[str] = None
+    cover: Optional[str] = None
+    gilt: Optional[str] = None
+    sigil: Optional[str] = None
+    sigilStyle: Optional[str] = None
+    kind: Optional[str] = None
+    palette: Optional[dict] = None
+
+
+class GrimEntryCreate(BaseModel):
+    tome: str
+    type: str = "lore"
+    title: str
+    titleEn: str = ""
+    sub: str = ""
+    cover: str = "#3A4D6F"
+    coverInk: str = "#F1E4BD"
+    coverGlyph: str = "·"
+    status: str = "seed"
+    tags: list = []
+    fields: dict = {}
+    body: str = ""
+    relations: list = []
+
+
+class GrimEntryUpdate(BaseModel):
+    type: Optional[str] = None
+    title: Optional[str] = None
+    titleEn: Optional[str] = None
+    sub: Optional[str] = None
+    cover: Optional[str] = None
+    coverInk: Optional[str] = None
+    coverGlyph: Optional[str] = None
+    status: Optional[str] = None
+    tags: Optional[list] = None
+    fields: Optional[dict] = None
+    body: Optional[str] = None
+    relations: Optional[list] = None
+
+
+@extra_api.get("/grimoire/tomes")
+async def grim_list_tomes():
+    tomes = await db.list_grimoire_tomes()
+    return {"tomes": tomes}
+
+
+@extra_api.post("/grimoire/tomes")
+async def grim_create_tome(body: GrimTomeCreate):
+    tome = await db.create_grimoire_tome(**body.model_dump())
+    return {"tome": tome}
+
+
+@extra_api.get("/grimoire/tomes/{tome_id}")
+async def grim_get_tome(tome_id: str):
+    tome = await db.get_grimoire_tome(tome_id)
+    if not tome:
+        raise HTTPException(status_code=404, detail="典不存在")
+    return {"tome": tome}
+
+
+@extra_api.patch("/grimoire/tomes/{tome_id}")
+async def grim_update_tome(tome_id: str, body: GrimTomeUpdate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    tome = await db.update_grimoire_tome(tome_id, **updates)
+    if not tome:
+        raise HTTPException(status_code=404, detail="典不存在")
+    return {"tome": tome}
+
+
+@extra_api.delete("/grimoire/tomes/{tome_id}")
+async def grim_delete_tome(tome_id: str):
+    ok = await db.delete_grimoire_tome(tome_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="典不存在")
+    return {"ok": True}
+
+
+@extra_api.get("/grimoire/entries")
+async def grim_list_entries(tome_id: Optional[str] = None):
+    entries = await db.list_grimoire_entries(tome_id=tome_id)
+    return {"entries": entries}
+
+
+@extra_api.post("/grimoire/entries")
+async def grim_create_entry(body: GrimEntryCreate):
+    entry = await db.create_grimoire_entry(**body.model_dump())
+    return {"entry": entry}
+
+
+@extra_api.get("/grimoire/entries/{entry_id}")
+async def grim_get_entry(entry_id: str):
+    entry = await db.get_grimoire_entry(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="词条不存在")
+    return {"entry": entry}
+
+
+@extra_api.patch("/grimoire/entries/{entry_id}")
+async def grim_update_entry(entry_id: str, body: GrimEntryUpdate):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    entry = await db.update_grimoire_entry(entry_id, **updates)
+    if not entry:
+        raise HTTPException(status_code=404, detail="词条不存在")
+    return {"entry": entry}
+
+
+@extra_api.delete("/grimoire/entries/{entry_id}")
+async def grim_delete_entry(entry_id: str):
+    ok = await db.delete_grimoire_entry(entry_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="词条不存在")
+    return {"ok": True}
