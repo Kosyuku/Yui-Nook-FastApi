@@ -15,6 +15,7 @@ import InboxApp from "./InboxApp.jsx";
 import SettingsLoveApp from "./SettingsLoveApp.jsx";
 import CurioApp from "./CurioApp.jsx";
 import ParlorApp from "./ParlorApp.jsx";
+import GrimoireApp from "./GrimoireApp.jsx";
 import "./settings-love-stage/tokens.jsx";
 import "./settings-love-stage/widgets.jsx";
 import { listMediaItems, mediaUploadProvider, withMediaUrls } from "./mediaApi.js";
@@ -273,6 +274,7 @@ const builtinApps = [
   { id: "inbox", label: "Glean", glyph: "拾", type: "应用" },
   { id: "curio", label: "Curio", glyph: "匣", type: "应用" },
   { id: "parlor", label: "Parlor", glyph: "炉", type: "应用", iconSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60"><rect width="60" height="60" rx="14" fill="#FEF0E4"/><path d="M30 12 C26 19 20 24 22 32 C23 37 26 41 30 41 C34 41 37 37 38 32 C40 24 34 19 30 12Z" stroke="#E07840" stroke-width="2.5" stroke-linejoin="round" fill="#FEF0E4"/><path d="M30 23 C28 26 27 30 28 33 C29 35 30 37 30 37" stroke="#E07840" stroke-width="2" stroke-linecap="round" fill="none"/><line x1="16" y1="46" x2="44" y2="44" stroke="#C4784A" stroke-width="3.5" stroke-linecap="round"/><line x1="19" y1="50" x2="41" y2="50" stroke="#C4784A" stroke-width="3.5" stroke-linecap="round"/></svg>` },
+  { id: "grimoire", label: "魔典", glyph: "典", type: "应用" },
 ];
 
 const appTitles = Object.fromEntries(builtinApps.map((app) => [app.id, app.label]));
@@ -890,6 +892,7 @@ function LegacyHomePage({ onOpenApp, phone }) {
       "page-inbox": "inbox",
       "page-curio": "curio",
       "page-parlor": "parlor",
+      "page-grimoire": "grimoire",
     };
     const getHomeAppTarget = (app) => {
       const id = app?.id || "";
@@ -903,6 +906,7 @@ function LegacyHomePage({ onOpenApp, phone }) {
       if (id === "inbox") return { page: "page-inbox" };
       if (id === "curio") return { page: "page-curio" };
       if (id === "parlor") return { page: "page-parlor" };
+      if (id === "grimoire") return { page: "page-grimoire" };
       return null;
     };
     const renderSyncedAppIcon = (app, className = "app-icon-svg") => {
@@ -1554,10 +1558,11 @@ function AppShell({ appId, onHome, phone, setPhone }) {
   const isCurio = canonicalAppId === "curio";
   const isParlor = canonicalAppId === "parlor";
   const isCalendar = canonicalAppId === "calendar";
+  const isGrimoire = canonicalAppId === "grimoire";
   const isUnsupportedLegacyApp = canonicalAppId === "unsupported";
   const isLegacyMedia = isAlbum;
   const [legacyMediaPage, setLegacyMediaPage] = useState("photos");
-  const isLegacyShell = isChat || isDiary || isCalendar || isSettings || isWallpaper || isLegacyMedia || isFolio || isInbox || isCurio || isParlor;
+  const isLegacyShell = isChat || isDiary || isCalendar || isSettings || isWallpaper || isLegacyMedia || isFolio || isInbox || isCurio || isParlor || isGrimoire;
   useEffect(() => {
     if (isLegacyMedia) setLegacyMediaPage("photos");
   }, [canonicalAppId, isLegacyMedia]);
@@ -1595,6 +1600,8 @@ function AppShell({ appId, onHome, phone, setPhone }) {
         <CurioApp />
       ) : isParlor ? (
         <ParlorApp />
+      ) : isGrimoire ? (
+        <GrimoireApp onClose={onHome} />
       ) : isUnsupportedLegacyApp ? (
         <main className="app-placeholder">
           <div className="liquid-card app-placeholder-card">
