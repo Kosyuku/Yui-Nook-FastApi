@@ -554,6 +554,260 @@ async def search_memory(query: str, agent_id: str = None, limit: int = 10) -> st
     except Exception as e:
         return json.dumps({"error": str(e)})
 
+# ══════════════════════════════════════════════════════════
+# Grimoire 魔典 tools
+# ══════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def list_grimoire_tomes() -> str:
+    """
+    List all grimoire tomes (典). Returns id, title, titleEn, sub, kind, count, lastEdited, palette, etc.
+    Use this to browse what tomes exist before fetching entries from one.
+    """
+    try:
+        tomes = await db.list_grimoire_tomes()
+        return json.dumps({"success": True, "tomes": tomes, "count": len(tomes)}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def get_grimoire_tome(tome_id: str) -> str:
+    """
+    Get details of a single grimoire tome by its id (e.g. "nighttide", "kitchen").
+    """
+    try:
+        tome = await db.get_grimoire_tome(tome_id)
+        if not tome:
+            return json.dumps({"success": False, "error": f"Tome '{tome_id}' not found"}, ensure_ascii=False)
+        return json.dumps({"success": True, "tome": tome}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def create_grimoire_tome(
+    title: str,
+    title_en: str = "",
+    sub: str = "",
+    kind: str = "虚构世界",
+    spine: str = "#2C3E5C",
+    cover: str = "#3A4D6F",
+    gilt: str = "#C5A572",
+    sigil: str = "⊹",
+    sigil_style: str = "serifEn",
+    palette_bg: str = "#EEF1F4",
+    palette_accent: str = "#3A4D6F",
+    palette_tint: str = "#D8E0EA",
+) -> str:
+    """
+    Create a new grimoire tome (典). A tome is like a notebook or worldbook that holds entries.
+    - kind examples: 虚构世界 / 科幻 / 日常 / 札记
+    - sigil: a single character or symbol shown as the tome's emblem
+    - spine/cover/gilt: hex colors for the book appearance
+    Returns the created tome with its auto-generated id.
+    """
+    try:
+        tome = await db.create_grimoire_tome(
+            title=title,
+            titleEn=title_en,
+            sub=sub,
+            kind=kind,
+            spine=spine,
+            cover=cover,
+            gilt=gilt,
+            sigil=sigil,
+            sigilStyle=sigil_style,
+            palette={"bg": palette_bg, "accent": palette_accent, "tint": palette_tint},
+        )
+        return json.dumps({"success": True, "tome": tome}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def update_grimoire_tome(
+    tome_id: str,
+    title: str | None = None,
+    title_en: str | None = None,
+    sub: str | None = None,
+    kind: str | None = None,
+) -> str:
+    """
+    Update basic info of a grimoire tome. Only the provided fields are changed.
+    """
+    try:
+        kwargs = {}
+        if title is not None: kwargs["title"] = title
+        if title_en is not None: kwargs["titleEn"] = title_en
+        if sub is not None: kwargs["sub"] = sub
+        if kind is not None: kwargs["kind"] = kind
+        tome = await db.update_grimoire_tome(tome_id, **kwargs)
+        if not tome:
+            return json.dumps({"success": False, "error": f"Tome '{tome_id}' not found"}, ensure_ascii=False)
+        return json.dumps({"success": True, "tome": tome}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def list_grimoire_entries(tome_id: str | None = None) -> str:
+    """
+    List grimoire entries (词条). Optionally filter by tome_id.
+    Each entry has: id, tome, type (character/place/lore/thing/event/jot),
+    title, titleEn, sub, status (seed/draft/woven/archive), tags, fields{}, relations[].
+    """
+    try:
+        entries = await db.list_grimoire_entries(tome_id=tome_id)
+        return json.dumps({"success": True, "entries": entries, "count": len(entries)}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def get_grimoire_entry(entry_id: str) -> str:
+    """
+    Get full details of a single grimoire entry by id, including all fields, body text, and relations.
+    """
+    try:
+        entry = await db.get_grimoire_entry(entry_id)
+        if not entry:
+            return json.dumps({"success": False, "error": f"Entry '{entry_id}' not found"}, ensure_ascii=False)
+        return json.dumps({"success": True, "entry": entry}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def create_grimoire_entry(
+    tome_id: str,
+    title: str,
+    type: str = "character",
+    title_en: str = "",
+    sub: str = "",
+    cover: str = "#3A4D6F",
+    cover_ink: str = "#F1E4BD",
+    cover_glyph: str = "",
+    status: str = "seed",
+    tags: list[str] | None = None,
+    fields: dict | None = None,
+    body: str = "",
+    relations: list | None = None,
+) -> str:
+    """
+    Create a new entry (词条) inside a grimoire tome.
+    - type: character 角色 | place 地点 | lore 设定 | thing 物件 | event 事件 | jot 随笔
+    - status: seed 萌芽 | draft 草稿 | woven 已成 | archive 封存
+    - fields: dict of custom properties, e.g. {"年龄": "二十七", "一句话": "把光递出去。"}
+    - relations: list of {id, type, label} linking to other entries
+    - cover_glyph: a single character shown on the cover thumbnail
+    Returns the created entry with its auto-generated id.
+    """
+    try:
+        entry = await db.create_grimoire_entry(
+            tome=tome_id,
+            title=title,
+            type=type,
+            titleEn=title_en,
+            sub=sub,
+            cover=cover,
+            coverInk=cover_ink,
+            coverGlyph=cover_glyph or title[:1],
+            status=status,
+            tags=tags or [],
+            fields=fields or {},
+            body=body,
+            relations=relations or [],
+        )
+        return json.dumps({"success": True, "entry": entry}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def update_grimoire_entry(
+    entry_id: str,
+    title: str | None = None,
+    title_en: str | None = None,
+    sub: str | None = None,
+    status: str | None = None,
+    tags: list[str] | None = None,
+    fields: dict | None = None,
+    body: str | None = None,
+    relations: list | None = None,
+) -> str:
+    """
+    Update a grimoire entry. Only the provided fields are changed.
+    Useful for: changing status (seed→draft→woven), adding/updating body text,
+    updating custom fields like 年龄/一句话, adding tags, linking relations.
+    """
+    try:
+        kwargs = {}
+        if title is not None: kwargs["title"] = title
+        if title_en is not None: kwargs["titleEn"] = title_en
+        if sub is not None: kwargs["sub"] = sub
+        if status is not None: kwargs["status"] = status
+        if tags is not None: kwargs["tags"] = tags
+        if fields is not None: kwargs["fields"] = fields
+        if body is not None: kwargs["body"] = body
+        if relations is not None: kwargs["relations"] = relations
+        entry = await db.update_grimoire_entry(entry_id, **kwargs)
+        if not entry:
+            return json.dumps({"success": False, "error": f"Entry '{entry_id}' not found"}, ensure_ascii=False)
+        return json.dumps({"success": True, "entry": entry}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def delete_grimoire_entry(entry_id: str) -> str:
+    """
+    Delete a grimoire entry by id. Also decrements the parent tome's entry count.
+    """
+    try:
+        ok = await db.delete_grimoire_entry(entry_id)
+        if not ok:
+            return json.dumps({"success": False, "error": f"Entry '{entry_id}' not found"}, ensure_ascii=False)
+        return json.dumps({"success": True}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def search_grimoire(query: str, tome_id: str | None = None, type: str | None = None) -> str:
+    """
+    Search grimoire entries by keyword. Matches against title, titleEn, sub, body, tags, and fields.
+    Optionally filter by tome_id or type (character/place/lore/thing/event/jot).
+    Returns a ranked list of matching entries.
+    """
+    try:
+        entries = await db.list_grimoire_entries(tome_id=tome_id)
+        q = query.lower()
+        results = []
+        for e in entries:
+            if type and e.get("type") != type:
+                continue
+            score = 0
+            title_text = (e.get("title") or "") + " " + (e.get("titleEn") or "")
+            sub_text = e.get("sub") or ""
+            body_text = e.get("body") or ""
+            tags_text = " ".join(e.get("tags") or [])
+            fields_text = " ".join(str(v) for v in (e.get("fields") or {}).values())
+            if q in title_text.lower(): score += 10
+            if q in sub_text.lower(): score += 5
+            if q in tags_text.lower(): score += 4
+            if q in fields_text.lower(): score += 3
+            if q in body_text.lower(): score += 2
+            if score > 0:
+                results.append({**e, "_score": score})
+        results.sort(key=lambda x: x["_score"], reverse=True)
+        for r in results:
+            r.pop("_score", None)
+        return json.dumps({"success": True, "results": results, "count": len(results)}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
 if __name__ == "__main__":
     # Start the fastMCP stdio server
     mcp.run()
