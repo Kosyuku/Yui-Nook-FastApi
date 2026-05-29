@@ -67,11 +67,11 @@ const BOARD_COLS = [
   { id: "archive", ...STATUS.archive },
 ];
 const SAMPLE_ENTRIES = [
-  { id: "n-mira",    tome: "nighttide", type: "character", title: "弥拉",     titleEn: "Mira",       sub: "灯塔的最后一位守人",               cover: "#2C3E5C", coverInk: "#F1E4BD", coverGlyph: "弥", status: "woven",   tags: ["守夜","银发","不会笑"],  fields: { 性别:"女", 年龄:"看不出 · 大约二十七岁", 身高:"171", 生日:"雾月初九", MBTI:"INFJ", 一句话:"把光递出去，自己永远是黑的那个。" }, updated: "今天 · 02:14", relations: [{ id: "n-shio", type: "CP", label: "羁绊" }, { id: "n-old", type: "师徒", label: "徒弟" }] },
+  { id: "n-mira",    tome: "nighttide", type: "character", title: "弥拉",     titleEn: "Mira",       sub: "灯塔的最后一位守人",               cover: "#2C3E5C", coverInk: "#F1E4BD", coverGlyph: "弥", status: "woven",   tags: ["守夜","银发","不会笑"],  fields: { 性别:"女", 年龄:"看不出 · 大约二十七岁", 身高:"171", 生日:"雾月初九", MBTI:"INFJ", 一句话:"把光递出去，自己永远是黑的那个。" }, updated: "今天 · 02:14", relations: [{ id: "n-shio", type: "CP", label: "羁绊" }, { id: "n-old", type: "师徒", label: "徒弟" }], body: "她从十四岁开始守这座塔，没下过山。海雾来的那几日，她坐在七层最高的窗台上，把一只白色的小灯一遍遍点亮、熄灭、点亮——像在跟海里那个谁打着只有他们才懂的暗号。\n\n老灯说，弥拉天生不会笑。她想了想，觉得他说错了。她只是不在塔里笑。" },
   { id: "n-shio",    tome: "nighttide", type: "character", title: "汐",       titleEn: "Shio",       sub: "海里捞起来的不知道是不是人",          cover: "#4F6B7A", coverInk: "#E4ECF1", coverGlyph: "汐", status: "draft",   tags: ["不语","咸味","会哭"],   fields: { 性别:"难以判断", 年龄:"？", 身高:"178", 一句话:"名字是弥拉给的，他自己不记得。" }, updated: "今天 · 01:40", relations: [{ id: "n-mira", type: "CP", label: "羁绊" }] },
   { id: "n-old",     tome: "nighttide", type: "character", title: "老灯",     titleEn: "Old Lamp",   sub: "前任守人，已故",                    cover: "#5B4A3E", coverInk: "#E8D8C0", coverGlyph: "灯", status: "woven",   tags: ["亡者","严苛","会发光"], fields: { 性别:"男", 年龄:"?", 一句话:"没死透，常在塔上层咳嗽。" }, updated: "5·24", relations: [{ id: "n-mira", type: "师徒", label: "师父" }] },
   { id: "n-tower",   tome: "nighttide", type: "place",     title: "北壁灯塔", titleEn: "North Wall", sub: "凿在悬崖里的螺旋塔，七层",            cover: "#1F2A3E", coverInk: "#C5D4E0", coverGlyph: "塔", status: "woven",   tags: ["主舞台","七层","雾"],   fields: { 建于:"雾历前三百年", 一句话:"光不为照路，是给海里那个回信。" }, updated: "5·22", relations: [] },
-  { id: "n-fog",     tome: "nighttide", type: "lore",      title: "低吟雾",   titleEn: "Murmur Fog", sub: "会用海里的人声说话的那种雾",           cover: "#6E7A82", coverInk: "#EAF0F2", coverGlyph: "雾", status: "woven",   tags: ["设定核心","禁忌","世界观"], fields: { 所属:"夜潮 · 海域现象", 出现:"每年雾月初九前后，约九日", 一句话:"它不是雾，是海在讲话。" }, updated: "5·20", relations: [] },
+  { id: "n-fog",     tome: "nighttide", type: "lore",      title: "低吟雾",   titleEn: "Murmur Fog", sub: "会用海里的人声说话的那种雾",           cover: "#6E7A82", coverInk: "#EAF0F2", coverGlyph: "雾", status: "woven",   tags: ["设定核心","禁忌","世界观"], fields: { 所属:"夜潮 · 海域现象", 出现:"每年雾月初九前后，约九日", 形态:"及人之高，半透明，咸味重", 规则:"听见自己名字千万别答", 起源:"雾历前传说，来自海里的“忘名族”", 一句话:"它不是雾，是海在讲话。" }, updated: "5·20", relations: [{ id: "n-eclipse", type: "相关事件", label: "相关" }, { id: "n-tower", type: "常出之地", label: "相关" }], body: "低吟雾不是气象学意义上的雾。它有体温，重量略大于海风，能从灯塔七层的窗缝里挤进来，在屋里停留半刻钟。北壁灯塔历代的守人都被叮嘱过：它在喊你名字的时候，无论它喊得多像你母亲，你都不要应。\n\n雾历前的渔民相信，海里有一族失去名字的人，他们用别人的名字交换上岸的可能。每当雾月将近，他们会在岸边轻轻地唤——只要有人答一声，就替他们走进海里。\n\n雾消散后，岸上偶尔会留下一枚半边的银币。" },
   { id: "n-coin",    tome: "nighttide", type: "thing",     title: "半枚银币", titleEn: "Half Coin",  sub: "汐被捞起时握在手里的",               cover: "#9AA5B0", coverInk: "#2C3E5C", coverGlyph: "⌾", status: "draft",   tags: ["信物","半枚"],          fields: { 来历:"另一半在哪没人知道", 一句话:"边缘磨损得几乎认不出字。" }, updated: "5·18", relations: [] },
   { id: "n-eclipse", tome: "nighttide", type: "event",     title: "雾月初九", titleEn: "Fogfall",    sub: "汐被冲上岸的那个早晨",               cover: "#3E4F6E", coverInk: "#F1E4BD", coverGlyph: "九", status: "woven",   tags: ["故事起点"],              fields: { 时间:"雾历 1207 · 雾月初九", 一句话:"弥拉那天违规没点灯，海把汐送了过来。" }, updated: "5·14", relations: [] },
   { id: "n-keeper",  tome: "nighttide", type: "lore",      title: "守人制",   titleEn: "Keeper Rite",sub: "一座塔，一位守人，终身",              cover: "#42526B", coverInk: "#D8E0EA", coverGlyph: "守", status: "draft",   tags: ["制度"],                  fields: { 一句话:"退役的方式只有一种 — 死。" }, updated: "5·10" },
@@ -82,6 +82,7 @@ const SAMPLE_ENTRIES = [
   { id: "r-letter",  tome: "reads",     type: "lore",      title: "《不能承受的生命之轻》", titleEn: "Unbearable", sub: "5·12 重读", cover: "#5B4A6E", coverInk: "#E0D2EC", coverGlyph: "轻", status: "archive", tags: ["重读"], fields: {}, updated: "5·12" },
   { id: "j-night",   tome: "nighttide", type: "jot",       title: "关于灯的一个问题",       titleEn: "",           sub: "",             cover: "#FBF7F2", coverInk: "#6B5F58", coverGlyph: "✎",  status: "seed",    tags: ["中途"],                  fields: {}, updated: "今早", body: "如果灯不是为了照路，是为了给海里那个人回信——那弥拉每晚点灯，到底是在等回信，还是只是不想让那边觉得被忘了？\n\n…这个得想想。可能是后者。后者更像她。" },
   { id: "j-rain",    tome: "reads",     type: "jot",       title: "昨夜下雨的时候",         titleEn: "",           sub: "",             cover: "#FBF7F2", coverInk: "#6B5F58", coverGlyph: "✎",  status: "seed",    tags: [],                        fields: {}, updated: "今早 · 8:02", body: "昨夜下雨。突然很想写点什么，但又不知道写什么。\n\n就只是——雨打在空调外机上的声音很像某种节拍。记下来，不然天一亮就忘了。" },
+  { id: "j-name",    tome: "reads",     type: "jot",       title: "不知道该叫什么",          titleEn: "",           sub: "",             cover: "#FBF7F2", coverInk: "#6B5F58", coverGlyph: "✎",  status: "seed",    tags: ["未完"],                  fields: {}, updated: "5·24 深夜", body: "想起一个设定，可以放进夜潮，也可以放进玻璃城，还没想好放哪。\n\n“一个人只要不被叫名字，就不会死。”——但这跟低吟雾是不是重了？待定。" },
 ];
 
 // ═══════════════════════════════════════════════════════════════
@@ -324,6 +325,72 @@ function RecentRow({ entry, tomes, onEntry }) {
   );
 }
 
+// ── HomeBookshelf (书架) ──
+function HomeBookshelf({ tomes, entries, onTome, onEntry }) {
+  const shelves = [{ tomes: tomes.slice(0, 3) }, { tomes: tomes.slice(3) }];
+  const recentEntries = [...entries].slice(0, 3);
+  return (
+    <div style={{ width: "100%", height: "100%", background: C.paper, backgroundImage: "radial-gradient(ellipse 700px 400px at 30% 5%, rgba(255,238,220,0.4), transparent), repeating-linear-gradient(90deg, transparent 0 56px, rgba(160,120,85,0.025) 56px 57px)", overflow: "auto" }} className="phone-scroll">
+      <GrimoireHead subtitle="书架" right={<button style={miniBtn}>＋ 新典</button>} />
+      <div style={{ margin: "0 20px 12px", padding: "8px 12px", background: C.paperDeep, borderRadius: 8, display: "flex", alignItems: "center", gap: 8, border: `0.5px solid ${C.rule}` }}>
+        <span style={{ color: C.inkFaint, fontSize: 13 }}>⌕</span>
+        <span style={{ fontFamily: F.serifCn, fontSize: 11, color: C.inkFaint, letterSpacing: "1px" }}>翻一翻所有典页…</span>
+        <div style={{ flex: 1 }} /><span style={{ fontFamily: F.serifEn, fontStyle: "italic", fontSize: 10, color: C.inkFaint, letterSpacing: "1px" }}>⌘K</span>
+      </div>
+      <div style={{ padding: "4px 20px 0", display: "flex", flexDirection: "column", gap: 20 }}>
+        {shelves.map((shelf, i) => (
+          <div key={i}>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 4, padding: "0 8px", minHeight: 230 }}>
+              {shelf.tomes.map((tm) => <TomeSpine key={tm.id} tome={tm} height={210 + (tm.id.length % 3) * 8} onClick={() => onTome(tm.id)} />)}
+              {shelf.tomes.length < 3 && <div style={{ width: 56, height: 180, borderRadius: 3, border: `0.5px dashed ${C.inkFaint}`, display: "flex", alignItems: "center", justifyContent: "center", color: C.inkFaint, fontSize: 18, fontFamily: F.serifEn, fontStyle: "italic", marginBottom: 1 }}>＋</div>}
+            </div>
+            <div style={{ height: 8, background: "linear-gradient(180deg, #C2A582 0%, #8B6B4A 60%, #5B4530 100%)", borderRadius: "0 0 2px 2px", boxShadow: "0 2px 6px rgba(40,30,20,0.18)", marginTop: -1 }} />
+            <div style={{ fontFamily: F.serifEn, fontStyle: "italic", fontSize: 10, color: C.inkFaint, letterSpacing: "3px", textAlign: "right", padding: "6px 12px 0" }}>shelf · {String(i + 1).padStart(2, "0")}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ padding: "24px 20px 30px" }}>
+        <div style={{ fontFamily: F.handEn, fontSize: 16, color: C.gold, marginBottom: 4 }}>recently held</div>
+        <div style={{ fontFamily: F.serifCn, fontSize: 10, color: C.inkFaint, letterSpacing: "3px", marginBottom: 12 }}>· 最近翻过 ·</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {recentEntries.map((e) => <RecentRow key={e.id} entry={e} tomes={tomes} onEntry={onEntry} />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── HomeIndex (索引目录) ──
+function HomeIndex({ tomes, onTome }) {
+  return (
+    <div style={{ width: "100%", height: "100%", background: C.paper, backgroundImage: "repeating-linear-gradient(0deg, transparent 0 36px, rgba(160,120,85,0.04) 36px 37px)", overflow: "auto" }} className="phone-scroll">
+      <GrimoireHead subtitle="索引" right={<button style={miniBtn}>＋ 新典</button>} />
+      <div style={{ margin: "0 20px 6px", padding: "8px 0", borderTop: `1px solid ${C.ink}`, borderBottom: `0.5px solid ${C.rule}`, display: "grid", gridTemplateColumns: "24px 1fr 60px 36px", gap: 8, alignItems: "center", fontFamily: F.serifCn, fontSize: 9, color: C.inkFaint, letterSpacing: "2px" }}>
+        <span></span><span>典名</span><span style={{ textAlign: "right" }}>页数</span><span style={{ textAlign: "right" }}>最近</span>
+      </div>
+      <div style={{ margin: "0 20px" }}>
+        {tomes.map((tm) => (
+          <div key={tm.id} onClick={() => onTome(tm.id)} style={{ display: "grid", gridTemplateColumns: "24px 1fr 60px 36px", gap: 8, alignItems: "center", padding: "14px 0", borderBottom: `0.5px solid ${C.rule}`, cursor: "pointer" }}>
+            <Sigil tome={tm.id} tomes={tomes} size={22} />
+            <div>
+              <div style={{ fontFamily: F.serifCn, fontSize: 14, fontWeight: 600, color: C.ink, letterSpacing: "1.5px" }}>{tm.title}</div>
+              <div style={{ fontFamily: F.serifEn, fontStyle: "italic", fontSize: 10, color: C.inkFaint, letterSpacing: "1px", marginTop: 1 }}>{tm.titleEn} · <span style={{ fontStyle: "normal", fontFamily: F.serifCn }}>{tm.kind}</span></div>
+              <div style={{ fontFamily: F.serifCn, fontSize: 10, color: C.inkSoft, marginTop: 4, letterSpacing: "0.3px" }}>{tm.sub}</div>
+            </div>
+            <div style={{ fontFamily: F.serifEn, fontStyle: "italic", fontSize: 18, color: C.ink, textAlign: "right" }}>{tm.count}</div>
+            <div style={{ fontFamily: F.serifCn, fontSize: 9, color: C.inkFaint, textAlign: "right", letterSpacing: "0.5px" }}>{tm.lastEdited}</div>
+          </div>
+        ))}
+        <div style={{ padding: "14px 0", display: "grid", gridTemplateColumns: "24px 1fr", gap: 8, alignItems: "center", color: C.inkFaint, cursor: "pointer" }}>
+          <span style={{ fontFamily: F.serifEn, fontStyle: "italic", fontSize: 22, textAlign: "center" }}>＋</span>
+          <span style={{ fontFamily: F.serifCn, fontSize: 12, letterSpacing: "2px" }}>新起一典</span>
+        </div>
+      </div>
+      <div style={{ height: 40 }} />
+    </div>
+  );
+}
+
 function HomeSpreads({ tomes, entries, onTome, onEntry }) {
   const featured = tomes[0];
   const rest = tomes.slice(1);
@@ -533,7 +600,7 @@ function SectionLabel({ children }) {
   );
 }
 
-function JotDetail({ e, tome, onBack }) {
+function JotDetail({ e, tome, onBack, onEdit }) {
   return (
     <div style={{ width: "100%", height: "100%", background: "#FCFAF5", backgroundImage: "repeating-linear-gradient(0deg, transparent 0 31px, rgba(120,150,180,0.16) 31px 32px)", backgroundPosition: "0 56px", overflow: "auto", position: "relative" }} className="phone-scroll">
       <div style={{ position: "absolute", top: 0, bottom: 0, left: 40, width: 1, background: "rgba(184,74,62,0.28)" }} />
@@ -566,13 +633,13 @@ function JotDetail({ e, tome, onBack }) {
   );
 }
 
-function EntryDetail({ entry, entries, tomes, onBack, onRelationClick }) {
+function EntryDetail({ entry, entries, tomes, onBack, onEdit, onRelationClick }) {
   const tome = tomes.find((x) => x.id === entry.tome);
   const T = TYPES[entry.type] || TYPES.character;
   const S = STATUS[entry.status] || STATUS.seed;
   const L = TYPE_LABELS[entry.type] || TYPE_LABELS.character;
 
-  if (entry.type === "jot") return <JotDetail e={entry} tome={tome} onBack={onBack} />;
+  if (entry.type === "jot") return <JotDetail e={entry} tome={tome} onBack={onBack} onEdit={onEdit} />;
 
   return (
     <div style={{ width: "100%", height: "100%", background: C.paper, backgroundImage: "repeating-linear-gradient(0deg, transparent 0 28px, rgba(160,120,85,0.04) 28px 29px)", overflow: "auto" }} className="phone-scroll">
@@ -657,8 +724,101 @@ function EntryDetail({ entry, entries, tomes, onBack, onRelationClick }) {
       </div>
       <div style={{ height: 80 }} />
       <div style={{ position: "sticky", bottom: 0, padding: "14px 20px 24px", background: `linear-gradient(180deg, transparent, ${C.paper} 30%)`, display: "flex", gap: 8 }}>
-        <button style={{ flex: 1, padding: 12, borderRadius: 999, background: C.ink, color: C.cream, border: "none", fontFamily: F.serifCn, fontSize: 13, letterSpacing: "3px", cursor: "pointer" }}>继续写 · edit</button>
+        <button onClick={onEdit} style={{ flex: 1, padding: 12, borderRadius: 999, background: C.ink, color: C.cream, border: "none", fontFamily: F.serifCn, fontSize: 13, letterSpacing: "3px", cursor: "pointer" }}>继续写 · edit</button>
         <button style={{ padding: "12px 16px", borderRadius: 999, background: "transparent", border: `0.5px solid ${C.rule}`, fontFamily: F.serifCn, fontSize: 12, color: C.inkSoft, letterSpacing: "1px", cursor: "pointer" }}>···</button>
+      </div>
+    </div>
+  );
+}
+
+// ── EntryEdit helpers ──
+function PropRow({ k, v }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "78px 1fr", padding: "9px 14px", gap: 12, alignItems: "center", borderBottom: `0.5px solid ${C.rule}` }}>
+      <span style={{ fontFamily: F.serifCn, fontSize: 10, color: C.inkFaint, letterSpacing: "2px" }}>{k}</span>
+      <span style={{ fontFamily: F.serifCn, fontSize: 12, color: C.ink, letterSpacing: "0.5px" }}>{v}</span>
+    </div>
+  );
+}
+
+function SlashMenu() {
+  const items = [
+    { glyph: "¶", cn: "段落", en: "paragraph" },
+    { glyph: "H", cn: "小标题", en: "heading" },
+    { glyph: '"', cn: "引言", en: "quote" },
+    { glyph: "◇", cn: "设定块", en: "property" },
+    { glyph: "◧", cn: "图", en: "image" },
+    { glyph: "＋", cn: "羁绊", en: "relation" },
+  ];
+  return (
+    <div style={{ marginTop: 14, padding: "6px 0", background: C.cream, borderRadius: 6, border: `0.5px solid ${C.rule}`, boxShadow: "0 8px 20px rgba(40,30,20,0.12)", width: "100%" }}>
+      <div style={{ padding: "4px 12px", fontFamily: F.serifEn, fontStyle: "italic", fontSize: 10, color: C.inkFaint, letterSpacing: "1.5px" }}>/ — 唤起</div>
+      {items.map((it) => (
+        <div key={it.cn} style={{ padding: "6px 12px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+          <span style={{ width: 22, height: 22, borderRadius: 4, background: C.paperDeep, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: F.serifCn, fontSize: 12, color: C.inkSoft }}>{it.glyph}</span>
+          <span style={{ fontFamily: F.serifCn, fontSize: 12, color: C.ink, letterSpacing: "1px" }}>{it.cn}</span>
+          <span style={{ fontFamily: F.serifEn, fontStyle: "italic", fontSize: 10, color: C.inkFaint, letterSpacing: "1px" }}>{it.en}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EntryEdit({ entry, entries, tomes, onBack }) {
+  const tome = tomes.find((x) => x.id === entry.tome);
+  const T = TYPES[entry.type] || TYPES.character;
+  return (
+    <div style={{ width: "100%", height: "100%", background: C.paper, position: "relative", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <style>{`@keyframes gPulse{0%,100%{opacity:1}50%{opacity:.4}} @keyframes gBlink{0%,49%{opacity:1}50%,100%{opacity:0}}`}</style>
+      <div style={{ padding: "4px 16px 10px", display: "flex", alignItems: "center", gap: 10 }}>
+        <span onClick={onBack} style={{ fontFamily: F.serifEn, fontStyle: "italic", fontSize: 12, color: C.inkFaint, letterSpacing: "1px", cursor: "pointer" }}>✕ 关</span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontFamily: F.handEn, fontSize: 14, color: C.gold, letterSpacing: "1px", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#5B7A6A", display: "inline-block", animation: "gPulse 1.4s infinite" }} />
+          autosaved · just now
+        </span>
+      </div>
+      <div style={{ padding: "0 20px 10px", fontFamily: F.serifEn, fontStyle: "italic", fontSize: 10, color: C.inkFaint, letterSpacing: "1.5px" }}>
+        <span style={{ fontFamily: F.serifCn, fontStyle: "normal", color: C.inkSoft }}>{tome?.title}</span>
+        <span style={{ opacity: 0.5, margin: "0 4px" }}>/</span>
+        <span style={{ fontFamily: F.serifCn, fontStyle: "normal", color: C.ink }}>{entry.title}</span>
+        <span style={{ marginLeft: 8, opacity: 0.6 }}>· editing</span>
+      </div>
+      <div style={{ flex: 1, overflow: "auto", padding: "0 24px" }} className="phone-scroll">
+        <div style={{ padding: "6px 0 14px", display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {Object.entries(TYPES).map(([k, v]) => {
+            const on = entry.type === k;
+            return (
+              <button key={k} style={{ fontFamily: F.serifCn, fontSize: 10, letterSpacing: "1px", padding: "4px 10px", borderRadius: 999, border: `0.5px solid ${on ? v.color : C.rule}`, background: on ? `${v.color}15` : "transparent", color: on ? v.color : C.inkFaint, cursor: "pointer" }}>{v.glyph} {v.cn}</button>
+            );
+          })}
+        </div>
+        <div style={{ fontFamily: F.serifCn, fontSize: 28, fontWeight: 600, color: C.ink, letterSpacing: "2px", lineHeight: 1.3, position: "relative", paddingBottom: 4 }}>
+          {entry.title}
+          <span style={{ display: "inline-block", width: 2, height: 28, background: C.gold, marginLeft: 3, verticalAlign: -3, animation: "gBlink 1s infinite" }} />
+        </div>
+        <input readOnly value={entry.titleEn} style={{ marginTop: 6, border: "none", outline: "none", background: "transparent", fontFamily: F.serifEn, fontStyle: "italic", fontSize: 14, color: C.inkSoft, letterSpacing: "1px", width: "100%" }} />
+        <input readOnly value={entry.sub} style={{ marginTop: 8, border: "none", outline: "none", background: "transparent", fontFamily: F.serifCn, fontSize: 12, color: C.inkSoft, letterSpacing: "0.5px", width: "100%" }} />
+        <div style={{ marginTop: 18, border: `0.5px solid ${C.rule}`, borderRadius: 6, background: C.cream, overflow: "hidden" }}>
+          {Object.entries(entry.fields || {}).filter(([k]) => k !== "一句话").slice(0, 4).map(([k, v]) => <PropRow key={k} k={k} v={v} />)}
+          <div style={{ padding: "9px 14px", display: "flex", alignItems: "center", gap: 6, color: C.inkFaint, cursor: "pointer", borderTop: `0.5px solid ${C.rule}`, fontFamily: F.serifCn, fontSize: 10, letterSpacing: "1.5px" }}>＋ 添字段</div>
+        </div>
+        <div style={{ marginTop: 18, padding: "10px 12px", background: C.paperDeep, borderRadius: 6, border: `0.5px dashed ${C.rule}`, fontFamily: F.serifCn, fontSize: 11, color: C.inkFaint, letterSpacing: "1px", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ padding: "0 4px", border: `0.5px solid ${C.inkFaint}`, borderRadius: 2, fontFamily: F.serifEn, fontSize: 10 }}>/</span>
+          唤一个段落 · 标题 · 引用 · 图…
+        </div>
+        <div style={{ marginTop: 14, fontFamily: F.body, fontSize: 13, color: C.ink, lineHeight: 2.0, letterSpacing: "0.5px", textIndent: "2em" }}>
+          {entry.body || "名字是弥拉给的。"}<span style={{ color: C.inkFaint, fontStyle: "italic" }}>|</span>
+        </div>
+        <SlashMenu />
+        <div style={{ height: 200 }} />
+      </div>
+      <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 6, borderTop: `0.5px solid ${C.rule}`, background: C.paperDeep }}>
+        {["B","I","U","S","¶","H1",'"',"◇","＋"].map((g) => (
+          <button key={g} style={{ width: 30, height: 30, borderRadius: 6, border: "none", background: "transparent", cursor: "pointer", color: C.inkSoft, fontFamily: g.length === 1 ? F.serifEn : F.serifCn, fontWeight: 600, fontSize: 13, fontStyle: g === "I" ? "italic" : "normal" }}>{g}</button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <button onClick={onBack} style={{ padding: "7px 14px", borderRadius: 999, border: "none", background: C.ink, color: C.cream, fontFamily: F.serifCn, fontSize: 11, letterSpacing: "2px", cursor: "pointer" }}>完成</button>
       </div>
     </div>
   );
@@ -716,7 +876,8 @@ export default function GrimoireApp() {
   const [tomes, setTomes] = useState(SAMPLE_TOMES);
   const [entries, setEntries] = useState(SAMPLE_ENTRIES);
   const [loaded, setLoaded] = useState(false);
-  const [nav, setNav] = useState({ screen: "home" }); // { screen: 'home'|'tome'|'entry', tomeId, entryId }
+  const [nav, setNav] = useState({ screen: "home" }); // { screen: 'home'|'tome'|'entry'|'edit', tomeId, entryId }
+  const [homeVariant, setHomeVariant] = useState("spreads"); // spreads | bookshelf | index
   const density = "comfy";
 
   // Load data from API
@@ -749,8 +910,12 @@ export default function GrimoireApp() {
     const e = entries.find((x) => x.id === entryId);
     setNav({ screen: "entry", entryId, tomeId: e?.tome });
   }, [entries]);
+  const goEdit = useCallback(() => {
+    setNav((prev) => ({ ...prev, screen: "edit" }));
+  }, []);
   const goBack = useCallback(() => {
-    if (nav.screen === "entry" && nav.tomeId) setNav({ screen: "tome", tomeId: nav.tomeId });
+    if (nav.screen === "edit") setNav((prev) => ({ ...prev, screen: "entry" }));
+    else if (nav.screen === "entry" && nav.tomeId) setNav({ screen: "tome", tomeId: nav.tomeId });
     else goHome();
   }, [nav, goHome]);
 
@@ -761,20 +926,39 @@ export default function GrimoireApp() {
         .phone-scroll::-webkit-scrollbar, .phone-scroll *::-webkit-scrollbar { display: none; width: 0; height: 0; }
       `}</style>
 
+      {/* Home — three variants switchable from a small tab strip */}
       {nav.screen === "home" && (
-        <HomeSpreads tomes={tomes} entries={entries} onTome={goTome} onEntry={goEntry} />
+        <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* home variant switcher */}
+          <div style={{ display: "flex", justifyContent: "center", padding: "8px 0 0", background: C.paper, gap: 2 }}>
+            {[{id:"spreads",cn:"封面"},{id:"bookshelf",cn:"书架"},{id:"index",cn:"索引"}].map((v) => {
+              const on = homeVariant === v.id;
+              return (
+                <button key={v.id} onClick={() => setHomeVariant(v.id)} style={{ padding: "4px 12px", borderRadius: 999, border: "none", background: on ? C.ink : "transparent", color: on ? C.cream : C.inkFaint, fontFamily: F.serifCn, fontSize: 10, letterSpacing: "1.5px", cursor: "pointer" }}>{v.cn}</button>
+              );
+            })}
+          </div>
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            {homeVariant === "spreads"    && <HomeSpreads   tomes={tomes} entries={entries} onTome={goTome} onEntry={goEntry} />}
+            {homeVariant === "bookshelf"  && <HomeBookshelf tomes={tomes} entries={entries} onTome={goTome} onEntry={goEntry} />}
+            {homeVariant === "index"      && <HomeIndex     tomes={tomes} onTome={goTome} />}
+          </div>
+        </div>
       )}
       {nav.screen === "tome" && currentTome && (
         <TomeScreen tome={currentTome} entries={entries} tomes={tomes} density={density} onBack={goHome} onEntry={goEntry} />
       )}
       {nav.screen === "entry" && currentEntry && (
-        <EntryDetail entry={currentEntry} entries={entries} tomes={tomes} onBack={goBack} onRelationClick={goEntry} />
+        <EntryDetail entry={currentEntry} entries={entries} tomes={tomes} onBack={goBack} onEdit={goEdit} onRelationClick={goEntry} />
+      )}
+      {nav.screen === "edit" && currentEntry && (
+        <EntryEdit entry={currentEntry} entries={entries} tomes={tomes} onBack={goBack} />
       )}
       {/* Fallback if tome/entry not found */}
       {nav.screen === "tome" && !currentTome && (
         <div style={{ padding: 20, color: C.inkFaint, fontFamily: F.serifCn, fontSize: 12 }}>找不到这本典。<button onClick={goHome} style={{ marginLeft: 8, background: "none", border: "none", color: C.inkSoft, cursor: "pointer", fontFamily: F.serifCn, textDecoration: "underline" }}>回首页</button></div>
       )}
-      {nav.screen === "entry" && !currentEntry && (
+      {(nav.screen === "entry" || nav.screen === "edit") && !currentEntry && (
         <div style={{ padding: 20, color: C.inkFaint, fontFamily: F.serifCn, fontSize: 12 }}>找不到这个词条。<button onClick={goHome} style={{ marginLeft: 8, background: "none", border: "none", color: C.inkSoft, cursor: "pointer", fontFamily: F.serifCn, textDecoration: "underline" }}>回首页</button></div>
       )}
     </main>
