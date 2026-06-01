@@ -1335,6 +1335,33 @@
   box-shadow: 0 5px 14px rgba(92, 75, 132, 0.26);
 }
 
+.room-actions .takeover-toggle {
+  min-width: 72px;
+  height: 46px;
+  border-radius: 18px;
+  border: 1px solid rgba(232, 219, 225, 0.96);
+  background: rgba(255, 255, 255, 0.96);
+  color: rgba(96, 79, 90, 0.88);
+  box-shadow: 0 5px 16px rgba(181, 146, 159, 0.12);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.room-actions .takeover-toggle.active {
+  color: #fff;
+  background: rgba(92, 75, 132, 0.96);
+  border-color: rgba(92, 75, 132, 0.98);
+  box-shadow: 0 7px 18px rgba(92, 75, 132, 0.28);
+}
+
+.room-actions .takeover-toggle.cc.active {
+  background: rgba(92, 112, 132, 0.96);
+  border-color: rgba(92, 112, 132, 0.98);
+  box-shadow: 0 7px 18px rgba(92, 112, 132, 0.24);
+}
+
 .chat-input,
 .sheet-input {
   width: 100%;
@@ -3080,6 +3107,66 @@
 }
 
 /* ── Moments: User Card ── */
+.chat-attachment-tray {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 2px 8px;
+  scrollbar-width: none;
+}
+
+.chat-attachment-tray::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-attachment-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: inset 0 0 0 1px rgba(232, 219, 225, 0.86), 0 6px 16px rgba(181, 146, 159, 0.12);
+}
+
+.chat-attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.chat-attachment-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(38, 28, 34, 0.68);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+
+.message-attachment-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+
+.message-attachment-grid .chat-attachment-thumb {
+  width: 118px;
+  height: 118px;
+  flex-basis: 118px;
+  border-radius: 16px;
+}
+
 .moments-user-card {
   border-radius: 26px;
   overflow: hidden;
@@ -5801,6 +5888,26 @@ button.model-choice-item {
   padding: 12px 14px !important;
   font-size: 14px !important;
   line-height: 1.55 !important;
+}
+
+.contact-settings-page .contact-persona-textarea.collapsed {
+  height: 132px !important;
+  min-height: 132px !important;
+  max-height: 132px !important;
+  overflow-y: auto;
+  resize: none;
+}
+
+.contact-settings-page .contact-persona-textarea.expanded {
+  min-height: 320px !important;
+  max-height: 58vh;
+  overflow-y: auto;
+}
+
+.contact-settings-page .persona-collapse-toggle {
+  min-height: 42px;
+  margin-top: -2px;
+  padding-block: 10px;
 }
 
 .contact-settings-page .persona-textarea::placeholder {

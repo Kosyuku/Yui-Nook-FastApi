@@ -242,7 +242,10 @@
         quickActionDropHintId: '',
         quickActionReorderPulseId: '',
         quickActionDropDirection: '',
+        contactPersonaExpanded: false,
         contactModelAdvancedOpen: false,
+        chatAttachments: [],
+        chatPasteError: '',
         companionState: {
             recent_topics: [],
             current_mood: '',
@@ -1372,6 +1375,15 @@
     function renderRoomHeader() {
         const c = byId(state.currentContactId) || state.contacts[0];
         const displayModel = c.settings?.model || state.globalSettings.defaultModel || 'gpt-5.4';
+        const codexAllowed = canToggleCodexForContact(c);
+        const ccAllowed = canToggleCCForContact(c);
+        const codexActive = isCodexEnabledForContact(c);
+        const ccActive = isCCEnabledForContact(c);
+        const takeoverButton = codexAllowed
+            ? `<button class="takeover-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex 接管' : '启用 Codex 接管'}">Codex</button>`
+            : ccAllowed
+                ? `<button class="takeover-toggle cc ${ccActive ? 'active' : ''}" data-action="toggle-cc-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${ccActive}" aria-label="${ccActive ? '关闭 Claude Code 接管' : '启用 Claude Code 接管'}">CC</button>`
+                : '';
         return `
       <header class="room-hero room-theme-${c.theme}">
         <div class="room-hero-inner">
@@ -1387,7 +1399,7 @@
             </div>
           </div>
           <div class="room-actions">
-            <button class="icon-btn icon-circle" data-action="open-rp-lobby" aria-label="Mirage 夢幻楼">${icon('history')}</button>
+            ${takeoverButton}
             <button class="icon-btn icon-circle" data-action="open-contact-settings" aria-label="\u8054\u7cfb\u4eba\u8bbe\u7f6e">${icon('settings')}</button>
           </div>
         </div>
@@ -1945,10 +1957,7 @@
         const quoteMoment = state.quoteMomentId ? getMoment(state.quoteMomentId) : null;
         const quoteMessage = state.quoteMessageId ? c.messages.find((item) => item.id === state.quoteMessageId) : null;
         const messages = visibleChatMessages(conversationMessagesForContact(c));
-        const codexAllowed = state.currentView !== 'rpRoom' && canToggleCodexForContact(c);
-        const codexActive = isCodexEnabledForContact(c);
-        const ccAllowed = state.currentView !== 'rpRoom' && canToggleCCForContact(c);
-        const ccActive = isCCEnabledForContact(c);
+        const attachments = (state.chatAttachments || []).map(serializeChatAttachment).filter(Boolean);
         return `
       <section class="room-page room-theme-${c.theme}">
         <div class="messages-panel">
@@ -1956,12 +1965,12 @@
         </div>
         <div class="composer-zone">
           ${quoteMessage ? renderMessageQuoteBar(quoteMessage, c) : quoteMoment ? renderQuoteBar(quoteMoment) : ''}
+          ${renderChatAttachmentTray(attachments)}
+          <input id="chat-image-input" class="moment-image-input" type="file" accept="image/*" multiple />
           <div class="composer-card">
             <div class="composer-input-wrap">
               <input class="chat-input" placeholder="\u8f93\u5165\u6d88\u606f..." value="" />
             </div>
-            ${codexAllowed ? `<button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>` : ''}
-            ${ccAllowed ? `<button class="codex-toggle cc-toggle ${ccActive ? 'active' : ''}" data-action="toggle-cc-mode" data-contact-id="${escapeHtml(c.id)}" type="button" aria-pressed="${ccActive}" aria-label="${ccActive ? '关闭 Claude Code' : '启用 Claude Code'}">${ccActive ? 'CC ON' : 'CC'}</button>` : ''}
             <button class="icon-btn icon-circle soft-mini" data-action="expand-actions" aria-label="\u9644\u4ef6">${icon('attach')}</button>
             ${state.streamingAbortController
                 ? `<button class="icon-btn send-round send-stop-active" data-action="fake-send" aria-label="\u505c\u6b62">${icon('stop')}</button>`
@@ -2020,6 +2029,8 @@
             ? renderToolLines(message.toolCalls)
             : '';
         const text = messageTextValue(message);
+        const attachments = messageAttachments(message);
+        const attachmentBlock = renderMessageAttachments(attachments);
         const showSourceMeta = message.role === 'ai' && (sourceBadge || (meta.showTime && message.time));
         const bubbleWrap = `
           <div class="message-bubble-wrap">
@@ -2027,7 +2038,7 @@
               ${cotButton}
               ${(message.typing || (message.streaming && !message.text))
                   ? `<div class="typing-dots"><span></span><span></span><span></span></div>`
-                  : `<div class="message-text">${escapeHtml(text)}</div>`}
+                  : `${attachmentBlock}${text ? `<div class="message-text">${escapeHtml(text)}</div>` : ''}`}
             </div>
             ${(showSourceMeta || (message.role === 'user' && meta.showTime && message.time)) ? `<div class="bubble-meta-row">
               ${sourceBadge}
@@ -2631,7 +2642,13 @@
           </div>
           <div class="settings-group glass-frost ai-panel">
             <h3>\u89d2\u8272\u8bbe\u5b9a</h3>
-                <textarea class="ai-textarea persona-textarea" data-contact-field="persona" rows="5" placeholder="\u5728\u8fd9\u91cc\u8f93\u5165 AI \u7684\u4eba\u8bbe\u3001\u89d2\u8272\u8bf4\u660e\u3001\u884c\u4e3a\u6307\u4ee4\u3002">${escapeHtml(c.persona || '')}</textarea>
+                <textarea class="ai-textarea persona-textarea contact-persona-textarea ${state.contactPersonaExpanded ? 'expanded' : 'collapsed'}" data-contact-field="persona" rows="${state.contactPersonaExpanded ? '12' : '4'}" placeholder="\u5728\u8fd9\u91cc\u8f93\u5165 AI \u7684\u4eba\u8bbe\u3001\u89d2\u8272\u8bf4\u660e\u3001\u884c\u4e3a\u6307\u4ee4\u3002">${escapeHtml(c.persona || '')}</textarea>
+            <button class="setting-row nav-row persona-collapse-toggle" data-action="toggle-contact-persona" aria-expanded="${state.contactPersonaExpanded ? 'true' : 'false'}">
+              <div class="setting-copy">
+                <strong>${state.contactPersonaExpanded ? '\u6536\u8d77\u89d2\u8272\u8bbe\u5b9a' : '\u5c55\u5f00\u89d2\u8272\u8bbe\u5b9a'}</strong>
+              </div>
+              <span class="row-chevron advanced-chevron ${state.contactPersonaExpanded ? 'open' : ''}">${icon('chevron')}</span>
+            </button>
             ${switchRow('显示推理内容', '仅在模型返回推理内容时显示', s.reasoning_visibility || false, 'toggle-contact', 'reasoning_visibility')}
           </div>
           <div class="settings-group glass-frost ai-panel">
@@ -3353,6 +3370,55 @@
             size: Number(attachment.size || 0),
             url: attachment.url || '',
         };
+    }
+
+    function messageAttachments(message = {}) {
+        return Array.isArray(message.attachments)
+            ? message.attachments.map(serializeChatAttachment).filter((item) => item && item.url)
+            : [];
+    }
+
+    function hasMessageAttachments(message = {}) {
+        return messageAttachments(message).length > 0;
+    }
+
+    function attachmentRequestText(text, attachments = []) {
+        const base = String(text || '').trim();
+        if (!attachments.length) return base;
+        const labels = attachments.map((item) => item.name || 'image').join(', ');
+        const note = `[图片附件：${labels}]`;
+        return base ? `${base}\n${note}` : note;
+    }
+
+    function attachmentLastMessage(text, attachments = []) {
+        const base = String(text || '').trim();
+        if (base) return base;
+        return attachments.length ? '[图片]' : '';
+    }
+
+    function renderAttachmentThumb(attachment, options = {}) {
+        const item = serializeChatAttachment(attachment);
+        if (!item?.url) return '';
+        return `
+      <div class="chat-attachment-thumb">
+        <img src="${escapeHtml(item.url)}" alt="${escapeHtml(item.name || '图片')}" />
+        ${options.removable ? `<button type="button" class="chat-attachment-remove" data-action="remove-chat-attachment" data-id="${escapeHtml(item.id)}" aria-label="移除图片">×</button>` : ''}
+      </div>
+    `;
+    }
+
+    function renderChatAttachmentTray(attachments = []) {
+        if (!attachments.length) return '';
+        return `
+      <div class="chat-attachment-tray">
+        ${attachments.map((item) => renderAttachmentThumb(item, { removable: true })).join('')}
+      </div>
+    `;
+    }
+
+    function renderMessageAttachments(attachments = []) {
+        if (!attachments.length) return '';
+        return `<div class="message-attachment-grid">${attachments.map((item) => renderAttachmentThumb(item)).join('')}</div>`;
     }
 
     function readChatAttachmentFile(file) {
@@ -4544,7 +4610,10 @@
             state.quickActionDropHintId = '';
             state.quickActionDropDirection = '';
             state.quickActionReorderPulseId = '';
-            if (state.currentSettingsTab !== 'model') state.contactModelAdvancedOpen = false;
+            if (state.currentSettingsTab !== 'model') {
+                state.contactModelAdvancedOpen = false;
+                state.contactPersonaExpanded = false;
+            }
             render();
             if (state.currentSettingsTab === 'memory') loadCompanionState();
             if (state.currentSettingsTab === 'model') loadAgentPersona(state.currentContactId);
@@ -4552,6 +4621,12 @@
 
         if (action === 'toggle-contact-advanced') {
             state.contactModelAdvancedOpen = !state.contactModelAdvancedOpen;
+            render();
+            return;
+        }
+
+        if (action === 'toggle-contact-persona') {
+            state.contactPersonaExpanded = !state.contactPersonaExpanded;
             render();
             return;
         }
@@ -4783,7 +4858,7 @@
     }
 
     function isRenderableMessage(message = {}) {
-        return !!messageTextValue(message) || !!message.typing || !!message.streaming || !!message.thinking || (Array.isArray(message.toolCalls) && message.toolCalls.length > 0);
+        return !!messageTextValue(message) || hasMessageAttachments(message) || !!message.typing || !!message.streaming || !!message.thinking || (Array.isArray(message.toolCalls) && message.toolCalls.length > 0);
     }
 
     function compactMessageMinute(message = {}) {
@@ -5967,17 +6042,20 @@
 
     async function doSendCCMessage() {
         const input = root()?.querySelector('.chat-input');
-        const text = input?.value?.trim();
-        if (!text) return;
+        const rawText = input?.value?.trim() || '';
+        const attachments = (state.chatAttachments || []).map(serializeChatAttachment).filter(Boolean);
+        if (!rawText && !attachments.length) return;
+        const text = attachmentRequestText(rawText, attachments);
         const c = byId(state.currentContactId);
         if (!c) return;
         cancelAssistantPlayback();
 
         const msgId = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        upsertMessage(c.messages, { id: msgId, client_message_id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
-        c.lastMessage = text;
+        upsertMessage(c.messages, { id: msgId, client_message_id: msgId, role: 'user', text: rawText, content: rawText, attachments, time: nowTimeStr(), created_at: new Date().toISOString() });
+        c.lastMessage = attachmentLastMessage(rawText, attachments);
         c.lastTime = '刚刚';
         input.value = '';
+        state.chatAttachments = [];
 
         const aiId = 'ai_' + Date.now();
         c.messages.push({
@@ -6029,7 +6107,7 @@
                 : null;
             const userIdx = c.messages.findIndex((m) => m.id === msgId);
             if (userIdx !== -1 && persistedUser) {
-                c.messages[userIdx] = contactMessageFromStored({ ...persistedUser, client_message_id: msgId });
+                c.messages[userIdx] = contactMessageFromStored({ ...persistedUser, content: rawText, text: rawText, attachments, client_message_id: msgId });
             }
             const idx = c.messages.findIndex((m) => m.id === aiId);
             if (idx !== -1 && reply) {
@@ -6087,17 +6165,20 @@
 
     async function doSendCodexMessage() {
         const input = root()?.querySelector('.chat-input');
-        const text = input?.value?.trim();
-        if (!text) return;
+        const rawText = input?.value?.trim() || '';
+        const attachments = (state.chatAttachments || []).map(serializeChatAttachment).filter(Boolean);
+        if (!rawText && !attachments.length) return;
+        const text = attachmentRequestText(rawText, attachments);
         const c = byId(state.currentContactId);
         if (!c) return;
         cancelAssistantPlayback();
 
         const msgId = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        upsertMessage(c.messages, { id: msgId, client_message_id: msgId, role: 'user', text, content: text, time: nowTimeStr(), created_at: new Date().toISOString() });
-        c.lastMessage = text;
+        upsertMessage(c.messages, { id: msgId, client_message_id: msgId, role: 'user', text: rawText, content: rawText, attachments, time: nowTimeStr(), created_at: new Date().toISOString() });
+        c.lastMessage = attachmentLastMessage(rawText, attachments);
         c.lastTime = '\u521a\u521a';
         input.value = '';
+        state.chatAttachments = [];
 
         const aiId = 'ai_' + Date.now();
         c.messages.push({
@@ -6149,7 +6230,7 @@
                 : null;
             const userIdx = c.messages.findIndex((m) => m.id === msgId);
             if (userIdx !== -1 && persistedUser) {
-                c.messages[userIdx] = contactMessageFromStored({ ...persistedUser, client_message_id: msgId });
+                c.messages[userIdx] = contactMessageFromStored({ ...persistedUser, content: rawText, text: rawText, attachments, client_message_id: msgId });
             }
             const idx = c.messages.findIndex((m) => m.id === aiId);
             if (idx !== -1 && reply) {
@@ -6490,8 +6571,10 @@
     //  Send message (SSE streaming)
     async function doSendMessage() {
         const input = root()?.querySelector('.chat-input');
-        const rawText = input?.value?.trim();
-        if (!rawText) return;
+        const rawText = input?.value?.trim() || '';
+        const attachments = (state.chatAttachments || []).map(serializeChatAttachment).filter(Boolean);
+        if (!rawText && !attachments.length) return;
+        const requestText = attachmentRequestText(rawText, attachments);
         const c = byId(state.currentContactId);
         if (!c) return;
         cancelAssistantPlayback();
@@ -6505,10 +6588,11 @@
             return;
         }
         const uMsgId = `u_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        upsertMessage(c.messages, { id: uMsgId, client_message_id: uMsgId, session_id: sessionId, agent_id: c.id, role: 'user', text: rawText, content: rawText, time: nowTimeStr(), created_at: new Date().toISOString() });
-        c.lastMessage = rawText;
+        upsertMessage(c.messages, { id: uMsgId, client_message_id: uMsgId, session_id: sessionId, agent_id: c.id, role: 'user', text: rawText, content: rawText, attachments, time: nowTimeStr(), created_at: new Date().toISOString() });
+        c.lastMessage = attachmentLastMessage(rawText, attachments);
         c.lastTime = '\u521a\u521a';
         input.value = '';
+        state.chatAttachments = [];
         syncConversationsFromContacts();
         queueLocalSyncIfChanged(120);
         render();
@@ -6517,7 +6601,7 @@
         // Buffer: debounce AI request, extend timer while user is typing
         if (!_chatMsgBuffers[c.id]) _chatMsgBuffers[c.id] = { texts: [], timer: null, listener: null };
         const buf = _chatMsgBuffers[c.id];
-        buf.texts.push(rawText);
+        buf.texts.push(requestText);
         if (buf.timer) clearTimeout(buf.timer);
         if (!buf.listener) {
             buf.listener = () => {
@@ -9222,6 +9306,11 @@
                 render();
             };
             reader.readAsDataURL(file);
+            return;
+        }
+        if (target?.id === 'chat-image-input') {
+            addChatImageFiles(target.files || []);
+            target.value = '';
             return;
         }
         if (target?.dataset?.action === 'select-slot-model') {
