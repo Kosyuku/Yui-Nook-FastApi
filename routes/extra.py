@@ -2323,6 +2323,11 @@ async def update_perle_photo(photo_id: str, payload: PerlePhotoUpdate):
     await db._supabase_update("perle_photos", {"id": f"eq.{photo_id}"}, updates)
     return {"ok": True}
 
+@extra_api.delete("/perle/photos/{photo_id}")
+async def delete_perle_photo(photo_id: str):
+    await db._supabase_delete("perle_photos", {"id": f"eq.{photo_id}"})
+    return {"ok": True}
+
 class PerleTrack(BaseModel):
     title: str
     title_en: str = ""

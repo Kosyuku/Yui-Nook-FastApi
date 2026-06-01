@@ -188,7 +188,7 @@ def _format_existing_memories(memories: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for m in memories:
         tag = m.get("category") or m.get("tag") or ""
-        content = str(m.get("content") or m.get("compressed_content") or "").strip()
+        content = str(m.get("raw_content") or m.get("content") or m.get("compressed_content") or "").strip()
         imp = m.get("importance") or 3
         if content:
             lines.append(f"[{tag}/imp{imp}] {content[:120]}")
@@ -327,7 +327,6 @@ async def run_memory_extraction(agent_id: str) -> dict[str, Any]:
                 content=item["content"],
                 category=item["tag"],
                 raw_content=item["content"],
-                compressed_content=item["content"],
                 importance=item["importance"],
                 source="extraction",
                 agent_id=agent_id,

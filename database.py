@@ -720,7 +720,7 @@ def memory_tier_label(category: str | None) -> str:
 
 
 def memory_raw_content(memory: dict[str, Any]) -> str:
-    return str(memory.get("raw_content") or memory.get("content") or "").strip()
+    return str(memory.get("raw_content") or memory.get("content") or memory.get("compressed_content") or "").strip()
 
 
 def memory_display_content(memory: dict[str, Any]) -> str:
@@ -2120,11 +2120,7 @@ async def ensure_memory_compression(memory_id: str, raw_content: str) -> str | N
     compressed = await _generate_memory_compressed_content(raw_content)
     if not compressed:
         return None
-    await update_memory(
-        memory_id,
-        compressed_content=compressed,
-        content=compressed,
-    )
+    await update_memory(memory_id, compressed_content=compressed)
     return compressed
 
 
@@ -4799,9 +4795,11 @@ async def add_memory(
         purpose="add_memory",
     )
     normalized_category = normalize_memory_category(category)
-    raw_text = (raw_content or content or "").strip()
+    stored_content = (content or "").strip()
+    raw_text = (raw_content if raw_content is not None else stored_content).strip()
     compressed_text = (compressed_content or "").strip()
-    stored_content = compressed_text or raw_text
+    if not stored_content:
+        stored_content = raw_text or compressed_text
     importance_value = max(1, min(5, int(importance or 3)))
     if _use_supabase_memory():
         memory = await _supabase_add_memory(
@@ -4941,34 +4939,33 @@ async def update_memory(memory_id: str, **kwargs) -> bool:
         kwargs["visibility"] = normalize_visibility(kwargs["visibility"])
     if "source_agent_id" in kwargs:
         kwargs["source_agent_id"] = await require_agent(kwargs["source_agent_id"])
-    schedule_raw_text = ""
+    schedule_source_text = ""
+    content_changed = False
     if "raw_content" in kwargs:
         raw_text = (kwargs.get("raw_content") or "").strip()
         kwargs["raw_content"] = raw_text
-        if "compressed_content" not in kwargs:
-            kwargs["compressed_content"] = ""
-        kwargs["content"] = (kwargs.get("compressed_content") or "").strip() or raw_text
-        schedule_raw_text = raw_text
-    elif "content" in kwargs and "compressed_content" not in kwargs:
-        raw_text = (kwargs.get("content") or "").strip()
-        kwargs["content"] = raw_text
-        kwargs["raw_content"] = raw_text
-        kwargs["compressed_content"] = ""
-        schedule_raw_text = raw_text
-    elif "compressed_content" in kwargs:
+        schedule_source_text = raw_text
+        content_changed = True
+    if "content" in kwargs:
+        content_text = (kwargs.get("content") or "").strip()
+        kwargs["content"] = content_text
+        if not schedule_source_text:
+            schedule_source_text = content_text
+        content_changed = True
+    if "compressed_content" in kwargs:
         compressed = (kwargs.get("compressed_content") or "").strip()
         kwargs["compressed_content"] = compressed
-        if compressed:
-            kwargs["content"] = compressed
+    elif content_changed:
+        kwargs["compressed_content"] = ""
     if "importance" in kwargs and kwargs["importance"] is not None:
         kwargs["importance"] = max(1, min(5, int(kwargs["importance"])))
     if "expires_at" in kwargs and kwargs["expires_at"] is None:
         kwargs["expires_at"] = ""
     if _use_supabase_memory():
         ok = await _supabase_update_memory(memory_id, **kwargs)
-        if ok and schedule_raw_text:
+        if ok and schedule_source_text:
             try:
-                await _schedule_memory_processing(memory_id, schedule_raw_text)
+                await _schedule_memory_processing(memory_id, schedule_source_text)
             except Exception as exc:
                 logger.warning("Failed to refresh memory processing %s: %s", memory_id, exc)
         return ok
@@ -4978,9 +4975,9 @@ async def update_memory(memory_id: str, **kwargs) -> bool:
     vals = list(kwargs.values()) + [memory_id]
     result = await db.execute(f"UPDATE memories SET {sets} WHERE id = ?", vals)
     await db.commit()
-    if result.rowcount > 0 and schedule_raw_text:
+    if result.rowcount > 0 and schedule_source_text:
         try:
-            await _schedule_memory_processing(memory_id, schedule_raw_text)
+            await _schedule_memory_processing(memory_id, schedule_source_text)
         except Exception as exc:
             logger.warning("Failed to refresh memory processing %s: %s", memory_id, exc)
     return result.rowcount > 0
