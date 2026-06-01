@@ -8,6 +8,7 @@ import {
   updateMediaItem,
   updateMediaItemLyrics,
   withMediaUrls,
+  deleteMediaItem,
 } from "./mediaApi.js";
 import { apiUrl } from "./apiBase.js";
 
@@ -327,7 +328,7 @@ export function Tape({ color = 'rgba(246, 220, 196, 0.75)', width = 64, height =
 }
 
 // ===== Photo Viewer (fullscreen black) =====
-function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalTags }) {
+function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, onDelete, globalTags }) {
   const [idx, setIdx] = useState(startIdx);
   const [tagInput, setTagInput] = useState('');
   const [tagError, setTagError] = useState('');
@@ -336,33 +337,18 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalT
   const [renaming, setRenaming] = useState(false);
   const [savingTag, setSavingTag] = useState(false);
   const [savingName, setSavingName] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const touchStartX = useRef(0);
   const renameInputRef = useRef(null);
   const photo = photos[idx];
   if (!photo) return null;
   const go = (dir) => setIdx(i => Math.max(0, Math.min(photos.length - 1, i + dir)));
-  const stopControlEvent = (event) => {
-    event.stopPropagation();
-  };
-  const hiddenLayerStyle = {
-    position: 'absolute',
-    opacity: 0,
-    pointerEvents: 'none',
-    width: 0,
-    height: 0,
-    overflow: 'hidden',
-  };
+  const stopControlEvent = (event) => { event.stopPropagation(); };
+
   const submitTag = async (tag) => {
     const nextTag = toInputValue(tag).trim();
-    const disabledReason = savingTag ? "saving" : (!nextTag ? "empty_tag" : (!photo.id ? "missing_photo_id" : ""));
-    console.log("[Perle PhotoViewer] add tag", {
-      tagInput,
-      tag: nextTag,
-      photoId: photo.id,
-      agentId: mediaAgentId,
-      disabledReason,
-    });
-    if (disabledReason) return;
+    if (savingTag || !nextTag || !photo.id) return;
     setSavingTag(true);
     setTagError('');
     try {
@@ -379,52 +365,74 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalT
     event.stopPropagation();
     submitTag(tagInput);
   };
+
+  // ---- Rename: input is always mounted so focus() works within the touch gesture ----
   const startRename = () => {
-    setRenameDraft(toInputValue(displayPhotoName({
-      id: photo.id,
-      title: photo.title,
-      label: photo.label,
-      originalName: photo.originalName,
-    })));
+    const draft = toInputValue(displayPhotoName({
+      id: photo.id, title: photo.title, label: photo.label, originalName: photo.originalName,
+    }));
+    setRenameDraft(draft);
     setRenameError('');
     setRenaming(true);
+    // Call focus synchronously inside the click handler so iOS opens the keyboard
+    if (renameInputRef.current) {
+      renameInputRef.current.focus();
+    }
   };
-  useEffect(() => {
-    if (!renaming) return;
-    requestAnimationFrame(() => {
-      renameInputRef.current?.focus?.();
-      renameInputRef.current?.select?.();
-    });
-  }, [renaming]);
+
   const submitRename = async () => {
     const nextName = toInputValue(renameDraft).trim();
     if (savingName) return;
-    if (!nextName) {
-      setRenameError("Name cannot be empty.");
-      return;
-    }
+    if (!nextName) { setRenameError("不能为空"); return; }
     setSavingName(true);
     setRenameError('');
     try {
       await onRename(photo.id, nextName);
       setRenaming(false);
     } catch (error) {
-      setRenameError(error?.message || "Rename failed.");
+      setRenameError(error?.message || "保存失败");
     } finally {
       setSavingName(false);
     }
   };
 
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    setMenuOpen(false);
+    try {
+      await onDelete(photo.id);
+      onClose();
+    } catch (error) {
+      console.error('Delete failed:', error);
+      setDeleting(false);
+    }
+  };
+
+  // Always-mounted style for rename input when hidden — keeps it focusable
+  const inputHiddenStyle = {
+    position: 'absolute', left: '-200%', width: '100%', display: 'flex',
+    alignItems: 'center', gap: 8, opacity: 0, pointerEvents: 'none',
+  };
+
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#0a0a0a', zIndex: 500, display: 'flex', flexDirection: 'column', touchAction: 'pan-y' }}>
+      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', flexShrink: 0 }}>
         <div onClick={onClose} style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: '50%', background: 'rgba(255,255,255,0.08)' }}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4l8 8" stroke="#fff" strokeWidth="1.4" strokeLinecap="round"/></svg>
         </div>
         <div style={{ fontFamily: DD_FONTS.serifEn, fontStyle: 'italic', color: 'rgba(255,255,255,0.45)', fontSize: 13 }}>{idx + 1} / {photos.length}</div>
-        <div style={{ width: 36 }} />
+        <div onClick={() => setMenuOpen(true)} style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: '50%', background: 'rgba(255,255,255,0.08)' }}>
+          <svg width="16" height="4" viewBox="0 0 16 4" fill="none">
+            <circle cx="2" cy="2" r="1.6" fill="rgba(255,255,255,0.7)"/>
+            <circle cx="8" cy="2" r="1.6" fill="rgba(255,255,255,0.7)"/>
+            <circle cx="14" cy="2" r="1.6" fill="rgba(255,255,255,0.7)"/>
+          </svg>
+        </div>
       </div>
 
+      {/* Photo area */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
         onTouchStart={e => { touchStartX.current = e.touches[0].clientX; }}
         onTouchEnd={e => { const dx = e.changedTouches[0].clientX - touchStartX.current; if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1); }}
@@ -442,21 +450,37 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalT
         )}
       </div>
 
+      {/* Bottom controls */}
       <div onPointerDown={stopControlEvent} onTouchStart={stopControlEvent} style={{ flexShrink: 0, position: 'relative', zIndex: 5, background: 'rgba(0,0,0,0.75)', padding: '12px 18px calc(28px + env(safe-area-inset-bottom, 0px))', backdropFilter: 'blur(12px)', touchAction: 'manipulation' }}>
+        {/* Rename row — input always mounted for mobile keyboard */}
         <div style={{ marginBottom: 10, position: 'relative' }}>
-          <div style={renaming ? { display: 'flex', alignItems: 'center', gap: 8 } : hiddenLayerStyle} aria-hidden={!renaming}>
-            <input ref={renameInputRef} value={toInputValue(renameDraft)} onChange={(event) => setRenameDraft(event.target.value)} disabled={!renaming} className="perle-field perle-dark-field" style={{ flex: 1, minWidth: 0, pointerEvents: renaming ? 'auto' : 'none' }} />
-            <button type="button" className="perle-primary-button" onClick={submitRename} disabled={savingName} style={{ minHeight: 34, opacity: savingName ? 0.65 : 1 }}>保存</button>
-            <button type="button" className="perle-ghost-button perle-dark-button" onClick={() => { setRenameDraft(''); setRenameError(''); setRenaming(false); }} style={{ minHeight: 34 }}>取消</button>
+          <div style={renaming ? { display: 'flex', alignItems: 'center', gap: 8 } : inputHiddenStyle} aria-hidden={!renaming}>
+            <input
+              ref={renameInputRef}
+              value={toInputValue(renameDraft)}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setRenaming(false); }}
+              className="perle-field perle-dark-field"
+              style={{ flex: 1, minWidth: 0 }}
+              autoComplete="off"
+            />
+            <button type="button" className="perle-primary-button" onClick={submitRename} disabled={savingName} style={{ minHeight: 34, opacity: savingName ? 0.65 : 1, flexShrink: 0 }}>保存</button>
+            <button type="button" className="perle-ghost-button perle-dark-button" onClick={() => { setRenameDraft(''); setRenameError(''); setRenaming(false); }} style={{ minHeight: 34, flexShrink: 0 }}>取消</button>
           </div>
-          <div style={renaming ? hiddenLayerStyle : { display: 'flex', alignItems: 'center', gap: 8 }} aria-hidden={renaming}>
-            <div style={{ fontFamily: DD_FONTS.handCn, fontSize: 15, color: 'rgba(255,255,255,0.75)', letterSpacing: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayPhotoName({ id: photo.id, title: photo.title, label: photo.label, originalName: photo.originalName })}</div>
-            <button type="button" onClick={startRename} aria-label="重命名" style={{ width: 28, height: 28, border: '0.5px solid rgba(255,255,255,0.18)', borderRadius: '50%', background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-              <svg width="13" height="13" viewBox="0 0 18 18" fill="none"><path d="M2.5 15.5h3.1L14.7 6.4 11.6 3.3 2.5 12.4v3.1Z" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round" /><path d="M10.8 4.1 13.9 7.2" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" /></svg>
-            </button>
-          </div>
+          {!renaming && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontFamily: DD_FONTS.handCn, fontSize: 15, color: 'rgba(255,255,255,0.75)', letterSpacing: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {displayPhotoName({ id: photo.id, title: photo.title, label: photo.label, originalName: photo.originalName })}
+              </div>
+              <button type="button" onClick={startRename} aria-label="重命名" style={{ width: 28, height: 28, border: '0.5px solid rgba(255,255,255,0.18)', borderRadius: '50%', background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+                <svg width="13" height="13" viewBox="0 0 18 18" fill="none"><path d="M2.5 15.5h3.1L14.7 6.4 11.6 3.3 2.5 12.4v3.1Z" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round" /><path d="M10.8 4.1 13.9 7.2" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" /></svg>
+              </button>
+            </div>
+          )}
           {renameError && <div role="alert" style={{ color: '#F0A3A3', fontFamily: DD_FONTS.serifEn, fontSize: 11, marginTop: 6 }}>{renameError}</div>}
         </div>
+
+        {/* Tag chips */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 10 }}>
           {globalTags.map(tag => {
             const active = (photo.tags || []).includes(tag) || photo.cat === tag;
@@ -470,8 +494,10 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalT
             );
           })}
         </div>
+
+        {/* Tag input */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'relative', zIndex: 2 }}>
-          <input value={toInputValue(tagInput)} onChange={(event) => setTagInput(event.target.value)} placeholder="+ 新标签"
+          <input value={toInputValue(tagInput)} onChange={(e) => setTagInput(e.target.value)} placeholder="+ 新标签"
             className="perle-field perle-dark-field"
             style={{ flex: 1 }}
             onKeyDown={e => { if (e.key === 'Enter') submitTag(tagInput); }}
@@ -482,13 +508,40 @@ function PhotoViewer({ photos, startIdx, onClose, onTagUpdate, onRename, globalT
         </div>
         {tagError && <div role="alert" style={{ color: '#F0A3A3', fontFamily: DD_FONTS.serifEn, fontSize: 11, marginTop: 7 }}>{tagError}</div>}
       </div>
+
+      {/* ··· More menu */}
+      {menuOpen && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 600, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+          <div onClick={() => setMenuOpen(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)' }} />
+          <div style={{ position: 'relative', background: '#1a1a1a', borderRadius: '18px 18px 0 0', padding: '8px 0 calc(16px + env(safe-area-inset-bottom, 0px))', zIndex: 1 }}>
+            <div style={{ width: 36, height: 4, borderRadius: 999, background: 'rgba(255,255,255,0.18)', margin: '6px auto 14px' }} />
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting}
+              style={{ width: '100%', padding: '14px 22px', background: 'transparent', border: 'none', textAlign: 'left', fontFamily: DD_FONTS.serifCn, fontSize: 15, letterSpacing: 1, color: '#FF6B6B', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, opacity: deleting ? 0.5 : 1 }}
+            >
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3 5h12M7 5V3.5h4V5M7.5 8v6M10.5 8v6M4 5l.8 9.5c0 .6.5 1 1 1h6.4c.6 0 1-.4 1-1L14 5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              删除照片
+            </button>
+            <div style={{ height: '0.5px', background: 'rgba(255,255,255,0.08)', margin: '4px 0' }} />
+            <button
+              type="button"
+              onClick={() => setMenuOpen(false)}
+              style={{ width: '100%', padding: '14px 22px', background: 'transparent', border: 'none', textAlign: 'center', fontFamily: DD_FONTS.serifCn, fontSize: 15, letterSpacing: 1, color: 'rgba(255,255,255,0.5)', cursor: 'pointer' }}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ===== Perle Gallery =====
 
-function PerleGalleryA({ photos, onAddPhotos, onHome, onTagUpdate, onRename }) {
+function PerleGalleryA({ photos, onAddPhotos, onHome, onTagUpdate, onRename, onDelete }) {
   const [active, setActive] = useState('all');
   const [viewerIdx, setViewerIdx] = useState(null);
 
@@ -514,6 +567,7 @@ function PerleGalleryA({ photos, onAddPhotos, onHome, onTagUpdate, onRename }) {
           onClose={() => setViewerIdx(null)}
           onTagUpdate={handleTagUpdate}
           onRename={onRename}
+          onDelete={onDelete}
           globalTags={globalTags}
         />
       )}
@@ -1341,6 +1395,23 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
     }
   };
 
+  const handlePhotoDelete = async (photoId) => {
+    const prevPhotos = photos;
+    setPhotos(prev => prev.filter(p => p.id !== photoId));
+    try {
+      if (mediaUploadProvider === "r2") {
+        await deleteMediaItem(photoId, false);
+        return;
+      }
+      const response = await fetch(apiUrl(`/api/perle/photos/${photoId}`), { method: 'DELETE' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (err) {
+      setPhotos(prevPhotos);
+      console.error('Photo delete failed:', err);
+      throw err;
+    }
+  };
+
   const handlePhotoRename = async (photoId, name) => {
     const photo = photos.find((p) => p.id === photoId);
     if (!photo) throw new Error("Photo not found.");
@@ -1415,6 +1486,7 @@ export default function PerleApp({ initialPage = 'photos', setPage, onHome }) {
             onHome={onHome}
             onTagUpdate={handleTagUpdate}
             onRename={handlePhotoRename}
+            onDelete={handlePhotoDelete}
           />
         ) : (
           <div style={{ position: 'relative', width: '100%', height: '100%' }}>

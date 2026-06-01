@@ -111,6 +111,14 @@ export async function updateMediaItemLyrics(id, payload) {
   return data.item;
 }
 
+export async function deleteMediaItem(id, deleteObject = false) {
+  const params = new URLSearchParams({ delete_object: String(deleteObject) });
+  const data = await jsonRequest(`/api/media/items/${encodeURIComponent(id)}?${params}`, {
+    method: 'DELETE',
+  });
+  return data;
+}
+
 export async function withMediaUrls(items, target = "file") {
   return Promise.all(
     (items || []).map(async (item) => {

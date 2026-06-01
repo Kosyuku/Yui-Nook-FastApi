@@ -277,6 +277,9 @@ const builtinApps = [
   { id: "grimoire", label: "魔典", glyph: "典", type: "应用", iconSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60"><rect width="60" height="60" rx="14" fill="#2C3E5C"/><rect x="10" y="11" width="34" height="42" rx="3" fill="#3A4D6F"/><rect x="10" y="11" width="5" height="42" rx="2" fill="#1F2A3E"/><rect x="14" y="15" width="26" height="0.8" fill="#C5A572" opacity="0.9"/><rect x="14" y="49" width="26" height="0.8" fill="#C5A572" opacity="0.9"/><rect x="14" y="17.5" width="26" height="0.4" fill="#C5A572" opacity="0.5"/><rect x="14" y="47" width="26" height="0.4" fill="#C5A572" opacity="0.5"/><text x="30" y="36" font-family="Georgia,serif" font-style="italic" font-size="18" fill="#C5A572" text-anchor="middle" dominant-baseline="middle" opacity="0.95">⊹</text></svg>` },
 ];
 
+// Expose to settings/stage components
+window.YUI_BUILTIN_APPS = builtinApps;
+
 const appTitles = Object.fromEntries(builtinApps.map((app) => [app.id, app.label]));
 const appAliases = {
   bubble: "chat",
@@ -362,8 +365,13 @@ function createInitialPhone() {
 function normalizeSavedApps(savedApps, fallbackApps) {
   if (!Array.isArray(savedApps) || !savedApps.length) return fallbackApps;
   const allowed = new Set(builtinApps.map((app) => app.id));
+  const byBuiltin = Object.fromEntries(builtinApps.map((app) => [app.id, app]));
   const normalized = savedApps
-    .map((app) => ({ ...app, id: appAliases[app.id] || app.id }))
+    .map((app) => {
+      const canonicalId = appAliases[app.id] || app.id;
+      const builtin = byBuiltin[canonicalId] || {};
+      return { ...builtin, ...app, id: canonicalId };
+    })
     .filter((app) => allowed.has(app.id));
   if (!normalized.some((app) => app.id === "chat")) return fallbackApps;
   return normalized;
@@ -2278,6 +2286,25 @@ export default function App() {
   }, [phone, phoneLoaded]);
 
   // settings-app-sync removed — new SettingsLoveApp writes directly to phone state via setPhone
+
+  // Live-sync layout changes from stage-atelier settings
+  useEffect(() => {
+    const handler = (event) => {
+      const detail = event?.detail;
+      if (!detail || typeof detail !== "object") return;
+      setPhone((current) => ({
+        ...current,
+        ...(Array.isArray(detail.desktopApps) && detail.desktopApps.length
+          ? { desktopApps: ensureDefaultApps(normalizeSavedApps(detail.desktopApps, current.desktopApps)) }
+          : {}),
+        ...(Array.isArray(detail.dockApps) && detail.dockApps.length
+          ? { dockApps: normalizeSavedApps(detail.dockApps, current.dockApps) }
+          : {}),
+      }));
+    };
+    window.addEventListener("yui-phone-layout-updated", handler);
+    return () => window.removeEventListener("yui-phone-layout-updated", handler);
+  }, []);
 
   useEffect(() => {
     installRichTextInputs(document);

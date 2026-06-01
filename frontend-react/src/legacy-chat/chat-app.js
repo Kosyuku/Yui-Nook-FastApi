@@ -283,9 +283,9 @@
         { key: 'pink', name: '蜜桃粉', desc: '更甜一点的粉色聊天氛围', roomTheme: 'rose', aliases: ['奶茶'] },
         { key: 'dark', name: '夜色', desc: '低亮度深色聊天界面', roomTheme: 'rose', aliases: [] },
         { key: 'glass', name: '玻璃雾', desc: '通透轻雾感的玻璃界面', roomTheme: 'mist', aliases: ['晴空'] },
-        { key: 'windowsill', name: '窗台', desc: '鼠尾草·陶土·亚麻 · 冷静工具感', roomTheme: 'rose', aliases: ['Windowsill'] },
-        { key: 'tape', name: '磁带', desc: '磨砂玻璃·铬色·等宽字 · 软件诚实', roomTheme: 'mist', aliases: ['Tape'] },
     ];
+    // Full-UI themes live in global settings (themeSettings), not per-contact
+    const FULL_UI_THEMES = ['windowsill', 'tape'];
 
     function normalizeChatThemeKey(value) {
         const raw = String(value || '').trim();
@@ -1016,10 +1016,12 @@
         const savedScroll = body ? body.scrollTop : 0;
         const activeContact = byId(state.currentContactId) || state.contacts[0];
         const chatThemeKey = getContactChatThemeKey(activeContact);
-        mount.dataset.theme = chatThemeKey;
+        const _globalTheme = state.globalSettings?.theme || '';
+        const effectiveTheme = FULL_UI_THEMES.includes(_globalTheme) ? _globalTheme : chatThemeKey;
+        mount.dataset.theme = effectiveTheme;
         mount.removeAttribute('data-bound');
         mount.innerHTML = `
-      <div class="chat-shell ${state.currentView === 'rpRoom' ? 'mode-rp rp-theatre-shell' : 'mode-normal'}" data-theme="${chatThemeKey}">
+      <div class="chat-shell ${state.currentView === 'rpRoom' ? 'mode-rp rp-theatre-shell' : 'mode-normal'}" data-theme="${effectiveTheme}">
         ${renderHeader()}
         <div class="chat-app-body ${['room', 'rpRoom'].includes(state.currentView) ? 'room-layout' : ''} ${showBottomNav() ? 'has-bottom-nav' : ''}">
           ${renderBody()}
@@ -5706,11 +5708,7 @@
             const isThinkingEvent = /^(thinking|reasoning|reason|thought|cot|inner_thought)$/i.test(eventType);
             const isChatEvent    = /^(chat|message|content|text|assistant|reply|response|output)$/i.test(eventType);
             if (isThinkingEvent) {
-                // thinking 浜嬩欢浼樺厛浠呭悆鏄庣‘鐨?reasoning 瀛楁锛岄伩鍏嶆妸姝ｆ枃 content 璇杩涙€濊€冮摼
-                thinking = obj.thinking ?? obj.reasoning ?? obj.reasoning_content ?? obj.reasoningContent ?? '';
-                if (!thinking) {
-                    // 閮ㄥ垎鍚庣浼氶敊璇湴鎶婃鏂囨斁鍦?thinking 浜嬩欢閲岋紝杩欓噷鍏滃簳涓烘鏂?                    text = obj.content ?? obj.text ?? obj.delta ?? '';
-                }
+                thinking = obj.thinking ?? obj.reasoning ?? obj.reasoning_content ?? obj.reasoningContent ?? obj.content ?? obj.text ?? obj.delta ?? '';
             } else if (isChatEvent) {
                 // event type says this is regular reply 鈥?only take content/delta/text
                 text    = obj.content ?? obj.text ?? obj.delta ?? '';
@@ -5891,6 +5889,7 @@
                             id: aiId,
                             role: 'ai',
                             text: fullText,
+                            content: fullText,
                             ...(allowReasoning && fullThinking ? { thinking: fullThinking } : {}),
                             time: nowTimeStr(),
                             typing: false,
@@ -6294,6 +6293,7 @@
         let fullText = '';
         let fullThinking = '';
         let fullToolCalls = null;
+        let _textFirstRendered = false;
 
         try {
             const resp = await requestChatStream(c, body, _abortCtrl.signal);
@@ -6377,6 +6377,24 @@
 
                     if (chunk) {
                         fullText += chunk;
+                        const idx3 = aiIdx();
+                        if (idx3 !== -1) {
+                            c.messages[idx3] = {
+                                ...c.messages[idx3],
+                                text: fullText,
+                                content: fullText,
+                                time: nowTimeStr(),
+                                typing: false,
+                                streaming: true,
+                            };
+                            if (!_textFirstRendered) {
+                                _textFirstRendered = true;
+                                render();
+                                scrollToBottom();
+                            } else {
+                                patchStreamingMessageDom(aiId, fullText, fullThinking);
+                            }
+                        }
                     }
                     _lineBudget += 1;
                     if (_lineBudget >= 32) {
@@ -6746,20 +6764,11 @@
     // Attach panel
     function renderAttachPanel() {
         const c = byId(state.currentContactId) || state.contacts[0] || {};
-        const codexAllowed = state.currentView !== 'rpRoom' && canToggleCodexForContact(c);
-        const codexActive = isCodexEnabledForContact(c);
-        const ccAllowed = state.currentView !== 'rpRoom' && canToggleCCForContact(c);
-        const ccActive = isCCEnabledForContact(c);
-        const modeToggles = [
-            codexAllowed ? `<button class="codex-toggle ${codexActive ? 'active' : ''}" data-action="toggle-codex-mode" data-contact-id="${escapeHtml(c.id || '')}" type="button" aria-pressed="${codexActive}" aria-label="${codexActive ? '关闭 Codex' : '启用 Codex'}">${codexActive ? 'Cx ON' : 'Cx'}</button>` : '',
-            ccAllowed ? `<button class="codex-toggle cc-toggle ${ccActive ? 'active' : ''}" data-action="toggle-cc-mode" data-contact-id="${escapeHtml(c.id || '')}" type="button" aria-pressed="${ccActive}" aria-label="${ccActive ? '关闭 Claude Code' : '启用 Claude Code'}">${ccActive ? 'CC ON' : 'CC'}</button>` : '',
-        ].filter(Boolean).join('');
         const quickActions = state.currentView === 'room'
             ? getContactQuickActions(c).map(renderActionChip).join('')
             : '';
         return `
       <div class="attach-panel glass-frost">
-        ${modeToggles ? `<div class="attach-mode-row">${modeToggles}</div>` : ''}
         <div class="attach-grid">
           <button class="attach-option" data-action="attach-option" data-label="\u56fe\u7247">
             <span class="attach-icon">\ud83d\uddbc\ufe0f</span><span>\u56fe\u7247</span>
@@ -7356,25 +7365,45 @@
     }
 
     function renderThemeSettingsPage() {
-        const options = [
+        const veilOptions = [
             { id: '\u5976\u6cb9\u7c89', key: 'rose', desc: '\u67d4\u548c\u7c89\u767d' },
             { id: '\u4e91\u96fe\u7070', key: 'mist', desc: '\u51b7\u6de1\u6d45\u7070' },
             { id: '\u5976\u6cb9\u674f', key: 'cream', desc: '\u6696\u8c03\u7c73\u767d' },
         ];
+        const fullUiOptions = [
+            { id: 'windowsill', key: 'windowsill', name: '\u7a97\u53f0', desc: '\u9f20\u5c3e\u8349\xb7\u9676\u571f\xb7\u4e9a\u9ebb \xb7 \u51b7\u9759\u5de5\u5177\u611f' },
+            { id: 'tape', key: 'tape', name: '\u78c1\u5e26', desc: '\u78e8\u7802\u73bb\u7483\xb7\u9493\u8272\xb7\u7b49\u5bbd\u5b57 \xb7 \u8f6f\u4ef6\u8bda\u5b9e' },
+        ];
         const current = state.globalSettings.theme;
+        const isFullUi = FULL_UI_THEMES.includes(current);
         return `
       <section class="settings-page page-block ai-settings-page">
         <div class="settings-group glass-frost ai-panel compact-panel">
-          <h3>\u4e3b\u9898\u6a21\u5f0f</h3>
-          <p class="section-eyebrow">\u9009\u62e9\u9996\u9875\u548c\u804a\u5929\u9875\u5171\u7528\u7684\u6d45\u8272\u4e3b\u9898\u3002</p>
+          <h3>\u5168\u5c40\u914d\u8272</h3>
+          <p class="section-eyebrow">\u9996\u9875\u3001\u5217\u8868\u3001\u8bbe\u7f6e\u9875\u7684\u5e95\u8272\u8c03\u3002</p>
           <div class="theme-choice-list">
-            ${options.map((item) => `
-              <button class="theme-choice-item ${current === item.id || current === item.key ? 'active' : ''}" data-action="pick-theme-mode" data-theme="${item.id}">
+            ${veilOptions.map((item) => `
+              <button class="theme-choice-item ${!isFullUi && (current === item.id || current === item.key) ? 'active' : ''}" data-action="pick-theme-mode" data-theme="${item.id}">
                 <span class="theme-choice-copy">
                   <strong>${escapeHtml(item.id)}</strong>
                   <em>${escapeHtml(item.desc)}</em>
                 </span>
-                <span class="theme-choice-check">${current === item.id || current === item.key ? '\u5df2\u9009' : ''}</span>
+                <span class="theme-choice-check">${!isFullUi && (current === item.id || current === item.key) ? '\u5df2\u9009' : ''}</span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+        <div class="settings-group glass-frost ai-panel compact-panel">
+          <h3>\u804a\u5929\u5b8c\u6574\u4e3b\u9898</h3>
+          <p class="section-eyebrow">\u8986\u76d6\u6574\u4e2a\u804a\u5929\u754c\u9762\uff0c\u5305\u542b\u6c14\u6ce1\u3001\u8f93\u5165\u6846\u3001\u5bfc\u822a\u680f\u3002</p>
+          <div class="theme-choice-list">
+            ${fullUiOptions.map((item) => `
+              <button class="theme-choice-item ${current === item.id ? 'active' : ''}" data-action="pick-theme-mode" data-theme="${item.id}">
+                <span class="theme-choice-copy">
+                  <strong>${escapeHtml(item.name)}</strong>
+                  <em>${escapeHtml(item.desc)}</em>
+                </span>
+                <span class="theme-choice-check">${current === item.id ? '\u5df2\u9009' : ''}</span>
               </button>
             `).join('')}
           </div>

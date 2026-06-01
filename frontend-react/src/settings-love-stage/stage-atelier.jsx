@@ -6,6 +6,45 @@ import { apiUrl } from '../apiBase.js';
 window.React = React;
 const { useState: use4, useRef: useRef4, useEffect: useEffect4 } = React;
 
+// ============ Real layout helpers ============
+const PHONE_STORAGE_KEY = 'yui_nook_react_phone_v1';
+
+function readRealLayout() {
+  try {
+    const apps = window.YUI_BUILTIN_APPS || [];
+    const byId = Object.fromEntries(apps.map(a => [a.id, a]));
+    const saved = JSON.parse(localStorage.getItem(PHONE_STORAGE_KEY) || '{}');
+    const desktop = Array.isArray(saved.desktopApps) && saved.desktopApps.length
+      ? saved.desktopApps.map(a => ({ ...byId[a.id], ...a })).filter(a => a.id)
+      : apps.slice(0, 8);
+    const dock = Array.isArray(saved.dockApps) && saved.dockApps.length
+      ? saved.dockApps.map(a => ({ ...byId[a.id], ...a })).filter(a => a.id)
+      : apps.slice(0, 4);
+    return { desktop, dock };
+  } catch {
+    const apps = window.YUI_BUILTIN_APPS || [];
+    return { desktop: apps.slice(0, 8), dock: apps.slice(0, 4) };
+  }
+}
+
+// ============ Tiny app icon for phone mockup ============
+function MiniIcon({ app = {}, size = 22, accent = '#8E76B8' }) {
+  const r = Math.round(size * 0.22);
+  if (app.iconSvg) {
+    return (
+      <div style={{ width: size, height: size, borderRadius: r, overflow: 'hidden', flexShrink: 0, pointerEvents: 'none' }}>
+        <div style={{ width: 60, height: 60, transform: `scale(${size / 60})`, transformOrigin: 'top left', pointerEvents: 'none' }}
+          dangerouslySetInnerHTML={{ __html: app.iconSvg }} />
+      </div>
+    );
+  }
+  return (
+    <div style={{ width: size, height: size, borderRadius: r, background: 'rgba(255,255,255,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: '"Noto Serif SC",serif', fontSize: Math.round(size * 0.42), fontWeight: 500, color: accent, pointerEvents: 'none' }}>
+      {app.glyph || '?'}
+    </div>
+  );
+}
+
 const dailyLineDate = () => {
   const d = new Date();
   const y = d.getFullYear();
@@ -381,10 +420,12 @@ function navBtn(T) {
 
 // ============ 真实比例 iPhone 桌面舞台 ============
 function DesktopStage({ T, F, Widget, widgetProps, effectiveSize, meta, glass }) {
-  // 真实 iPhone 比例 9:19.5，宽度 145，高度 ≈ 314
-  // 左右布局：左是 phone，右是状态信息
   const phoneW = 145;
   const phoneH = phoneW * 19.5 / 9;
+  const { desktop, dock } = readRealLayout();
+  // page 0 apps, first 4 shown above widget
+  const page0 = desktop.filter(a => (a.page ?? 0) === 0).slice(0, 4);
+  const dockApps = dock.slice(0, 4);
 
   return (
     <div style={{ flexShrink: 0, padding: '0 20px 12px' }}>
@@ -415,17 +456,13 @@ function DesktopStage({ T, F, Widget, widgetProps, effectiveSize, meta, glass })
               <Widget {...widgetProps} size={effectiveSize} />
             </div>
           </div>
-          {/* 4 app icons */}
+          {/* real page-0 app icons */}
           <div style={{ position: 'absolute', bottom: 56, left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: 6 }}>
-            {['聊', '梦', '珠', '历'].map((c, i) => (
-              <div key={i} style={{ width: 22, height: 22, borderRadius: 5, background: 'rgba(255,255,255,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: F.serifCn, fontSize: 10, fontWeight: 500, color: T.lilacDeep }}>{c}</div>
-            ))}
+            {page0.map((a, i) => <MiniIcon key={i} app={a} size={22} accent={T.lilacDeep} />)}
           </div>
-          {/* dock */}
+          {/* real dock */}
           <div style={{ position: 'absolute', bottom: 14, left: 8, right: 8, background: 'rgba(255,255,255,0.3)', backdropFilter: 'blur(10px)', borderRadius: 12, padding: 4, display: 'flex', justifyContent: 'space-around' }}>
-            {['聊', '梦', '珠', '设'].map((c, i) => (
-              <div key={i} style={{ width: 22, height: 22, borderRadius: 5, background: 'rgba(255,255,255,0.9)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: F.serifCn, fontSize: 10, fontWeight: 500, color: T.lilacDeep }}>{c}</div>
-            ))}
+            {dockApps.map((a, i) => <MiniIcon key={i} app={a} size={22} accent={T.lilacDeep} />)}
           </div>
           {/* home indicator */}
           <div style={{ position: 'absolute', bottom: 4, left: '50%', transform: 'translateX(-50%)', width: 50, height: 2.5, background: 'rgba(255,255,255,0.7)', borderRadius: 2 }} />
@@ -827,7 +864,9 @@ function HomeSubTab({ T, F, accent, wall, wallIdx, setWallIdx, customWallpaper, 
   const [appFont, setAppFont] = use4('Zen Maru Gothic');
   const [codeFont, setCodeFont] = use4('系统默认');
   const [expanded, setExpanded] = use4(null); // 'wall' | 'display' | null
-  const apps = ['聊', '梦', '珠', '历', '设', '壁'];
+  const { desktop: realDesktop, dock: realDockApps } = readRealLayout();
+  const maxPage = realDesktop.length ? Math.max(...realDesktop.map(a => a.page ?? 0)) : 0;
+  const pageApps = realDesktop.filter(a => (a.page ?? 0) === page);
 
   const ListRow = ({ glyph, cn, sub, val, id }) => {
     const open = expanded === id;
@@ -868,13 +907,15 @@ function HomeSubTab({ T, F, accent, wall, wallIdx, setWallIdx, customWallpaper, 
           <div style={{ position: 'absolute', top: 26, left: 0, right: 0, textAlign: 'center', fontFamily: F.serifEn, fontSize: 26 * fontScale / 100, color: '#fff', fontWeight: 200, lineHeight: 1 }}>9:41</div>
           <div style={{ position: 'absolute', top: 50, left: 0, right: 0, textAlign: 'center', fontFamily: F.serifCn, fontSize: 8 * fontScale / 100, color: '#fff', opacity: 0.85, letterSpacing: '0.15em' }}>周六 · 5月7日</div>
           <div style={{ position: 'absolute', top: 78, left: 8, right: 8, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
-            {apps.map((c, i) => (
-              <div key={i} style={{ aspectRatio: '1', borderRadius: 5, background: 'rgba(255,255,255,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: F.serifCn, fontSize: 9 * fontScale / 100, fontWeight: 500, color: accent }}>{c}</div>
+            {pageApps.map((a, i) => (
+              <div key={i} style={{ aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <MiniIcon app={a} size={24} accent={accent} />
+              </div>
             ))}
           </div>
           <div style={{ position: 'absolute', bottom: 12, left: 6, right: 6, background: 'rgba(255,255,255,0.32)', backdropFilter: 'blur(10px)', borderRadius: 11, padding: 3, display: 'flex', justifyContent: 'space-around' }}>
-            {['聊', '梦', '珠', '设'].map((c, i) => (
-              <div key={i} style={{ width: 22, height: 22, borderRadius: 5, background: 'rgba(255,255,255,0.9)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: F.serifCn, fontSize: 10 * fontScale / 100, fontWeight: 500, color: accent }}>{c}</div>
+            {realDockApps.slice(0, 4).map((a, i) => (
+              <MiniIcon key={i} app={a} size={22} accent={accent} />
             ))}
           </div>
           <div style={{ position: 'absolute', bottom: 4, left: '50%', transform: 'translateX(-50%)', width: 50, height: 2.5, background: 'rgba(255,255,255,0.7)', borderRadius: 2 }} />
@@ -884,7 +925,7 @@ function HomeSubTab({ T, F, accent, wall, wallIdx, setWallIdx, customWallpaper, 
       {/* 翻页 */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', gap: 6 }}>
-          {[0,1,2].map(i => (
+          {Array.from({ length: Math.max(maxPage + 1, 2) }, (_, i) => (
             <button key={i} onClick={() => setPage(i)} style={{
               width: i === page ? 18 : 7, height: 7, borderRadius: 4, border: 'none',
               background: i === page ? accent : T.ruleStrong, cursor: 'pointer', transition: 'width 0.2s',
@@ -957,30 +998,37 @@ function HomeSubTab({ T, F, accent, wall, wallIdx, setWallIdx, customWallpaper, 
 }
 
 function AppSubTab({ T, F }) {
-  const [installed, setInstalled] = use4([
-    { id: 'daydream', name: 'Daydream', glyph: '梦', custom: false },
-    { id: 'perle', name: 'Perle', glyph: '珠', custom: false },
-    { id: 'cal', name: '日历', glyph: '历', custom: false },
-    { id: 'settings', name: '设置', glyph: '设', custom: false },
-    { id: 'wall', name: '壁纸', glyph: '壁', custom: true },
-    { id: 'folio', name: 'Folio', glyph: '册', custom: false },
-    { id: 'music', name: '音乐', glyph: '音', custom: false },
-    { id: 'memo', name: '备忘', glyph: '忘', custom: false },
-  ]);
-  const [dock, setDock] = use4([
-    { id: 'chat', name: '聊天', glyph: '聊', custom: false },
-    { id: 'daydream2', name: 'Daydream', glyph: '梦', custom: false },
-    { id: 'perle2', name: 'Perle', glyph: '珠', custom: true },
-  ]);
+  const _mapApp = (a) => ({ id: a.id, name: a.label || a.name || a.glyph || a.id, glyph: a.glyph || '?', iconSvg: a.iconSvg || '', page: a.page ?? 0, custom: false });
+  const { desktop: _rDesktop, dock: _rDock } = readRealLayout();
+  const [installed, setInstalled] = use4(() =>
+    _rDesktop.length ? _rDesktop.map(_mapApp) : (window.YUI_BUILTIN_APPS || []).slice(0, 8).map(_mapApp)
+  );
+  const [dock, setDock] = use4(() =>
+    _rDock.length ? _rDock.map(_mapApp) : (window.YUI_BUILTIN_APPS || []).slice(0, 4).map(_mapApp)
+  );
   const [edit, setEdit] = use4(true);
   const [drag, setDrag] = use4(null);
+  const [showPicker, setShowPicker] = use4(null); // 'apps' | 'dock' | null
 
-  const moveItem = (list, setList, fromId, toId) => {
-    const from = list.findIndex(x=>x.id===fromId), to = list.findIndex(x=>x.id===toId);
-    if (from<0||to<0) return;
-    const next=[...list]; const [m]=next.splice(from,1); next.splice(to,0,m); setList(next);
+  const saveLayout = (ni, nd) => {
+    try {
+      const prev = JSON.parse(localStorage.getItem(PHONE_STORAGE_KEY) || '{}');
+      const next = { ...prev, desktopApps: ni.map(a => ({ id: a.id, page: a.page ?? 0 })), dockApps: nd.map(a => ({ id: a.id })) };
+      localStorage.setItem(PHONE_STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent('yui-phone-layout-updated', { detail: next }));
+    } catch {}
   };
-  const removeItem = (list, setList, id) => setList(list.filter(x=>x.id!==id));
+
+  const moveItem = (list, setList, fromId, toId, isDock) => {
+    const from = list.findIndex(x => x.id === fromId), to = list.findIndex(x => x.id === toId);
+    if (from < 0 || to < 0) return;
+    const next = [...list]; const [m] = next.splice(from, 1); next.splice(to, 0, m); setList(next);
+    isDock ? saveLayout(installed, next) : saveLayout(next, dock);
+  };
+  const removeItem = (list, setList, id, isDock) => {
+    const next = list.filter(x => x.id !== id); setList(next);
+    isDock ? saveLayout(installed, next) : saveLayout(next, dock);
+  };
   const setCustomIcon = (list, setList, id, file) => {
     if (!file || !file.type.startsWith('image/')) return;
     const reader = new FileReader();
@@ -991,12 +1039,38 @@ function AppSubTab({ T, F }) {
     reader.readAsDataURL(file);
   };
 
+  const allApps = window.YUI_BUILTIN_APPS || [];
+  const pickerApps = showPicker === 'dock'
+    ? allApps.filter(a => !dock.some(i => i.id === a.id))
+    : allApps.filter(a => !installed.some(i => i.id === a.id));
+  const addApp = (app) => {
+    if (showPicker === 'dock') {
+      if (dock.length >= 4) return;
+      const next = [...dock, _mapApp(app)]; setDock(next); saveLayout(installed, next);
+    } else {
+      // 插到开头，确保默认落在第 1 页
+      const next = [_mapApp(app), ...installed]; setInstalled(next); saveLayout(next, dock);
+    }
+    setShowPicker(null);
+  };
+
+  const nudgeItem = (list, setList, id, dir, isDock) => {
+    const idx = list.findIndex(x => x.id === id);
+    if (idx < 0) return;
+    const next = [...list];
+    const swapIdx = idx + dir;
+    if (swapIdx < 0 || swapIdx >= next.length) return;
+    [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+    setList(next);
+    isDock ? saveLayout(installed, next) : saveLayout(next, dock);
+  };
+
   const Tile = ({ a, list, setList, isDock }) => (
     <div
       draggable={edit}
       onDragStart={()=>setDrag({id:a.id,list:isDock?'dock':'apps'})}
       onDragOver={e=>e.preventDefault()}
-      onDrop={()=>{ if(drag && drag.id!==a.id) moveItem(list,setList,drag.id,a.id); setDrag(null); }}
+      onDrop={()=>{ if(drag && drag.id!==a.id) moveItem(list,setList,drag.id,a.id,isDock); setDrag(null); }}
       onDragEnd={()=>setDrag(null)}
       style={{
         position: 'relative', cursor: edit?'grab':'pointer',
@@ -1014,9 +1088,14 @@ function AppSubTab({ T, F }) {
       }}>
         {a.image ? (
           <img src={a.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 12, display: 'block' }} />
+        ) : a.iconSvg ? (
+          <div style={{ position: 'absolute', inset: 0, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ width: 60, height: 60, transform: `scale(${50 / 60})`, transformOrigin: 'top left' }}
+              dangerouslySetInnerHTML={{ __html: a.iconSvg }} />
+          </div>
         ) : a.glyph}
         {edit && (
-          <button onClick={(e)=>{e.stopPropagation();removeItem(list,setList,a.id);}} style={{
+          <button onClick={(e)=>{e.stopPropagation();removeItem(list,setList,a.id,isDock);}} style={{
             position: 'absolute', top: -6, left: -6, width: 18, height: 18, borderRadius: '50%',
             background: '#fff', border: `1px solid ${T.rule}`, color: T.ink,
             fontSize: 13, lineHeight: 1, cursor: 'pointer',
@@ -1039,16 +1118,22 @@ function AppSubTab({ T, F }) {
         )}
       </div>
       <div style={{ fontFamily: F.serifCn, fontSize: 10, color: T.ink, textAlign: 'center', maxWidth: 56, overflow:'hidden', textOverflow:'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
+      {edit && !isDock && (
+        <div style={{ display: 'flex', gap: 2, marginTop: 2 }}>
+          <button onClick={e => { e.stopPropagation(); nudgeItem(list, setList, a.id, -1, false); }} style={{ flex: 1, padding: '2px 0', background: T.cardSoft, border: `1px solid ${T.rule}`, borderRadius: 4, fontSize: 10, color: T.inkSoft, cursor: 'pointer' }}>←</button>
+          <button onClick={e => { e.stopPropagation(); nudgeItem(list, setList, a.id, 1, false); }} style={{ flex: 1, padding: '2px 0', background: T.cardSoft, border: `1px solid ${T.rule}`, borderRadius: 4, fontSize: 10, color: T.inkSoft, cursor: 'pointer' }}>→</button>
+        </div>
+      )}
     </div>
   );
 
-  const AddTile = ({ onClick, label }) => (
-    <button onClick={onClick} style={{
+  const AddTile = ({ isDock }) => (
+    <button onClick={() => setShowPicker(isDock ? 'dock' : 'apps')} style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
       background: 'transparent', border: 'none', cursor: 'pointer',
     }}>
       <div style={{ width: 50, height: 50, borderRadius: 12, border: `1.5px dashed ${T.ruleStrong}`, color: T.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontFamily: F.serifCn }}>+</div>
-      <div style={{ fontFamily: F.serifCn, fontSize: 10, color: T.inkSoft }}>{label}</div>
+      <div style={{ fontFamily: F.serifCn, fontSize: 10, color: T.inkSoft }}>添加</div>
     </button>
   );
 
@@ -1071,7 +1156,7 @@ function AppSubTab({ T, F }) {
         <div style={{ fontFamily: F.mono, fontSize: 9, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.85)', marginBottom: 8 }}>HOME SCREEN</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
           {installed.map(a => <Tile key={a.id} a={a} list={installed} setList={setInstalled} />)}
-          {edit && <AddTile label="添加" />}
+          {edit && <AddTile />}
         </div>
       </div>
 
@@ -1083,9 +1168,31 @@ function AppSubTab({ T, F }) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
           {dock.map(a => <Tile key={a.id} a={a} list={dock} setList={setDock} isDock />)}
-          {edit && dock.length<4 && <AddTile label="添加" />}
+          {edit && dock.length < 4 && <AddTile isDock />}
         </div>
       </div>
+
+      {/* App 选择器 */}
+      {showPicker && (
+        <div style={{ background: T.card, border: `1px solid ${T.rule}`, borderRadius: 14, padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontFamily: F.serifCn, fontSize: 13, fontWeight: 500, color: T.ink }}>选择 App 添加</span>
+            <button onClick={() => setShowPicker(null)} style={{ width: 24, height: 24, borderRadius: 6, background: T.cardSoft, border: `1px solid ${T.rule}`, color: T.inkSoft, fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+          </div>
+          {pickerApps.length === 0 ? (
+            <div style={{ fontFamily: F.serifCn, fontSize: 12, color: T.inkSoft, textAlign: 'center', padding: '12px 0' }}>全部 App 已添加</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+              {pickerApps.map(app => (
+                <button key={app.id} onClick={() => addApp(app)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                  <MiniIcon app={app} size={44} accent={T.lilacDeep} />
+                  <div style={{ fontFamily: F.serifCn, fontSize: 10, color: T.ink, textAlign: 'center', maxWidth: 56, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{app.name}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ fontFamily: F.hand, fontSize: 12, color: T.inkSoft, textAlign: 'center', paddingTop: 2 }}>
         ☆ 黄色星标 = 上传自定义图标 · 黑色 × = 移除
