@@ -1578,6 +1578,7 @@
 }
 
 .moment-actions-group {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1596,8 +1597,7 @@
 }
 
 .moment-action-menu-wrap {
-  position: relative;
-  display: flex;
+  display: contents;
   align-items: center;
 }
 
@@ -1637,7 +1637,7 @@
 .moment-menu-horizontal {
   position: absolute;
   right: 0;
-  top: 26px; /* Appear below the dots */
+  top: calc(100% + 8px);
   margin-right: 0; 
   background: rgba(255,255,255,0.96);
   backdrop-filter: blur(12px) saturate(1.5);
@@ -1646,7 +1646,7 @@
   border: 0.5px solid rgba(0,0,0,0.04);
   box-shadow: 0 4px 16px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.02);
   padding: 6px 14px;
-  z-index: 10;
+  z-index: 18;
   display: flex;
   flex-direction: row;
   align-items: center;
