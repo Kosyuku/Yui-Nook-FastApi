@@ -85,8 +85,6 @@ def _parse_output(stdout: str) -> tuple[str, str]:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            # 不是 JSON，可能是纯文本回复
-            reply_parts.append(line)
             continue
         if not isinstance(event, dict):
             continue
@@ -175,10 +173,6 @@ async def claude_bridge_chat(
 
         stdout, stderr, returncode = await _run_claude(args, timeout_seconds)
         reply, new_session_id = _parse_output(stdout)
-
-        # 回退：如果 JSON 解析出来是空的，直接用 stdout 原文
-        if not reply:
-            reply = stdout.strip()
 
         session_id = new_session_id or existing_session
 

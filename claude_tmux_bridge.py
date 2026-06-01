@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import os
@@ -18,9 +19,11 @@ POLL_INTERVAL: float = 0.4
 STABLE_ROUNDS: int = 4
 COMPACT_EVERY: int = int(os.getenv('CLAUDE_TMUX_COMPACT_EVERY', '30'))
 COMPACT_TIMEOUT: int = int(os.getenv('CLAUDE_TMUX_COMPACT_TIMEOUT', '60'))
-# 抓 capture-pane 时往回滚多少行（工具调用产生大量输出时 50 行可见区不够）
 SCROLL_LINES: int = int(os.getenv('CLAUDE_TMUX_SCROLL_LINES', '300'))
 META_PATH: Path = Path(__file__).resolve().parent / 'data' / 'claude_tmux_meta.json'
+
+# ~/.claude/projects/<encoded-WORK_DIR>  e.g. /opt/Yui-Nook-FastApi -> -opt-Yui-Nook-FastApi
+_PROJECT_DIR: Path = Path.home() / '.claude' / 'projects' / WORK_DIR.replace('/', '-')
 
 
 @dataclass
@@ -37,6 +40,8 @@ class SessionMeta:
     session_name: str
     message_count: int
     last_compact_at: int
+    jsonl_path: str = ''
+    last_uuid: str = ''
 
 
 _locks_guard = asyncio.Lock()
@@ -66,6 +71,8 @@ def _get_session_meta(key: str) -> SessionMeta:
         session_name=raw.get('session_name', f'cc_{re.sub("[^a-zA-Z0-9_-]", "_", key)}'),
         message_count=int(raw.get('message_count', 0)),
         last_compact_at=int(raw.get('last_compact_at', 0)),
+        jsonl_path=raw.get('jsonl_path', ''),
+        last_uuid=raw.get('last_uuid', ''),
     )
 
 
@@ -75,6 +82,8 @@ def _save_session_meta(key: str, meta: SessionMeta) -> None:
         'session_name': meta.session_name,
         'message_count': meta.message_count,
         'last_compact_at': meta.last_compact_at,
+        'jsonl_path': meta.jsonl_path,
+        'last_uuid': meta.last_uuid,
     }
     _write_meta(data)
 
@@ -151,104 +160,83 @@ def _has_prompt(text: str) -> bool:
     return any(re.match(r'^[>❯]\s*$', l) for l in recent)
 
 
-def _parse_bullet_blocks(text: str) -> list:
-    """提取所有 ● 块（包含 ● 行及其后的缩进续行），返回每块合并后的文本。"""
-    blocks = []
-    current: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if re.match(r'^●\s*', stripped):
-            if current:
-                blocks.append('\n'.join(current).strip())
-            current = [re.sub(r'^●\s*', '', stripped)]
-        elif current and line.startswith('  ') and stripped:
-            current.append(stripped)
-        elif current and not stripped:
+def _detect_new_jsonl(before_files: set[str]) -> str:
+    """Return path of a JSONL in _PROJECT_DIR not present in before_files."""
+    if not _PROJECT_DIR.exists():
+        return ''
+    for f in sorted(_PROJECT_DIR.glob('*.jsonl'), key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.name not in before_files:
+            return str(f)
+    return ''
+
+
+def _read_transcript_text(jsonl_path: str, after_uuid: str, after_time: float = 0.0) -> tuple[str, str]:
+    """
+    Extract new assistant text blocks from JSONL transcript.
+
+    Uses after_uuid as the bookmark when set; falls back to after_time (UTC epoch).
+    Skips thinking / tool_use / tool_result blocks — returns only type=text content.
+    Returns (combined_text, last_uuid_seen).
+    """
+    p = Path(jsonl_path) if jsonl_path else None
+
+    if p is None or not p.exists():
+        if not _PROJECT_DIR.exists():
+            return '', after_uuid
+        candidates = sorted(_PROJECT_DIR.glob('*.jsonl'), key=lambda f: f.stat().st_mtime, reverse=True)
+        if not candidates:
+            return '', after_uuid
+        p = candidates[0]
+
+    try:
+        raw = p.read_text(encoding='utf-8', errors='replace')
+    except Exception:
+        return '', after_uuid
+
+    entries = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
             continue
-        elif not current:
+        try:
+            entries.append(json.loads(line))
+        except Exception:
             continue
-        else:
-            blocks.append('\n'.join(current).strip())
-            current = []
-    if current:
-        blocks.append('\n'.join(current).strip())
-    return [b for b in blocks if b]
 
-
-def _extract_after_user_prompt(after_lines: list[str]) -> list[str]:
-    """When before/after diff fails, find the first '>content' line (user input) and return what follows."""
-    for i, line in enumerate(after_lines):
-        stripped = line.strip()
-        # "> message text" — prompt + actual user content (not a bare prompt)
-        if re.match(r'^[>❯]\s+\S', stripped):
-            return after_lines[i + 1:]
-    return []
-
-
-def _extract_reply(before: str, after: str) -> str:
-    """从 capture-pane 前后差异中提取 Claude 的回复。"""
-    after_clean = _strip_ansi(after)
-    before_clean = _strip_ansi(before)
-
-    # Strategy 1: bullet block diff
-    before_blocks = _parse_bullet_blocks(before_clean)
-    after_blocks = _parse_bullet_blocks(after_clean)
-    new_blocks = after_blocks[len(before_blocks):]
-    if new_blocks:
-        return '\n'.join(new_blocks).strip()
-
-    # Strategy 2: line-based diff anchored on the last visible before-line
-    before_lines = [l for l in before_clean.splitlines() if l.strip()]
-    after_lines = after_clean.splitlines()
-
-    if before_lines:
-        last_before = before_lines[-1].strip()
-        cut = 0
+    start_idx = 0
+    if after_uuid:
         found = False
-        for i, line in enumerate(after_lines):
-            if last_before in line:
-                cut = i + 1
+        for i, entry in enumerate(entries):
+            if entry.get('uuid') == after_uuid:
+                start_idx = i + 1
                 found = True
                 break
-        if found:
-            new_lines = after_lines[cut:]
-        else:
-            # last_before not in after_pane — pane scrolled significantly.
-            # Fall back to finding user's input prompt as anchor.
-            new_lines = _extract_after_user_prompt(after_lines)
-    else:
-        # before_pane was empty — anchor on user input line.
-        new_lines = _extract_after_user_prompt(after_lines)
+        if not found:
+            # UUID gone (e.g. session compacted) — fall back to time filtering
+            after_uuid = ''
 
-    reply_lines = []
-    for line in new_lines:
-        stripped = line.strip()
-        if not stripped:
+    texts: list[str] = []
+    last_uuid = after_uuid
+    for entry in entries[start_idx:]:
+        if entry.get('type') != 'assistant':
             continue
-        if re.match(r'^[>❯$]\s*$', stripped):
-            continue
-        if re.match(r'^\*\s+\w', stripped):
-            continue
-        # 过滤工具调用提示行和打分框（对用户不可见的内部状态）
-        if re.match(r'^Called\s+.+\(ctrl\+o', stripped):
-            continue
-        if re.match(r'^\(ctrl\+o', stripped):
-            continue
-        if any(p in stripped for p in _RATING_PROMPTS):
-            continue
-        if re.match(r'^\d+\.\s+(😞|😐|😊|Don\'t ask)', stripped):
-            continue
-        # 过滤 Claude Code UI 横线分隔符（────────）
-        if re.match(r'^[─━]{5,}$', stripped):
-            continue
-        # 过滤 Claude Code 底部状态栏 / tmux 警告
-        if re.search(r'for shortcuts|← for agents|Auto-update failed|claude doctor|focus-events|tmux\.conf', stripped):
-            continue
-        if re.match(r'^✗\s+', stripped):
-            continue
-        reply_lines.append(stripped)
+        # Time-based filter when we have no uuid anchor
+        if not after_uuid and after_time > 0:
+            ts = entry.get('timestamp', '')
+            try:
+                entry_ts = datetime.datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp()
+                if entry_ts <= after_time:
+                    continue
+            except Exception:
+                pass
+        for block in entry.get('message', {}).get('content', []):
+            if block.get('type') == 'text':
+                text = block.get('text', '').strip()
+                if text:
+                    texts.append(text)
+        last_uuid = entry.get('uuid', last_uuid)
 
-    return '\n'.join(reply_lines).strip()
+    return '\n'.join(texts), last_uuid
 
 
 def _wait_stable(session_name: str, timeout: float) -> str:
@@ -287,7 +275,6 @@ def _wait_for_reply(session_name: str, before_pane: str, timeout: float) -> str:
         return _early
 
     deadline = time.time() + timeout
-    # spinner 未出现时的兜底：消息发出 N 秒后若 pane 有变化就不再等 ✻
     thinking_fallback_at = time.time() + 12
     last_pane = ''
     stable_count = 0
@@ -299,7 +286,6 @@ def _wait_for_reply(session_name: str, before_pane: str, timeout: float) -> str:
         current = _capture_pane(session_name)
         current_clean = _strip_ansi(current)
 
-        # 随时检测打分框/确认框，立即关掉
         if any(p in current_clean for p in _RATING_PROMPTS):
             logger.info('[%s] rating prompt detected, dismissing', session_name)
             _tmux('send-keys', '-t', session_name, '0', 'Enter')
@@ -308,14 +294,12 @@ def _wait_for_reply(session_name: str, before_pane: str, timeout: float) -> str:
             continue
 
         if not thinking_seen:
-            # 正常路径：看到 ✻ 状态行
             for line in current_clean.splitlines():
                 stripped = line.strip()
                 if re.match(r'^[✻✽]\s+', stripped) and stripped not in before_status:
                     thinking_seen = True
                     logger.info('[%s] thinking_seen via spinner (%.1fs)', session_name, time.time() - t0)
                     break
-            # 兜底路径：超过等待时间后只要 pane 发生变化就认为开始处理了
             if not thinking_seen and time.time() > thinking_fallback_at:
                 if current_clean != before_clean:
                     thinking_seen = True
@@ -365,12 +349,14 @@ async def _lock_for(key: str) -> asyncio.Lock:
 
 async def _progress_loop(
     session_name: str,
-    before_pane: str,
+    jsonl_path: str,
+    after_uuid: str,
+    after_time: float,
     stop: asyncio.Event,
     callback,
     interval: float = 3.0,
 ) -> None:
-    """每 interval 秒抓一次 pane，把当前部分回复交给 callback。"""
+    """每 interval 秒从 JSONL 读一次，把当前部分回复交给 callback。"""
     last_sent = ''
     while not stop.is_set():
         try:
@@ -379,8 +365,7 @@ async def _progress_loop(
             pass
         if stop.is_set():
             break
-        current = await asyncio.to_thread(_capture_pane, session_name)
-        partial = _extract_reply(before_pane, current)
+        partial, _ = await asyncio.to_thread(_read_transcript_text, jsonl_path, after_uuid, after_time)
         if partial and partial != last_sent:
             last_sent = partial
             try:
@@ -411,9 +396,17 @@ async def claude_tmux_chat(
             _tmux('kill-session', '-t', session_name)
             meta.message_count = 0
             meta.last_compact_at = 0
+            meta.jsonl_path = ''
+            meta.last_uuid = ''
 
         if not _session_exists(session_name):
+            before_files = {f.name for f in _PROJECT_DIR.glob('*.jsonl')} if _PROJECT_DIR.exists() else set()
             await asyncio.to_thread(_create_session, session_name)
+            jsonl = await asyncio.to_thread(_detect_new_jsonl, before_files)
+            if jsonl:
+                meta.jsonl_path = jsonl
+                meta.last_uuid = ''
+                logger.info('[%s] tracking transcript %s', session_name, jsonl)
 
         compacted = False
         if _should_compact(meta):
@@ -423,6 +416,7 @@ async def claude_tmux_chat(
 
         await asyncio.to_thread(_dismiss_prompts, session_name)
         before_pane = await asyncio.to_thread(_capture_pane, session_name)
+        before_send_time = time.time()
         logger.info('[%s] sending msg #%d (len=%d)', session_name, meta.message_count + 1, len(content))
         await asyncio.to_thread(_send_message, session_name, content)
 
@@ -430,7 +424,10 @@ async def claude_tmux_chat(
         progress_task = None
         if on_progress is not None:
             progress_task = asyncio.create_task(
-                _progress_loop(session_name, before_pane, stop_event, on_progress)
+                _progress_loop(
+                    session_name, meta.jsonl_path, meta.last_uuid,
+                    before_send_time, stop_event, on_progress,
+                )
             )
 
         try:
@@ -445,13 +442,12 @@ async def claude_tmux_chat(
                 except Exception:
                     pass
 
-        reply = _extract_reply(before_pane, reply_pane)
-        logger.info('[%s] extract_reply len=%d before_lines=%d after_lines=%d',
-                    session_name, len(reply),
-                    len([l for l in _strip_ansi(before_pane).splitlines() if l.strip()]),
-                    len([l for l in _strip_ansi(reply_pane).splitlines() if l.strip()]))
+        reply, meta.last_uuid = _read_transcript_text(
+            meta.jsonl_path, meta.last_uuid, before_send_time
+        )
+        logger.info('[%s] transcript reply len=%d last_uuid=%s', session_name, len(reply), meta.last_uuid)
         if not reply:
-            logger.warning('[%s] empty reply — sending fallback', session_name)
+            logger.warning('[%s] empty transcript reply — sending fallback', session_name)
             reply = '（Claude 没有回复，可能还在思考中）'
 
         meta.message_count += 1
