@@ -382,12 +382,13 @@ async def run_proactive_check(agent_id: str) -> ProactiveCheckResult:
     # 3. 风格修正：硬底线之外，三档真的拉开差异
     req_user_silence = hard_user_silence
     req_cooldown = base_cooldown
+    style = check_input.agent_proactive_style
     if style == "restrained":
         req_user_silence = 1.0
         req_cooldown = max(base_cooldown, 3.0)
     elif style == "clingy":
         req_cooldown = max(hard_cooldown_floor, min(base_cooldown, 1.0))
-        
+
     if check_input.hours_since_last_user_message < req_user_silence:
         logger.info("proactive_check: style %s rejected by user silence", style)
         return _reject(agent_id)
