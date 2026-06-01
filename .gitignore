@@ -52,7 +52,6 @@ data/codex_bridge_sessions.json
 # 鈹€鈹€ Node / Frontend 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 node_modules/
 frontend-react/node_modules/
-frontend-react/dist/
 frontend-react/dist.zip
 
 # ── Archives & build artifacts ───────────────────────────────────────────────
