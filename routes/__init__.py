@@ -848,7 +848,6 @@ async def chat(body: ChatRequest):
                 assistant_msg = {"role": "assistant", "content": complete_text, "tool_calls": list(tool_calls_buffer.values())}
                 current_messages.append(assistant_msg)
 
-                import json as jsonlib
                 for tc in tool_calls_buffer.values():
                     func_name = tc["function"]["name"]
                     raw_args = tc["function"]["arguments"]
