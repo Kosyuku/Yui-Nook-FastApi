@@ -629,9 +629,7 @@
 }
 
 .message-bubble-wrap {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
+  display: block;
   max-width: 78%;
   min-width: 0;
 }
@@ -641,12 +639,35 @@
 }
 
 .bubble-time {
-  font-size: 10px;
-  color: rgba(147, 126, 136, 0.72);
+  font-size: 9.5px;
+  color: rgba(128, 110, 119, 0.58);
   white-space: nowrap;
-  margin-bottom: 3px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1;
+  user-select: none;
+}
+
+.message-text .bubble-time.tail-time {
+  display: inline-block;
+  margin-left: 8px;
+  vertical-align: baseline;
+  transform: translateY(1px);
+}
+
+.message-bubble > .bubble-time.block-time {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  text-align: right;
+}
+
+.message-bubble.from-user .bubble-time {
+  color: rgba(98, 82, 93, 0.58);
+}
+
+.message-bubble.from-ai .bubble-time {
+  color: rgba(132, 113, 123, 0.6);
 }
 
 .message-bubble {
@@ -663,6 +684,11 @@
     0 2px 5px rgba(196, 181, 189, 0.08),
     inset 0 1px 0 rgba(255,255,255,0.84);
   color: rgba(48, 40, 44, 0.96);
+}
+
+.message-text {
+  display: block;
+  overflow-wrap: anywhere;
 }
 
 /* Send button → stop mode during streaming */

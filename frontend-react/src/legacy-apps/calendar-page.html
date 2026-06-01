@@ -86,6 +86,12 @@
         class="w-full bg-white/96 rounded-[14px] px-4 py-3 text-[13px] text-stone-700/90 placeholder-stone-400/55 outline-none ring-1 ring-[#efe3f2] font-sans" />
       <textarea id="event-detail-input" rows="3" placeholder="写下一点细节，比如发生了什么、当时的心情。"
         class="w-full mt-2 bg-white/96 rounded-[14px] px-4 py-3 text-[12.5px] leading-[1.5] text-stone-700/90 placeholder-stone-400/55 outline-none ring-1 ring-[#efe3f2] resize-none font-sans"></textarea>
+      <div class="cal-cover-row">
+        <button type="button" id="event-cover-button" class="cal-cover-button" onclick="pickEventCover()">上传当天小照片</button>
+        <button type="button" id="event-cover-clear" class="cal-cover-clear hidden" onclick="clearEventCover()">移除</button>
+        <input id="event-cover-input" type="file" accept="image/*" class="hidden" />
+      </div>
+      <div id="event-cover-preview" class="cal-cover-preview hidden"></div>
       <div class="mt-2">
         <p class="text-[11px] font-semibold text-stone-500/80 mb-2">标签</p>
         <div id="event-tag-group" class="flex flex-wrap gap-2"></div>

@@ -366,13 +366,18 @@ function normalizeSavedApps(savedApps, fallbackApps) {
   if (!Array.isArray(savedApps) || !savedApps.length) return fallbackApps;
   const allowed = new Set(builtinApps.map((app) => app.id));
   const byBuiltin = Object.fromEntries(builtinApps.map((app) => [app.id, app]));
+  const seen = new Set();
   const normalized = savedApps
     .map((app) => {
       const canonicalId = appAliases[app.id] || app.id;
       const builtin = byBuiltin[canonicalId] || {};
       return { ...builtin, ...app, id: canonicalId };
     })
-    .filter((app) => allowed.has(app.id));
+    .filter((app) => {
+      if (!allowed.has(app.id) || seen.has(app.id)) return false;
+      seen.add(app.id);
+      return true;
+    });
   if (!normalized.some((app) => app.id === "chat")) return fallbackApps;
   return normalized;
 }
@@ -781,7 +786,9 @@ function LoveWidget() {
 function AppIcon({ app, onOpen }) {
   return (
     <button className="app-icon" type="button" onClick={() => onOpen(app.id)}>
-      <span>{app.iconImage ? <img alt="" src={app.iconImage} /> : app.glyph}</span>
+      <span>
+        {app.iconImage ? <img alt="" src={app.iconImage} /> : app.iconSvg ? <span dangerouslySetInnerHTML={{ __html: app.iconSvg }} /> : app.glyph}
+      </span>
       <small>{app.label}</small>
     </button>
   );
@@ -917,6 +924,27 @@ function LegacyHomePage({ onOpenApp, phone }) {
       if (id === "grimoire") return { page: "page-grimoire" };
       return null;
     };
+    const legacyAppElementIds = {
+      chat: "app-chat",
+      diary: "app-diary",
+      album: "app-photos",
+      calendar: "app-calendar",
+      settings: "app-settings",
+      wallpaper: "app-wallpaper",
+      folio: "app-folio",
+      inbox: "app-inbox",
+      curio: "app-curio",
+      parlor: "app-parlor",
+      grimoire: "app-grimoire",
+    };
+    const appIdByElementId = Object.fromEntries(Object.entries(legacyAppElementIds).map(([id, elementId]) => [elementId, id]));
+    const escapeHomeText = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    })[char]);
     const renderSyncedAppIcon = (app, className = "app-icon-svg") => {
       if (typeof app?.iconImage === "string" && app.iconImage) {
         return `<img src="${String(app.iconImage).replace(/"/g, "&quot;")}" alt="" class="${className} w-full h-full rounded-[inherit] object-cover block" />`;
@@ -925,6 +953,85 @@ function LegacyHomePage({ onOpenApp, phone }) {
         return app.iconSvg.replace("<svg ", `<svg class="${className}" `);
       }
       return `<span class="text-[22px] font-semibold text-stone-600/90">${app?.icon || app?.glyph || "路"}</span>`;
+    };
+    const createLegacyTemplateMaps = () => {
+      const doc = new DOMParser().parseFromString(legacyHomePageHtml, "text/html");
+      const appCells = {};
+      Object.entries(legacyAppElementIds).forEach(([id, elementId]) => {
+        const cell = doc.getElementById(elementId);
+        if (cell) appCells[id] = cell.outerHTML;
+      });
+      const dockButtons = {};
+      doc.querySelectorAll("nav .glass button[onclick*='openPage']").forEach((button) => {
+        const originId = String(button.getAttribute("onclick") || "").match(/,\s*'([^']+)'/)?.[1];
+        const id = appIdByElementId[originId];
+        if (id) dockButtons[id] = button.outerHTML;
+      });
+      return {
+        appCells,
+        dockButtons,
+        widgetCell: doc.querySelector(".home-widget-cell")?.outerHTML || "",
+      };
+    };
+    const legacyTemplates = createLegacyTemplateMaps();
+    const updateCellTarget = (cell, app) => {
+      const target = getHomeAppTarget(app);
+      const elementId = legacyAppElementIds[app.id] || `app-${app.id}`;
+      cell.id = elementId;
+      if (target?.page) cell.dataset.page = target.page;
+      else cell.removeAttribute("data-page");
+      if (target?.settingsView) cell.dataset.settingsView = target.settingsView;
+      else cell.removeAttribute("data-settings-view");
+      const label = Array.from(cell.querySelectorAll("span")).at(-1);
+      if (label) label.textContent = app.label || app.name || app.id;
+      const wrap = cell.querySelector(".app-icon-wrap");
+      if (wrap && (app.iconImage || app.iconSvg)) wrap.innerHTML = renderSyncedAppIcon(app);
+      return cell.outerHTML;
+    };
+    const renderLegacyHomeCell = (app) => {
+      const template = legacyTemplates.appCells[app.id];
+      if (template) {
+        const doc = new DOMParser().parseFromString(template, "text/html");
+        const cell = doc.body.firstElementChild;
+        if (cell) return updateCellTarget(cell, app);
+      }
+      const target = getHomeAppTarget(app);
+      const attrs = target ? `data-page="${target.page}"${target.settingsView ? ` data-settings-view="${target.settingsView}"` : ""}` : "";
+      const id = legacyAppElementIds[app.id] || `app-${escapeHomeText(app.id)}`;
+      return `
+        <div class="app-cell flex flex-col items-center gap-1.5 cursor-pointer relative" id="${id}" ${attrs}>
+          <div class="relative">
+            <div class="app-icon-wrap" style="background: linear-gradient(135deg, rgba(255,255,255,0.88), rgba(255,255,255,0.48));">
+              ${renderSyncedAppIcon(app)}
+            </div>
+            <button class="del-badge" onclick="delApp(event,'${id}')">×</button>
+          </div>
+          <span class="text-[11px] text-stone-600 font-medium tracking-wide">${escapeHomeText(app.label || app.name || app.id)}</span>
+        </div>
+      `;
+    };
+    const renderLegacyDockButton = (app) => {
+      const template = legacyTemplates.dockButtons[app.id];
+      const target = getHomeAppTarget(app);
+      const originId = legacyAppElementIds[app.id] || `app-${app.id}`;
+      if (template) {
+        const doc = new DOMParser().parseFromString(template, "text/html");
+        const button = doc.body.firstElementChild;
+        if (button) {
+          if (target?.page) button.setAttribute("onclick", `openPage('${target.page}','${originId}')`);
+          const icon = Array.from(button.children).find((child) => child.tagName === "DIV");
+          if (icon && (app.iconImage || app.iconSvg)) icon.innerHTML = renderSyncedAppIcon(app, "w-full h-full rounded-[inherit] object-cover block");
+          return button.outerHTML;
+        }
+      }
+      return `
+        <button onclick="${target?.page ? `openPage('${target.page}','${originId}')` : ""}" class="app-cell active:scale-[0.92] transition-transform p-0.5 flex flex-col items-center">
+          <div class="w-[46px] h-[46px] rounded-[14px] bg-white/70 shadow-sm border border-white/50 flex items-center justify-center text-stone-500">
+            ${renderSyncedAppIcon(app, "w-6 h-6")}
+          </div>
+          <div class="w-1 h-1 rounded-full bg-rose-400 mt-1.5 opacity-0"></div>
+        </button>
+      `;
     };
     const getConfiguredHomePages = () => {
       const chunkSize = String(phone.layout || "").includes("4 App") ? 4 : 6;
@@ -935,6 +1042,22 @@ function LegacyHomePage({ onOpenApp, phone }) {
       const mainIndex = Math.max(0, (parseInt(String(phone.mainPage || "第 1 页").match(/\d+/)?.[0] || "1", 10) || 1) - 1);
       while (pages.length <= mainIndex) pages.push([]);
       return { pages, mainIndex };
+    };
+    const renderHomeMainPage = () => {
+      const grid = document.getElementById("app-grid");
+      const dockBar = document.querySelector("#page-home nav .glass");
+      const { pages } = getConfiguredHomePages();
+      const mainApps = pages[0] || [];
+      if (grid) {
+        const cells = mainApps.map((app) => renderLegacyHomeCell(app));
+        const insertAt = Math.min(2, cells.length);
+        if (legacyTemplates.widgetCell) cells.splice(insertAt, 0, legacyTemplates.widgetCell);
+        grid.innerHTML = cells.join("");
+      }
+      if (dockBar) {
+        const dockApps = Array.isArray(phone.dockApps) ? phone.dockApps.slice(0, 4) : [];
+        dockBar.innerHTML = dockApps.map((app) => renderLegacyDockButton(app)).join("");
+      }
     };
     const renderHomeAltPage = () => {
       const { pages, mainIndex } = getConfiguredHomePages();
@@ -1047,6 +1170,7 @@ function LegacyHomePage({ onOpenApp, phone }) {
         loveWidgetRoot.render(<LoveWidget />);
       }
     }
+    renderHomeMainPage();
     renderHomeAltPage();
 
     // ── Glean 拾遗 DI helpers ──

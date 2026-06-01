@@ -14,11 +14,22 @@ function readRealLayout() {
     const apps = window.YUI_BUILTIN_APPS || [];
     const byId = Object.fromEntries(apps.map(a => [a.id, a]));
     const saved = JSON.parse(localStorage.getItem(PHONE_STORAGE_KEY) || '{}');
+    const normalize = (items, fallback) => {
+      if (!Array.isArray(items) || !items.length) return fallback;
+      const seen = new Set();
+      return items
+        .map(a => ({ ...(byId[a.id] || {}), ...a }))
+        .filter(a => {
+          if (!a.id || seen.has(a.id)) return false;
+          seen.add(a.id);
+          return true;
+        });
+    };
     const desktop = Array.isArray(saved.desktopApps) && saved.desktopApps.length
-      ? saved.desktopApps.map(a => ({ ...byId[a.id], ...a })).filter(a => a.id)
+      ? normalize(saved.desktopApps, apps.slice(0, 8))
       : apps.slice(0, 8);
     const dock = Array.isArray(saved.dockApps) && saved.dockApps.length
-      ? saved.dockApps.map(a => ({ ...byId[a.id], ...a })).filter(a => a.id)
+      ? normalize(saved.dockApps, apps.slice(0, 4))
       : apps.slice(0, 4);
     return { desktop, dock };
   } catch {
@@ -30,6 +41,13 @@ function readRealLayout() {
 // ============ Tiny app icon for phone mockup ============
 function MiniIcon({ app = {}, size = 22, accent = '#8E76B8' }) {
   const r = Math.round(size * 0.22);
+  if (app.iconImage || app.image) {
+    return (
+      <div style={{ width: size, height: size, borderRadius: r, overflow: 'hidden', flexShrink: 0, pointerEvents: 'none' }}>
+        <img src={app.iconImage || app.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+      </div>
+    );
+  }
   if (app.iconSvg) {
     return (
       <div style={{ width: size, height: size, borderRadius: r, overflow: 'hidden', flexShrink: 0, pointerEvents: 'none' }}>
@@ -998,7 +1016,7 @@ function HomeSubTab({ T, F, accent, wall, wallIdx, setWallIdx, customWallpaper, 
 }
 
 function AppSubTab({ T, F }) {
-  const _mapApp = (a) => ({ id: a.id, name: a.label || a.name || a.glyph || a.id, glyph: a.glyph || '?', iconSvg: a.iconSvg || '', page: a.page ?? 0, custom: false });
+  const _mapApp = (a) => ({ id: a.id, name: a.label || a.name || a.glyph || a.id, label: a.label || a.name || a.glyph || a.id, glyph: a.glyph || '?', iconSvg: a.iconSvg || '', iconImage: a.iconImage || a.image || '', page: a.page ?? 0, custom: Boolean(a.iconImage || a.image) });
   const { desktop: _rDesktop, dock: _rDock } = readRealLayout();
   const [installed, setInstalled] = use4(() =>
     _rDesktop.length ? _rDesktop.map(_mapApp) : (window.YUI_BUILTIN_APPS || []).slice(0, 8).map(_mapApp)
@@ -1009,11 +1027,32 @@ function AppSubTab({ T, F }) {
   const [edit, setEdit] = use4(true);
   const [drag, setDrag] = use4(null);
   const [showPicker, setShowPicker] = use4(null); // 'apps' | 'dock' | null
+  const [page, setPage] = use4(0);
+  const homePageSize = 6;
+  const pageCount = Math.max(1, Math.ceil(installed.length / homePageSize));
+  const visibleInstalled = installed.slice(page * homePageSize, page * homePageSize + homePageSize);
+  useEffect4(() => {
+    setPage(current => Math.min(current, pageCount - 1));
+  }, [pageCount]);
 
   const saveLayout = (ni, nd) => {
     try {
       const prev = JSON.parse(localStorage.getItem(PHONE_STORAGE_KEY) || '{}');
-      const next = { ...prev, desktopApps: ni.map(a => ({ id: a.id, page: a.page ?? 0 })), dockApps: nd.map(a => ({ id: a.id })) };
+      const seenDesktop = new Set();
+      const seenDock = new Set();
+      const serialize = (a, includePage) => ({
+        id: a.id,
+        ...(includePage ? { page: a.page ?? 0 } : {}),
+        ...(a.iconImage || a.image ? { iconImage: a.iconImage || a.image } : {}),
+      });
+      const desktopApps = ni
+        .filter(a => a?.id && !seenDesktop.has(a.id) && seenDesktop.add(a.id))
+        .map(a => serialize(a, true));
+      const dockApps = nd
+        .filter(a => a?.id && !seenDock.has(a.id) && seenDock.add(a.id))
+        .slice(0, 4)
+        .map(a => serialize(a, false));
+      const next = { ...prev, desktopApps, dockApps };
       localStorage.setItem(PHONE_STORAGE_KEY, JSON.stringify(next));
       window.dispatchEvent(new CustomEvent('yui-phone-layout-updated', { detail: next }));
     } catch {}
@@ -1029,12 +1068,14 @@ function AppSubTab({ T, F }) {
     const next = list.filter(x => x.id !== id); setList(next);
     isDock ? saveLayout(installed, next) : saveLayout(next, dock);
   };
-  const setCustomIcon = (list, setList, id, file) => {
+  const setCustomIcon = (list, setList, id, file, isDock = false) => {
     if (!file || !file.type.startsWith('image/')) return;
     const reader = new FileReader();
     reader.onload = event => {
       const image = String(event.target?.result || '');
-      setList(list.map(item => item.id === id ? { ...item, image, custom: true } : item));
+      const next = list.map(item => item.id === id ? { ...item, iconImage: image, image, custom: true } : item);
+      setList(next);
+      isDock ? saveLayout(installed, next) : saveLayout(next, dock);
     };
     reader.readAsDataURL(file);
   };
@@ -1113,7 +1154,7 @@ function AppSubTab({ T, F }) {
           }}>
             ☆
             <input type="file" accept="image/*" style={visuallyHiddenFileInput}
-              onChange={e => { setCustomIcon(list, setList, a.id, e.target.files?.[0]); e.target.value = ''; }} />
+              onChange={e => { setCustomIcon(list, setList, a.id, e.target.files?.[0], isDock); e.target.value = ''; }} />
           </label>
         )}
       </div>
@@ -1137,6 +1178,34 @@ function AppSubTab({ T, F }) {
     </button>
   );
 
+  const HomeWidgetTile = () => (
+    <div style={{
+      gridColumn: 'span 2',
+      gridRow: 'span 2',
+      minHeight: 108,
+      borderRadius: 18,
+      background: 'rgba(255,255,255,0.28)',
+      border: '1px solid rgba(255,255,255,0.55)',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55)',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'space-between',
+      padding: 12,
+      boxSizing: 'border-box',
+      color: 'rgba(255,255,255,0.92)',
+      backdropFilter: 'blur(10px)',
+    }}>
+      <div>
+        <div style={{ fontFamily: F.serifCn, fontSize: 12, opacity: 0.82 }}>今日</div>
+        <div style={{ fontFamily: F.serifEn, fontSize: 30, lineHeight: 1, fontWeight: 700 }}>1日</div>
+        <div style={{ fontFamily: F.serifCn, fontSize: 11, opacity: 0.78, marginTop: 3 }}>星期一</div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, opacity: 0.84 }}>
+        <span>恋爱溶解</span><span>♡</span>
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <style>{`@keyframes jiggle0{0%{transform:rotate(-1.4deg)}100%{transform:rotate(1.4deg)}}@keyframes jiggle1{0%{transform:rotate(1.4deg)}100%{transform:rotate(-1.4deg)}}`}</style>
@@ -1153,10 +1222,19 @@ function AppSubTab({ T, F }) {
 
       {/* 主屏 */}
       <div style={{ background: 'linear-gradient(180deg, #C9B8E0, #DCC4D6, #E8C8B8)', borderRadius: 18, padding: 14, boxShadow: 'inset 0 0 0 1.5px rgba(50,40,65,0.2)' }}>
-        <div style={{ fontFamily: F.mono, fontSize: 9, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.85)', marginBottom: 8 }}>HOME SCREEN</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ fontFamily: F.mono, fontSize: 9, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.85)' }}>HOME SCREEN</div>
+          <div style={{ display: 'flex', gap: 5 }}>
+            {Array.from({ length: pageCount }, (_, i) => (
+              <button key={i} type="button" onClick={() => setPage(i)} style={{ width: i === page ? 16 : 6, height: 6, borderRadius: 6, border: 'none', background: i === page ? '#fff' : 'rgba(255,255,255,0.45)', padding: 0, cursor: 'pointer' }} />
+            ))}
+          </div>
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-          {installed.map(a => <Tile key={a.id} a={a} list={installed} setList={setInstalled} />)}
-          {edit && <AddTile />}
+          {visibleInstalled.slice(0, 2).map(a => <Tile key={a.id} a={a} list={installed} setList={setInstalled} />)}
+          {page === 0 && <HomeWidgetTile />}
+          {visibleInstalled.slice(2).map(a => <Tile key={a.id} a={a} list={installed} setList={setInstalled} />)}
+          {edit && page === pageCount - 1 && <AddTile />}
         </div>
       </div>
 

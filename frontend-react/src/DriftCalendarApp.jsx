@@ -1,29 +1,37 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 const STORAGE_KEY = "yui_drift_events_v1";
 
 const DEFAULT_EVENTS = [
-  { id: "e1", date: "2026-03-30", title: "阿延生日", detail: "想把准备好的惊喜和祝福都塞进这一天里。", tag: "生日", owner: "@阿筝" },
-  { id: "e2", date: "2026-03-22", title: "视频约会", detail: "隔着屏幕一起吃小蛋糕，也算认真过节。", tag: "约会", owner: "@小樱" },
-  { id: "e3", date: "2026-03-10", title: "恋爱周年纪念", detail: "一起回看刚认识时的聊天记录，还是会偷偷心动。", tag: "纪念日", owner: "@阿妍" },
-  { id: "e4", date: "2026-02-17", title: "春天的信", detail: "把没说完的话折好，夹进日历最暖的一页。", tag: "日常", owner: "@结衣" },
+  { id: "e1", date: "2026-03-30", title: "阿延生日", detail: "把惊喜和祝福都塞进这一天。", tag: "生日", owner: "@阿筝", coverImage: "" },
+  { id: "e2", date: "2026-03-22", title: "视频约会", detail: "隔着屏幕一起吃小蛋糕，也算认真过节。", tag: "约会", owner: "@小樱", coverImage: "" },
+  { id: "e3", date: "2026-03-10", title: "恋爱周年纪念", detail: "回看刚认识时的聊天记录，还是会偷偷心动。", tag: "纪念日", owner: "@阿澈", coverImage: "" },
+  { id: "e4", date: "2026-02-17", title: "春天的信", detail: "把没说完的话折好，夹进日历最暖的一页。", tag: "日常", owner: "@结衣", coverImage: "" },
 ];
 
 const TAG_META = {
-  生日: { color: "#b8792b", bg: "#fff3de" },
-  约会: { color: "#7653b6", bg: "#f3edff" },
-  纪念日: { color: "#bc5d8c", bg: "#fff0f6" },
-  日常: { color: "#697f8e", bg: "#edf6fb" },
-  旅行: { color: "#568367", bg: "#eef8ef" },
+  生日: { color: "#b48a55", bg: "#fff6e6" },
+  约会: { color: "#8b72bd", bg: "#f2edff" },
+  纪念日: { color: "#a77bb0", bg: "#f8effb" },
+  日常: { color: "#6f8ea6", bg: "#eef6fb" },
+  旅行: { color: "#9a86c6", bg: "#f3effc" },
 };
 
 function readEvents() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-    return Array.isArray(saved) && saved.length ? saved : DEFAULT_EVENTS;
+    return Array.isArray(saved) && saved.length ? saved.map(normalizeEvent) : DEFAULT_EVENTS;
   } catch {
     return DEFAULT_EVENTS;
   }
+}
+
+function normalizeEvent(event) {
+  return {
+    ...event,
+    tag: event.tag && TAG_META[event.tag] ? event.tag : "日常",
+    coverImage: event.coverImage || event.image || "",
+  };
 }
 
 function saveEvents(events) {
@@ -46,6 +54,10 @@ function fromDateKey(key) {
 function dateLabel(key) {
   const date = fromDateKey(key);
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function monthLabel(date) {
+  return `${date.getFullYear()}年${date.getMonth() + 1}月`;
 }
 
 function monthCells(viewDate) {
@@ -72,6 +84,12 @@ function groupedEvents(events) {
     }, {});
 }
 
+function stickerTone(dateKey) {
+  const tones = ["shell", "blue", "honey", "sage", "lilac"];
+  const seed = dateKey.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return tones[seed % tones.length];
+}
+
 function BackIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -89,7 +107,25 @@ export default function DriftCalendarApp({ onClose }) {
   const [editing, setEditing] = useState(null);
 
   const cells = useMemo(() => monthCells(viewDate), [viewDate]);
-  const eventDates = useMemo(() => new Set(events.map((event) => event.date)), [events]);
+  const eventsByDate = useMemo(() => events.reduce((map, event) => {
+    map[event.date] ||= [];
+    map[event.date].push(event);
+    return map;
+  }, {}), [events]);
+  const currentNodes = useMemo(() => {
+    const eventNodes = cells
+      .map((cell, index) => ({ cell, index, events: eventsByDate[cell.key] || [] }))
+      .filter((item) => item.events.length && item.cell.current);
+    if (eventNodes.length) return eventNodes;
+    const selectedIndex = cells.findIndex((cell) => cell.key === selectedDate);
+    const fallbackIndex = selectedIndex >= 0 ? selectedIndex : cells.findIndex((cell) => cell.current);
+    if (fallbackIndex < 0) return [];
+    return [
+      { cell: cells[Math.max(0, fallbackIndex - 8)] || cells[fallbackIndex], index: Math.max(0, fallbackIndex - 8), events: [] },
+      { cell: cells[fallbackIndex], index: fallbackIndex, events: [] },
+      { cell: cells[Math.min(cells.length - 1, fallbackIndex + 8)] || cells[fallbackIndex], index: Math.min(cells.length - 1, fallbackIndex + 8), events: [] },
+    ];
+  }, [cells, eventsByDate, selectedDate]);
   const dayEvents = events.filter((event) => event.date === selectedDate);
   const groups = useMemo(() => groupedEvents(events), [events]);
 
@@ -98,17 +134,18 @@ export default function DriftCalendarApp({ onClose }) {
   }
 
   function openEditor(event) {
-    setEditing(event || { id: "", date: selectedDate, title: "", detail: "", tag: "纪念日", owner: "@我" });
+    setEditing(event || { id: "", date: selectedDate, title: "", detail: "", tag: "纪念日", owner: "@我", coverImage: "" });
   }
 
   function commitEvent(next) {
-    const clean = {
+    const clean = normalizeEvent({
       ...next,
       id: next.id || `drift-${Date.now()}`,
       title: next.title.trim() || "未命名事件",
       detail: next.detail.trim(),
       owner: next.owner.trim() || "@我",
-    };
+      coverImage: next.coverImage || "",
+    });
     const updated = events.some((event) => event.id === clean.id)
       ? events.map((event) => (event.id === clean.id ? clean : event))
       : [clean, ...events];
@@ -159,23 +196,23 @@ export default function DriftCalendarApp({ onClose }) {
             <section className="drift-calendar">
               <div className="drift-month">
                 <button type="button" onClick={() => changeMonth(-1)}>← 上月</button>
-                <b>{viewDate.getFullYear()}年{viewDate.getMonth() + 1}月</b>
+                <b>{monthLabel(viewDate)}</b>
                 <button type="button" onClick={() => changeMonth(1)}>下月 →</button>
               </div>
               <div className="drift-week">
                 {["日", "一", "二", "三", "四", "五", "六"].map((day) => <span key={day}>{day}</span>)}
               </div>
               <div className="drift-card drift-grid">
+                <DriftCurrent nodes={currentNodes} />
                 {cells.map((cell) => (
-                  <button
+                  <CalendarDay
                     key={cell.key}
-                    type="button"
-                    className={[cell.current ? "" : "dim", cell.key === today ? "today" : "", cell.key === selectedDate ? "selected" : ""].filter(Boolean).join(" ")}
-                    onClick={() => setSelectedDate(cell.key)}
-                  >
-                    {cell.day}
-                    {eventDates.has(cell.key) ? <i /> : null}
-                  </button>
+                    cell={cell}
+                    events={eventsByDate[cell.key] || []}
+                    isToday={cell.key === today}
+                    isSelected={cell.key === selectedDate}
+                    onSelect={() => setSelectedDate(cell.key)}
+                  />
                 ))}
               </div>
               <div className="drift-card drift-day-list">
@@ -216,10 +253,63 @@ export default function DriftCalendarApp({ onClose }) {
   );
 }
 
+function DriftCurrent({ nodes }) {
+  if (!nodes.length) return null;
+  const points = nodes.map(({ index }) => {
+    const col = index % 7;
+    const row = Math.floor(index / 7);
+    return {
+      x: 7.14 + col * 14.285,
+      y: 8.2 + row * 16.65,
+    };
+  });
+  const path = points.map((point, index) => {
+    if (index === 0) return `M ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+    const prev = points[index - 1];
+    const bend = index % 2 === 0 ? 3.2 : -3.2;
+    return `C ${((prev.x + point.x) / 2).toFixed(2)} ${(prev.y + bend).toFixed(2)}, ${((prev.x + point.x) / 2).toFixed(2)} ${(point.y - bend).toFixed(2)}, ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+  }).join(" ");
+
+  return (
+    <svg className="drift-current-map" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <path className="drift-current-glow" d={path} />
+      <path className="drift-current-line" d={path} />
+      {points.map((point, index) => (
+        <circle className="drift-current-node" key={`${point.x}-${point.y}-${index}`} cx={point.x} cy={point.y} r={0.95 + (index % 2) * 0.28} />
+      ))}
+    </svg>
+  );
+}
+
+function CalendarDay({ cell, events, isToday, isSelected, onSelect }) {
+  const primary = events[0];
+  return (
+    <button
+      type="button"
+      className={[cell.current ? "" : "dim", isToday ? "today" : "", isSelected ? "selected" : "", events.length ? "has-event" : ""].filter(Boolean).join(" ")}
+      onClick={onSelect}
+    >
+      {primary ? (
+        <span className={`drift-day-sticker ${primary.coverImage ? "has-cover" : stickerTone(cell.key)}`}>
+          {primary.coverImage ? <img src={primary.coverImage} alt="" /> : <span>{primary.title.slice(0, 1)}</span>}
+        </span>
+      ) : null}
+      <span className="drift-day-number">{cell.day}</span>
+      {events.length ? (
+        <span className="drift-day-dots">
+          {events.slice(0, 3).map((event) => <i key={event.id} style={{ backgroundColor: (TAG_META[event.tag] || TAG_META.日常).color }} />)}
+        </span>
+      ) : null}
+      {events.length > 1 ? <em className="drift-day-count">×{events.length}</em> : null}
+    </button>
+  );
+}
+
 function EventRow({ event, onClick }) {
-  const meta = TAG_META[event.tag] || TAG_META["日常"];
+  const meta = TAG_META[event.tag] || TAG_META.日常;
   return (
     <article className="drift-event" onClick={onClick}>
+      {event.coverImage ? <img className="drift-event-cover" src={event.coverImage} alt="" /> : null}
       <div className="drift-event-top">
         <span>{dateLabel(event.date)}</span>
         <b style={{ color: meta.color, backgroundColor: meta.bg }}>{event.tag}</b>
@@ -233,7 +323,14 @@ function EventRow({ event, onClick }) {
 
 function EventSheet({ event, onClose, onSave, onDelete }) {
   const [draft, setDraft] = useState(event);
+  const fileInput = useRef(null);
   const update = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
+  const pickCover = (file) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => update("coverImage", String(reader.result || ""));
+    reader.readAsDataURL(file);
+  };
 
   return (
     <div className="drift-sheet-backdrop" onClick={onClose}>
@@ -257,6 +354,12 @@ function EventSheet({ event, onClose, onSave, onDelete }) {
           {Object.keys(TAG_META).map((tag) => <option key={tag} value={tag}>{tag}</option>)}
         </select>
         <textarea rows="3" value={draft.detail} placeholder="写下一点细节。" onChange={(event) => update("detail", event.target.value)} />
+        <div className="drift-cover-tools">
+          <button type="button" onClick={() => fileInput.current?.click()}>上传当天小照片</button>
+          {draft.coverImage ? <button type="button" onClick={() => update("coverImage", "")}>移除</button> : null}
+          <input ref={fileInput} type="file" accept="image/*" hidden onChange={(event) => pickCover(event.target.files?.[0])} />
+        </div>
+        {draft.coverImage ? <img className="drift-cover-preview" src={draft.coverImage} alt="" /> : null}
         <div className="drift-sheet-actions">
           {draft.id ? <button className="danger" type="button" onClick={() => onDelete(draft.id)}>删除</button> : null}
           <button type="button" onClick={onClose}>取消</button>
