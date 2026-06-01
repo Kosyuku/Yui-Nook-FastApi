@@ -527,13 +527,29 @@
             pushChunk(bucket);
         };
         paragraphs.forEach((part) => {
-            if (part.length <= 110) {
+            const canSplit = /[。！？!?…]\s*/u.test(part);
+            if (part.length <= 64 || !canSplit) {
                 pushChunk(part);
             } else {
                 splitLongParagraph(part);
             }
         });
         return chunks.filter(Boolean);
+    }
+
+    function normalizeBubbleText(text) {
+        const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+        if (!raw || !raw.includes('\n')) return raw;
+        return raw
+            .split(/\n{2,}/)
+            .map((block) => {
+                const lines = block.split('\n').map((line) => line.trim()).filter(Boolean);
+                if (lines.length <= 1) return block.trim();
+                const compact = lines.join('');
+                if (compact.length <= 32 || lines.every((line) => line.length <= 8)) return compact;
+                return lines.join('\n');
+            })
+            .join('\n\n');
     }
 
     function assistantChunkDelay(text) {
@@ -2028,7 +2044,7 @@
         const toolLinesBlock = (message.toolCalls && message.toolCalls.length)
             ? renderToolLines(message.toolCalls)
             : '';
-        const text = messageTextValue(message);
+        const text = normalizeBubbleText(messageTextValue(message));
         const attachments = messageAttachments(message);
         const attachmentBlock = renderMessageAttachments(attachments);
         const showInlineTime = meta.showTime && message.time && !message.typing;
@@ -2037,19 +2053,20 @@
         const showSourceMeta = message.role === 'ai' && sourceBadge;
         const bubbleWrap = `
           <div class="message-bubble-wrap">
+            ${showSourceMeta ? `<div class="bubble-meta-row">
+              ${sourceBadge}
+            </div>` : ''}
             <div class="message-bubble ${roleClass}${bubbleClassExtra}" ${message.role === 'ai' ? `data-msg-id="${message.id}" data-action="toggle-message-tools" data-id="${message.id}"` : ''}>
               ${cotButton}
               ${(message.typing || (message.streaming && !message.text))
                   ? `<div class="typing-dots"><span></span><span></span><span></span></div>`
                   : `${attachmentBlock}${text ? `<div class="message-text">${escapeHtml(text)}${inlineTimeClass === 'tail-time' ? inlineTime : ''}</div>` : ''}${inlineTimeClass === 'block-time' ? inlineTime : ''}`}
             </div>
-            ${showSourceMeta ? `<div class="bubble-meta-row">
-              ${sourceBadge}
-            </div>` : ''}
+            ${bottomTools}
           </div>`;
         const colInner = message.role === 'ai' && (thinkingBlock || toolLinesBlock)
-            ? `${thinkingBlock}${toolLinesBlock}${bubbleWrap}${bottomTools}`
-            : `${bubbleWrap}${bottomTools}${thinkingBlock}${toolLinesBlock}`;
+            ? `${thinkingBlock}${toolLinesBlock}${bubbleWrap}`
+            : `${bubbleWrap}${thinkingBlock}${toolLinesBlock}`;
         return `
       <div class="message-row ${roleClass}" data-msg-id="${message.id}">
         ${avatar}
