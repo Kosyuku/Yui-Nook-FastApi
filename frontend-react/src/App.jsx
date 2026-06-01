@@ -1034,7 +1034,7 @@ function LegacyHomePage({ onOpenApp, phone }) {
       `;
     };
     const getConfiguredHomePages = () => {
-      const chunkSize = String(phone.layout || "").includes("4 App") ? 4 : 6;
+      const chunkSize = String(phone.layout || "").includes("4 App") ? 4 : 12;
       const items = Array.isArray(phone.desktopApps) ? [...phone.desktopApps] : [];
       const pages = [];
       while (items.length) pages.push(items.splice(0, chunkSize));

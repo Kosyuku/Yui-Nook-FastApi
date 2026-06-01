@@ -1028,8 +1028,8 @@ function AppSubTab({ T, F }) {
   const [drag, setDrag] = use4(null);
   const [showPicker, setShowPicker] = use4(null); // 'apps' | 'dock' | null
   const [page, setPage] = use4(0);
-  const homePageSize = 6;
-  const pageCount = Math.max(1, Math.ceil(installed.length / homePageSize));
+  const homePageSize = 12;
+  const pageCount = Math.max(2, Math.ceil(installed.length / homePageSize) + 1);
   const visibleInstalled = installed.slice(page * homePageSize, page * homePageSize + homePageSize);
   useEffect4(() => {
     setPage(current => Math.min(current, pageCount - 1));
@@ -1221,7 +1221,7 @@ function AppSubTab({ T, F }) {
       </div>
 
       {/* 主屏 */}
-      <div style={{ background: 'linear-gradient(180deg, #C9B8E0, #DCC4D6, #E8C8B8)', borderRadius: 18, padding: 14, boxShadow: 'inset 0 0 0 1.5px rgba(50,40,65,0.2)' }}>
+      <div style={{ background: 'linear-gradient(180deg, #C9B8E0, #DCC4D6, #E8C8B8)', borderRadius: 18, padding: 14, width: 'calc(100% - 28px)', margin: '0 auto', boxSizing: 'border-box', boxShadow: 'inset 0 0 0 1.5px rgba(50,40,65,0.2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <div style={{ fontFamily: F.mono, fontSize: 9, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.85)' }}>HOME SCREEN</div>
           <div style={{ display: 'flex', gap: 5 }}>
