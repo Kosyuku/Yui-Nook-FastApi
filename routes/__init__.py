@@ -504,6 +504,8 @@ async def list_memories(
     sort_by: str = "updated_at",
     order: str = "desc",
     agent_id: Optional[str] = None,
+    include_cross_agent: bool = False,
+    cross_agent_limit: Optional[int] = None,
 ):
     memories = await db.list_memories(
         category=category,
@@ -511,6 +513,8 @@ async def list_memories(
         sort_by=sort_by,
         order=order,
         agent_id=agent_id,
+        include_cross_agent=include_cross_agent,
+        cross_agent_limit=cross_agent_limit,
     )
     return {"memories": memories}
 
@@ -522,6 +526,8 @@ async def search_memories(
     limit: int = 10,
     mode: str = "auto",
     agent_id: Optional[str] = None,
+    include_cross_agent: bool = False,
+    cross_agent_limit: Optional[int] = None,
 ):
     query = (q or "").strip()
     if not query:
@@ -529,13 +535,13 @@ async def search_memories(
 
     search_mode = (mode or "auto").strip().lower()
     if search_mode == "keyword":
-        memories = await db.search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id)
+        memories = await db.search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, include_cross_agent=include_cross_agent, cross_agent_limit=cross_agent_limit)
     elif search_mode == "semantic":
-        memories = await db.semantic_search_memories(query_text=query, category=category, limit=limit, agent_id=agent_id)
+        memories = await db.semantic_search_memories(query_text=query, category=category, limit=limit, agent_id=agent_id, include_cross_agent=include_cross_agent, cross_agent_limit=cross_agent_limit)
     else:
-        memories = await db.semantic_search_memories(query_text=query, category=category, limit=limit, agent_id=agent_id)
+        memories = await db.semantic_search_memories(query_text=query, category=category, limit=limit, agent_id=agent_id, include_cross_agent=include_cross_agent, cross_agent_limit=cross_agent_limit)
         if not memories:
-            memories = await db.search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id)
+            memories = await db.search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, include_cross_agent=include_cross_agent, cross_agent_limit=cross_agent_limit)
     return {"memories": memories, "mode": search_mode}
 
 

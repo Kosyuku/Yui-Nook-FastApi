@@ -5003,17 +5003,26 @@ async def search_memories(
     limit: int = 10,
     *,
     agent_id: str | None = None,
+    include_cross_agent: bool = False,
+    cross_agent_limit: int | None = None,
     touch: bool = True,
 ) -> list[dict[str, Any]]:
     """Keyword search memories"""
     if _use_supabase_memory():
-        rows = await _supabase_search_memories(keyword=keyword, category=category, limit=limit, agent_id=agent_id)
+        rows = await _supabase_search_memories(
+            keyword=keyword,
+            category=category,
+            limit=limit,
+            agent_id=agent_id,
+            include_cross_agent=include_cross_agent,
+            cross_agent_limit=cross_agent_limit,
+        )
         if touch and rows:
             await touch_memories([str(row.get("id") or "") for row in rows], reason="retrieval_hit", delta=0.5)
         return rows
     db = await get_db()
-    query = f"SELECT * FROM memories WHERE {_memory_visibility_where_clause(False)} AND {_memory_active_where_clause()}"
-    params: list[Any] = [*_memory_scope_params(normalize_agent_id(agent_id), False), _now()]
+    query = f"SELECT * FROM memories WHERE {_memory_visibility_where_clause(include_cross_agent)} AND {_memory_active_where_clause()}"
+    params: list[Any] = [*_memory_scope_params(normalize_agent_id(agent_id), include_cross_agent), _now()]
     if category:
         query += " AND category = ?"
         params.append(normalize_memory_category(category))
@@ -5039,7 +5048,12 @@ async def search_memories(
         ),
         reverse=True,
     )
-    results = [item[1] for item in scored[:limit]]
+    results = _memory_scope_post_filter(
+        [item[1] for item in scored],
+        agent_id=normalize_agent_id(agent_id),
+        include_cross_agent=include_cross_agent,
+        cross_agent_limit=cross_agent_limit,
+    )[:limit]
     if touch and results:
         await touch_memories([str(row.get("id") or "") for row in results], reason="retrieval_hit", delta=0.5)
     return results
@@ -5051,6 +5065,8 @@ async def semantic_search_memories(
     limit: int = 10,
     *,
     agent_id: str | None = None,
+    include_cross_agent: bool = False,
+    cross_agent_limit: int | None = None,
     touch: bool = True,
 ) -> list[dict[str, Any]]:
     query = (query_text or "").strip()
@@ -5058,7 +5074,7 @@ async def semantic_search_memories(
         return []
 
     if not _can_use_embeddings():
-        return await search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, touch=touch)
+        return await search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, include_cross_agent=include_cross_agent, cross_agent_limit=cross_agent_limit, touch=touch)
 
     if _use_supabase_memory():
         try:
@@ -5068,6 +5084,8 @@ async def semantic_search_memories(
                 category=category,
                 limit=max(limit * 4, 20),
                 agent_id=agent_id,
+                include_cross_agent=include_cross_agent,
+                cross_agent_limit=cross_agent_limit,
             )
             if rows:
                 rows = [
@@ -5093,10 +5111,10 @@ async def semantic_search_memories(
                 return rows
         except Exception as exc:
             logger.warning("Supabase semantic rpc failed, fallback to keyword search: %s", exc)
-        return await search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, touch=touch)
+        return await search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, include_cross_agent=include_cross_agent, cross_agent_limit=cross_agent_limit, touch=touch)
 
     candidate_limit = max(limit, getattr(settings, "memory_vector_candidate_limit", 200))
-    candidates = await list_memories(category=category, limit=candidate_limit, agent_id=agent_id)
+    candidates = await list_memories(category=category, limit=candidate_limit, agent_id=agent_id, include_cross_agent=include_cross_agent, cross_agent_limit=cross_agent_limit)
     if not candidates:
         return []
 
@@ -5104,7 +5122,7 @@ async def semantic_search_memories(
         query_embedding = await _fetch_embedding(query)
     except Exception as exc:
         logger.warning("Semantic memory query failed, fallback to keyword search: %s", exc)
-        return await search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, touch=touch)
+        return await search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, include_cross_agent=include_cross_agent, cross_agent_limit=cross_agent_limit, touch=touch)
 
     scored: list[tuple[float, float, dict[str, Any]]] = []
     for memory in candidates:
@@ -5132,7 +5150,7 @@ async def semantic_search_memories(
         if touch:
             await touch_memories([str(row.get("id") or "") for row in results], reason="retrieval_hit", delta=0.5)
         return results
-    return await search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, touch=touch)
+    return await search_memories(keyword=query, category=category, limit=limit, agent_id=agent_id, include_cross_agent=include_cross_agent, cross_agent_limit=cross_agent_limit, touch=touch)
 
 
 async def touch_memories(

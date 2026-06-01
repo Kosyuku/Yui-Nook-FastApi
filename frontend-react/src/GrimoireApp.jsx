@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { apiUrl } from "./apiBase.js";
+import { uploadMediaFile } from "./mediaApi.js";
 
 // ═══════════════════════════════════════════════════════════════
 // Design Tokens & Fonts  (= components/tokens.jsx)
@@ -97,6 +98,42 @@ function shade(hex, amt) {
 }
 const isCn = (s) => /[一-鿿]/.test(String(s || ""));
 
+function coverTitleStyle(title, width) {
+  const len = Array.from(String(title || "")).length;
+  const base = width && width > 140 ? 32 : 26;
+  return {
+    fontSize: Math.max(17, base - Math.max(0, len - 4) * 2.4),
+    letterSpacing: len >= 6 ? 3 : len >= 5 ? 5 : 8,
+    lineHeight: len >= 6 ? 1.02 : 1.15,
+  };
+}
+
+function BackLink({ onClick, children = "grimoire" }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        all: "unset",
+        cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        minHeight: 28,
+        padding: "0 4px",
+        fontFamily: F.serifEn,
+        fontStyle: "italic",
+        fontSize: 12,
+        color: C.inkFaint,
+        letterSpacing: "1.2px",
+      }}
+    >
+      <span style={{ fontFamily: F.serifCn, fontStyle: "normal", fontSize: 16, lineHeight: 1 }}>‹</span>
+      <span>{children}</span>
+    </button>
+  );
+}
+
 async function apiFetch(path, opts = {}) {
   const res = await fetch(apiUrl(path), {
     headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
@@ -155,6 +192,7 @@ function GiltRule({ color }) {
 }
 
 function TomeSpine({ tome, height = 220, onClick }) {
+  const len = Array.from(String(tome.title || "")).length;
   return (
     <div onClick={onClick} style={{
       width: 56, height, position: "relative", cursor: "pointer",
@@ -169,7 +207,7 @@ function TomeSpine({ tome, height = 220, onClick }) {
       <div style={{ position: "absolute", top: 16, left: 6, right: 6, height: 0.5, background: tome.gilt, opacity: 0.55 }} />
       <div style={{ position: "absolute", bottom: 12, left: 6, right: 6, height: 1, background: tome.gilt, opacity: 0.85 }} />
       <div style={{ position: "absolute", bottom: 16, left: 6, right: 6, height: 0.5, background: tome.gilt, opacity: 0.55 }} />
-      <div style={{ position: "absolute", top: 30, bottom: 30, left: 0, right: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, color: tome.gilt, fontFamily: F.serifCn, fontSize: 14, fontWeight: 500, letterSpacing: 4, writingMode: "vertical-rl", textOrientation: "upright" }}>{tome.title}</div>
+      <div style={{ position: "absolute", top: 30, bottom: 30, left: 0, right: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, color: tome.gilt, fontFamily: F.serifCn, fontSize: Math.max(10, 14 - Math.max(0, len - 5)), fontWeight: 500, letterSpacing: len > 5 ? 2 : 4, writingMode: "vertical-rl", textOrientation: "upright", overflow: "hidden" }}>{tome.title}</div>
       <div style={{ position: "absolute", bottom: 22, left: 0, right: 0, textAlign: "center", fontFamily: isCn(tome.sigil) ? F.serifCn : F.serifEn, fontStyle: isCn(tome.sigil) ? "normal" : "italic", fontSize: 14, color: tome.gilt, opacity: 0.7 }}>{tome.sigil}</div>
       <div style={{ position: "absolute", top: 1, bottom: 1, left: "92%", width: 1, background: "rgba(255,255,255,0.08)" }} />
     </div>
@@ -177,6 +215,7 @@ function TomeSpine({ tome, height = 220, onClick }) {
 }
 
 function TomeCover({ tome, width = 160, height = 210, onClick }) {
+  const titleFit = coverTitleStyle(tome.title, width);
   return (
     <div onClick={onClick} style={{
       width: width || "100%", height, position: "relative", cursor: "pointer",
@@ -194,7 +233,7 @@ function TomeCover({ tome, width = 160, height = 210, onClick }) {
       <div style={{ fontFamily: F.serifEn, fontStyle: "italic", fontSize: 10, letterSpacing: 3, opacity: 0.7, textTransform: "lowercase", textAlign: "center", marginTop: 4 }}>{tome.titleEn}</div>
       <GiltRule color={tome.gilt} />
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ fontFamily: F.serifCn, fontSize: width && width > 140 ? 32 : 26, fontWeight: 500, color: tome.gilt, letterSpacing: 8, writingMode: "vertical-rl", textOrientation: "upright", lineHeight: 1.15 }}>{tome.title}</div>
+        <div style={{ fontFamily: F.serifCn, fontWeight: 500, color: tome.gilt, writingMode: "vertical-rl", textOrientation: "upright", ...titleFit }}>{tome.title}</div>
       </div>
       <div style={{ textAlign: "center", marginTop: 4, fontFamily: isCn(tome.sigil) ? F.serifCn : F.serifEn, fontStyle: isCn(tome.sigil) ? "normal" : "italic", fontSize: 20, opacity: 0.85 }}>{tome.sigil}</div>
       <GiltRule color={tome.gilt} />
@@ -326,12 +365,15 @@ function RecentRow({ entry, tomes, onEntry }) {
 }
 
 // ── HomeBookshelf (书架) ──
-function HomeBookshelf({ tomes, entries, onTome, onEntry }) {
+function HomeBookshelf({ tomes, entries, onTome, onEntry, onCreateTome }) {
   const shelves = [{ tomes: tomes.slice(0, 3) }, { tomes: tomes.slice(3) }];
   const recentEntries = [...entries].slice(0, 3);
   return (
     <div style={{ width: "100%", height: "100%", background: C.paper, backgroundImage: "radial-gradient(ellipse 700px 400px at 30% 5%, rgba(255,238,220,0.4), transparent), repeating-linear-gradient(90deg, transparent 0 56px, rgba(160,120,85,0.025) 56px 57px)", overflow: "auto" }} className="phone-scroll">
-      <GrimoireHead subtitle="书架" right={<button style={miniBtn}>＋ 新典</button>} />
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 20px 0" }}>
+        <button type="button" onClick={onCreateTome} style={miniBtn}>＋ 新典</button>
+      </div>
+      <GrimoireHead subtitle="书架" right={<button type="button" onClick={onCreateTome} style={miniBtn}>＋ 新典</button>} />
       <div style={{ margin: "0 20px 12px", padding: "8px 12px", background: C.paperDeep, borderRadius: 8, display: "flex", alignItems: "center", gap: 8, border: `0.5px solid ${C.rule}` }}>
         <span style={{ color: C.inkFaint, fontSize: 13 }}>⌕</span>
         <span style={{ fontFamily: F.serifCn, fontSize: 11, color: C.inkFaint, letterSpacing: "1px" }}>翻一翻所有典页…</span>
@@ -361,10 +403,13 @@ function HomeBookshelf({ tomes, entries, onTome, onEntry }) {
 }
 
 // ── HomeIndex (索引目录) ──
-function HomeIndex({ tomes, onTome }) {
+function HomeIndex({ tomes, onTome, onCreateTome }) {
   return (
     <div style={{ width: "100%", height: "100%", background: C.paper, backgroundImage: "repeating-linear-gradient(0deg, transparent 0 36px, rgba(160,120,85,0.04) 36px 37px)", overflow: "auto" }} className="phone-scroll">
-      <GrimoireHead subtitle="索引" right={<button style={miniBtn}>＋ 新典</button>} />
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 20px 0" }}>
+        <button type="button" onClick={onCreateTome} style={miniBtn}>＋ 新典</button>
+      </div>
+      <GrimoireHead subtitle="索引" right={<button type="button" onClick={onCreateTome} style={miniBtn}>＋ 新典</button>} />
       <div style={{ margin: "0 20px 6px", padding: "8px 0", borderTop: `1px solid ${C.ink}`, borderBottom: `0.5px solid ${C.rule}`, display: "grid", gridTemplateColumns: "24px 1fr 60px 36px", gap: 8, alignItems: "center", fontFamily: F.serifCn, fontSize: 9, color: C.inkFaint, letterSpacing: "2px" }}>
         <span></span><span>典名</span><span style={{ textAlign: "right" }}>页数</span><span style={{ textAlign: "right" }}>最近</span>
       </div>
@@ -391,14 +436,17 @@ function HomeIndex({ tomes, onTome }) {
   );
 }
 
-function HomeSpreads({ tomes, entries, onTome, onEntry }) {
+function HomeSpreads({ tomes, entries, onTome, onEntry, onCreateTome }) {
   const featured = tomes[0];
   const rest = tomes.slice(1);
   const recentEntries = [...entries].sort((a, b) => 0).slice(0, 3);
   if (!featured) return <div style={{ padding: 20, color: C.inkFaint, fontFamily: F.serifCn, fontSize: 12 }}>还没有典。新建一个开始吧。</div>;
   return (
     <div style={{ width: "100%", height: "100%", background: C.paper, backgroundImage: "radial-gradient(ellipse 700px 500px at 50% 0%, rgba(255,238,220,0.5), transparent)", overflow: "auto" }} className="phone-scroll">
-      <GrimoireHead subtitle="封面墙" right={<button style={miniBtn} onClick={() => {}}>＋ 新典</button>} />
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: "8px 20px 0" }}>
+        <button type="button" onClick={onCreateTome} style={miniBtn}>＋ 新典</button>
+      </div>
+      <GrimoireHead subtitle="封面墙" right={<button type="button" onClick={onCreateTome} style={miniBtn}>＋ 新典</button>} />
       {/* featured banner */}
       <div style={{ padding: "4px 20px 18px" }}>
         <div onClick={() => onTome(featured.id)} style={{ padding: 16, borderRadius: 10, background: `linear-gradient(135deg, ${featured.palette.bg} 0%, ${C.paper} 100%)`, border: `0.5px solid ${C.rule}`, display: "flex", gap: 14, alignItems: "center", cursor: "pointer" }}>
@@ -446,10 +494,11 @@ function HomeSpreads({ tomes, entries, onTome, onEntry }) {
 // ═══════════════════════════════════════════════════════════════
 // Tome screen  (= grimoire/tome.jsx)
 // ═══════════════════════════════════════════════════════════════
-function TomeHead({ tome, tomes, view, onView, onBack }) {
+function TomeHead({ tome, tomes, view, onView, onBack, onCreateEntry }) {
   return (
     <div style={{ padding: "4px 20px 14px", background: `linear-gradient(180deg, ${tome.palette.bg} 0%, ${C.paper} 100%)` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: C.inkFaint, fontFamily: F.serifEn, fontStyle: "italic", letterSpacing: "1.5px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 0, color: C.inkFaint, fontFamily: F.serifEn, fontStyle: "italic", letterSpacing: "1.5px" }}>
+        <BackLink onClick={onBack}>grimoire</BackLink>
         <span onClick={onBack} style={{ cursor: "pointer" }}>← grimoire</span>
         <span style={{ opacity: 0.5, margin: "0 4px" }}>/</span>
         <span style={{ fontFamily: F.serifCn, fontStyle: "normal", color: C.inkSoft }}>魔典</span>
@@ -465,8 +514,9 @@ function TomeHead({ tome, tomes, view, onView, onBack }) {
       <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
         <ViewSwitcher value={view} onChange={onView} />
         <div style={{ display: "flex", gap: 6 }}>
+          <button type="button" onClick={onCreateEntry} style={miniBtn}>＋ 新页</button>
           <button style={miniBtn}>⌕</button>
-          <button style={miniBtn}>＋ 新页</button>
+          <button type="button" onClick={onCreateEntry} style={miniBtn}>＋ 新页</button>
         </div>
       </div>
     </div>
@@ -556,12 +606,12 @@ function BoardView({ entries, density, onEntry }) {
   );
 }
 
-function TomeScreen({ tome, entries, tomes, density = "comfy", onBack, onEntry }) {
+function TomeScreen({ tome, entries, tomes, density = "comfy", onBack, onEntry, onCreateEntry }) {
   const [view, setView] = useState("gallery");
   const tomeEntries = entries.filter((e) => e.tome === tome.id);
   return (
     <div style={{ width: "100%", height: "100%", background: C.paper, overflow: "auto", display: "flex", flexDirection: "column" }} className="phone-scroll">
-      <TomeHead tome={tome} tomes={tomes} view={view} onView={setView} onBack={onBack} />
+      <TomeHead tome={tome} tomes={tomes} view={view} onView={setView} onBack={onBack} onCreateEntry={onCreateEntry} />
       <div style={{ padding: "0 20px 4px", display: "flex", alignItems: "baseline", gap: 8 }}>
         <span style={{ fontFamily: F.handEn, fontSize: 14, color: tome.palette.accent }}>{tomeEntries.length} pages</span>
         <span style={{ fontFamily: F.serifCn, fontSize: 9, color: C.inkFaint, letterSpacing: "2px" }}>· 共 {tomeEntries.length} 条 · {tome.lastEdited}</span>
@@ -643,7 +693,8 @@ function EntryDetail({ entry, entries, tomes, onBack, onEdit, onRelationClick })
 
   return (
     <div style={{ width: "100%", height: "100%", background: C.paper, backgroundImage: "repeating-linear-gradient(0deg, transparent 0 28px, rgba(160,120,85,0.04) 28px 29px)", overflow: "auto" }} className="phone-scroll">
-      <div style={{ padding: "4px 20px 8px", display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: C.inkFaint, fontFamily: F.serifEn, fontStyle: "italic", letterSpacing: "1.2px" }}>
+      <div style={{ padding: "4px 20px 8px", display: "flex", alignItems: "center", gap: 4, fontSize: 0, color: C.inkFaint, fontFamily: F.serifEn, fontStyle: "italic", letterSpacing: "1.2px" }}>
+        <BackLink onClick={onBack}>grimoire</BackLink>
         <span onClick={onBack} style={{ cursor: "pointer" }}>← grimoire</span>
         <span style={{ opacity: 0.5, margin: "0 3px" }}>/</span>
         <span style={{ fontFamily: F.serifCn, fontStyle: "normal", color: C.inkSoft }}>{tome?.title}</span>
@@ -764,13 +815,47 @@ function SlashMenu() {
   );
 }
 
-function EntryEdit({ entry, entries, tomes, onBack }) {
+function EntryEdit({ entry, entries, tomes, onBack, onSave, onUploadAttachment }) {
   const tome = tomes.find((x) => x.id === entry.tome);
   const T = TYPES[entry.type] || TYPES.character;
+  const [draft, setDraft] = useState(() => ({
+    title: entry.title || "",
+    titleEn: entry.titleEn || "",
+    sub: entry.sub || "",
+    body: entry.body || "",
+    fields: entry.fields || {},
+  }));
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const patchDraft = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
+  const saveDraft = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onSave?.(entry.id, draft);
+      onBack();
+    } finally {
+      setSaving(false);
+    }
+  };
+  const uploadAttachment = async (file) => {
+    if (!file || uploading) return;
+    setUploading(true);
+    try {
+      const item = await onUploadAttachment?.(entry, file);
+      if (item?.id) {
+        const attachments = Array.isArray(draft.fields?.attachments) ? draft.fields.attachments : [];
+        patchDraft("fields", { ...draft.fields, attachments: [...attachments, { id: item.id, title: item.title || file.name, type: item.type || "other" }] });
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
   return (
     <div style={{ width: "100%", height: "100%", background: C.paper, position: "relative", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <style>{`@keyframes gPulse{0%,100%{opacity:1}50%{opacity:.4}} @keyframes gBlink{0%,49%{opacity:1}50%,100%{opacity:0}}`}</style>
-      <div style={{ padding: "4px 16px 10px", display: "flex", alignItems: "center", gap: 10 }}>
+      <style>{`@keyframes gPulse{0%,100%{opacity:1}50%{opacity:.4}} @keyframes gBlink{0%,49%{opacity:1}50%,100%{opacity:0}} .grim-edit-top > span:first-of-type{display:none}`}</style>
+      <div className="grim-edit-top" style={{ padding: "4px 16px 10px", display: "flex", alignItems: "center", gap: 10 }}>
+        <BackLink onClick={onBack}>close</BackLink>
         <span onClick={onBack} style={{ fontFamily: F.serifEn, fontStyle: "italic", fontSize: 12, color: C.inkFaint, letterSpacing: "1px", cursor: "pointer" }}>✕ 关</span>
         <div style={{ flex: 1 }} />
         <span style={{ fontFamily: F.handEn, fontSize: 14, color: C.gold, letterSpacing: "1px", display: "flex", alignItems: "center", gap: 6 }}>
@@ -793,12 +878,16 @@ function EntryEdit({ entry, entries, tomes, onBack }) {
             );
           })}
         </div>
-        <div style={{ fontFamily: F.serifCn, fontSize: 28, fontWeight: 600, color: C.ink, letterSpacing: "2px", lineHeight: 1.3, position: "relative", paddingBottom: 4 }}>
-          {entry.title}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, position: "relative", paddingBottom: 4 }}>
+          <input
+            value={draft.title}
+            onChange={(event) => patchDraft("title", event.target.value)}
+            style={{ flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", fontFamily: F.serifCn, fontSize: 28, fontWeight: 600, color: C.ink, letterSpacing: "2px", lineHeight: 1.3 }}
+          />
           <span style={{ display: "inline-block", width: 2, height: 28, background: C.gold, marginLeft: 3, verticalAlign: -3, animation: "gBlink 1s infinite" }} />
         </div>
-        <input readOnly value={entry.titleEn} style={{ marginTop: 6, border: "none", outline: "none", background: "transparent", fontFamily: F.serifEn, fontStyle: "italic", fontSize: 14, color: C.inkSoft, letterSpacing: "1px", width: "100%" }} />
-        <input readOnly value={entry.sub} style={{ marginTop: 8, border: "none", outline: "none", background: "transparent", fontFamily: F.serifCn, fontSize: 12, color: C.inkSoft, letterSpacing: "0.5px", width: "100%" }} />
+        <input value={draft.titleEn} onChange={(event) => patchDraft("titleEn", event.target.value)} style={{ marginTop: 6, border: "none", outline: "none", background: "transparent", fontFamily: F.serifEn, fontStyle: "italic", fontSize: 14, color: C.inkSoft, letterSpacing: "1px", width: "100%" }} />
+        <input value={draft.sub} onChange={(event) => patchDraft("sub", event.target.value)} style={{ marginTop: 8, border: "none", outline: "none", background: "transparent", fontFamily: F.serifCn, fontSize: 12, color: C.inkSoft, letterSpacing: "0.5px", width: "100%" }} />
         <div style={{ marginTop: 18, border: `0.5px solid ${C.rule}`, borderRadius: 6, background: C.cream, overflow: "hidden" }}>
           {Object.entries(entry.fields || {}).filter(([k]) => k !== "一句话").slice(0, 4).map(([k, v]) => <PropRow key={k} k={k} v={v} />)}
           <div style={{ padding: "9px 14px", display: "flex", alignItems: "center", gap: 6, color: C.inkFaint, cursor: "pointer", borderTop: `0.5px solid ${C.rule}`, fontFamily: F.serifCn, fontSize: 10, letterSpacing: "1.5px" }}>＋ 添字段</div>
@@ -827,6 +916,107 @@ function EntryEdit({ entry, entries, tomes, onBack }) {
 // ═══════════════════════════════════════════════════════════════
 // Data normalization helpers
 // ═══════════════════════════════════════════════════════════════
+function EntryEditFixed({ entry, tomes, onBack, onSave, onUploadAttachment }) {
+  const tome = tomes.find((x) => x.id === entry.tome);
+  const [draft, setDraft] = useState(() => ({
+    title: entry.title || "",
+    titleEn: entry.titleEn || "",
+    sub: entry.sub || "",
+    body: entry.body || "",
+    fields: entry.fields || {},
+  }));
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const setField = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onSave?.(entry.id, draft);
+      onBack();
+    } finally {
+      setSaving(false);
+    }
+  };
+  const upload = async (file) => {
+    if (!file || uploading) return;
+    setUploading(true);
+    try {
+      const item = await onUploadAttachment?.(entry, file);
+      if (item?.id) {
+        setDraft((current) => {
+          const attachments = Array.isArray(current.fields?.attachments) ? current.fields.attachments : [];
+          return {
+            ...current,
+            fields: {
+              ...current.fields,
+              attachments: [...attachments, { id: item.id, title: item.title || file.name, type: item.type || "other" }],
+            },
+          };
+        });
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div style={{ width: "100%", height: "100%", background: C.paper, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ padding: "6px 16px 10px", display: "flex", alignItems: "center", gap: 10 }}>
+        <BackLink onClick={onBack}>close</BackLink>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontFamily: F.handEn, fontSize: 14, color: C.gold, letterSpacing: "1px", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#6C8374", display: "inline-block" }} />
+          autosaved / draft
+        </span>
+      </div>
+      <div style={{ padding: "0 20px 10px", fontFamily: F.serifEn, fontStyle: "italic", fontSize: 10, color: C.inkFaint, letterSpacing: "1.5px" }}>
+        <span style={{ fontFamily: F.serifCn, fontStyle: "normal", color: C.inkSoft }}>{tome?.title}</span>
+        <span style={{ opacity: 0.5, margin: "0 4px" }}>/</span>
+        <span style={{ fontFamily: F.serifCn, fontStyle: "normal", color: C.ink }}>{draft.title || "新页"}</span>
+      </div>
+      <div style={{ flex: 1, overflow: "auto", padding: "0 24px" }} className="phone-scroll">
+        <input
+          value={draft.title}
+          onChange={(event) => setField("title", event.target.value)}
+          placeholder="新页"
+          style={{ marginTop: 8, width: "100%", border: "none", outline: "none", background: "transparent", fontFamily: F.serifCn, fontSize: 30, fontWeight: 600, color: C.ink, letterSpacing: "2px", lineHeight: 1.35 }}
+        />
+        <input
+          value={draft.titleEn}
+          onChange={(event) => setField("titleEn", event.target.value)}
+          placeholder="new page"
+          style={{ marginTop: 6, border: "none", outline: "none", background: "transparent", fontFamily: F.serifEn, fontStyle: "italic", fontSize: 14, color: C.inkSoft, letterSpacing: "1px", width: "100%" }}
+        />
+        <input
+          value={draft.sub}
+          onChange={(event) => setField("sub", event.target.value)}
+          placeholder="小标题"
+          style={{ marginTop: 8, border: "none", outline: "none", background: "transparent", fontFamily: F.serifCn, fontSize: 12, color: C.inkSoft, letterSpacing: "0.5px", width: "100%" }}
+        />
+        <div style={{ marginTop: 18, border: `0.5px solid ${C.rule}`, borderRadius: 6, background: C.cream, overflow: "hidden" }}>
+          {Object.entries(draft.fields || {}).filter(([key]) => key !== "attachments").slice(0, 4).map(([key, value]) => <PropRow key={key} k={key} v={String(value)} />)}
+        </div>
+        <textarea
+          value={draft.body}
+          onChange={(event) => setField("body", event.target.value)}
+          placeholder="正文还在养。"
+          style={{ marginTop: 16, minHeight: 240, width: "100%", resize: "vertical", border: "none", outline: "none", background: "transparent", fontFamily: F.body, fontSize: 13, color: C.ink, lineHeight: 2, letterSpacing: "0.5px", textIndent: "2em" }}
+        />
+        <div style={{ height: 80 }} />
+      </div>
+      <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 8, borderTop: `0.5px solid ${C.rule}`, background: C.paperDeep }}>
+        <label style={{ padding: "8px 13px", borderRadius: 999, border: `0.5px solid ${C.rule}`, background: C.cream, color: C.inkSoft, fontFamily: F.serifCn, fontSize: 11, letterSpacing: "1px", cursor: uploading ? "default" : "pointer", opacity: uploading ? 0.6 : 1 }}>
+          {uploading ? "上传中" : "上传附件"}
+          <input type="file" style={{ display: "none" }} disabled={uploading} onChange={(event) => upload(event.target.files?.[0])} />
+        </label>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={save} disabled={saving} style={{ padding: "8px 16px", borderRadius: 999, border: "none", background: C.ink, color: C.cream, fontFamily: F.serifCn, fontSize: 11, letterSpacing: "2px", cursor: saving ? "default" : "pointer", opacity: saving ? 0.7 : 1 }}>{saving ? "保存中" : "完成"}</button>
+      </div>
+    </div>
+  );
+}
+
 function normalizeTome(row) {
   const palette = typeof row.palette === "string" ? JSON.parse(row.palette || "{}") : (row.palette || {});
   return {
@@ -919,6 +1109,91 @@ export default function GrimoireApp() {
     else goHome();
   }, [nav, goHome]);
 
+  const createTome = useCallback(async () => {
+    const seed = Date.now();
+    const payload = {
+      id: `tome-${seed}`,
+      title: "新典",
+      title_en: "new tome",
+      sub: "未命名目录",
+      spine: "#7A3D2F",
+      cover: "#8B4A38",
+      gilt: "#E2C28C",
+      sigil: "✦",
+      sigil_style: "serifEn",
+      kind: "目录",
+      palette: { bg: "#F6EFE6", accent: "#8B4A38", tint: "#E8D4C8" },
+    };
+    try {
+      const data = await apiFetch("/api/grimoire/tomes", { method: "POST", body: JSON.stringify(payload) });
+      const tome = normalizeTome(data.tome || payload);
+      setTomes((current) => [tome, ...current.filter((item) => item.id !== tome.id)]);
+      setNav({ screen: "tome", tomeId: tome.id });
+    } catch {
+      const tome = normalizeTome(payload);
+      setTomes((current) => [tome, ...current]);
+      setNav({ screen: "tome", tomeId: tome.id });
+    }
+  }, []);
+
+  const createEntry = useCallback(async (tomeId) => {
+    const seed = Date.now();
+    const payload = {
+      id: `entry-${seed}`,
+      tome_id: tomeId,
+      type: "lore",
+      title: "新页",
+      title_en: "new page",
+      sub: "",
+      cover: "#8B4A38",
+      cover_ink: "#F1E4BD",
+      cover_glyph: "页",
+      status: "draft",
+      tags: [],
+      fields: {},
+      relations: [],
+      body: "",
+    };
+    try {
+      const data = await apiFetch("/api/grimoire/entries", { method: "POST", body: JSON.stringify(payload) });
+      const entry = normalizeEntry(data.entry || payload);
+      setEntries((current) => [entry, ...current.filter((item) => item.id !== entry.id)]);
+      setNav({ screen: "edit", entryId: entry.id, tomeId: entry.tome });
+    } catch {
+      const entry = normalizeEntry(payload);
+      setEntries((current) => [entry, ...current]);
+      setNav({ screen: "edit", entryId: entry.id, tomeId: entry.tome });
+    }
+  }, []);
+
+  const saveEntry = useCallback(async (entryId, draft) => {
+    const payload = {
+      title: draft.title,
+      title_en: draft.titleEn,
+      sub: draft.sub,
+      body: draft.body,
+      fields: draft.fields,
+      status: "draft",
+    };
+    const current = entries.find((item) => item.id === entryId);
+    try {
+      const data = await apiFetch(`/api/grimoire/entries/${entryId}`, { method: "PATCH", body: JSON.stringify(payload) });
+      const entry = normalizeEntry(data.entry || { ...current, ...payload });
+      setEntries((items) => items.map((item) => item.id === entryId ? entry : item));
+    } catch {
+      setEntries((items) => items.map((item) => item.id === entryId ? { ...item, title: draft.title, titleEn: draft.titleEn, sub: draft.sub, body: draft.body, fields: draft.fields, status: "draft" } : item));
+    }
+  }, [entries]);
+
+  const uploadAttachment = useCallback(async (entry, file) => {
+    return uploadMediaFile(file, {
+      type: "other",
+      owner_type: "user",
+      title: file.name,
+      metadata: { app: "grimoire", grimoire_entry_id: entry.id, tome_id: entry.tome },
+    });
+  }, []);
+
   return (
     <main style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", fontFamily: F.serifCn, color: C.ink, WebkitFontSmoothing: "antialiased" }}>
       <style>{`
@@ -939,20 +1214,20 @@ export default function GrimoireApp() {
             })}
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
-            {homeVariant === "spreads"    && <HomeSpreads   tomes={tomes} entries={entries} onTome={goTome} onEntry={goEntry} />}
-            {homeVariant === "bookshelf"  && <HomeBookshelf tomes={tomes} entries={entries} onTome={goTome} onEntry={goEntry} />}
-            {homeVariant === "index"      && <HomeIndex     tomes={tomes} onTome={goTome} />}
+            {homeVariant === "spreads"    && <HomeSpreads   tomes={tomes} entries={entries} onTome={goTome} onEntry={goEntry} onCreateTome={createTome} />}
+            {homeVariant === "bookshelf"  && <HomeBookshelf tomes={tomes} entries={entries} onTome={goTome} onEntry={goEntry} onCreateTome={createTome} />}
+            {homeVariant === "index"      && <HomeIndex     tomes={tomes} onTome={goTome} onCreateTome={createTome} />}
           </div>
         </div>
       )}
       {nav.screen === "tome" && currentTome && (
-        <TomeScreen tome={currentTome} entries={entries} tomes={tomes} density={density} onBack={goHome} onEntry={goEntry} />
+        <TomeScreen tome={currentTome} entries={entries} tomes={tomes} density={density} onBack={goHome} onEntry={goEntry} onCreateEntry={() => createEntry(currentTome.id)} />
       )}
       {nav.screen === "entry" && currentEntry && (
         <EntryDetail entry={currentEntry} entries={entries} tomes={tomes} onBack={goBack} onEdit={goEdit} onRelationClick={goEntry} />
       )}
       {nav.screen === "edit" && currentEntry && (
-        <EntryEdit entry={currentEntry} entries={entries} tomes={tomes} onBack={goBack} />
+        <EntryEditFixed entry={currentEntry} entries={entries} tomes={tomes} onBack={goBack} onSave={saveEntry} onUploadAttachment={uploadAttachment} />
       )}
       {/* Fallback if tome/entry not found */}
       {nav.screen === "tome" && !currentTome && (

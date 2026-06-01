@@ -42,6 +42,13 @@ const MEMORY_CATEGORY_LABELS = {
 };
 const MEMORY_AGENT_LABELS = {};
 const AGENT_BOOK_PROFILES = {};
+const MEMORY_EXCLUDED_AGENT_IDS = new Set(["default"]);
+const MEMORY_VISIBILITY_OPTIONS = ["all", "private", "shared", "public"];
+
+function isRealMemoryAgentId(id) {
+  const value = String(id || "").trim();
+  return value && !MEMORY_EXCLUDED_AGENT_IDS.has(value);
+}
 
 const PRESET_TAGS = [
   { key: "fact",     color: "#a78ec7" },
@@ -230,12 +237,12 @@ export default function DaydreamDiaryApp({ apiBase = "" }) {
 
   async function loadAgentNames() {
     try {
-      const data = await api("/api/agents?include_inactive=true");
+      const data = await api("/api/agents");
       const next = {};
       (Array.isArray(data.agents) ? data.agents : []).forEach((agent) => {
         const id = String(agent?.agent_id || agent?.id || "");
         const name = String(agent?.display_name || agent?.name || "");
-        if (id && name) next[id] = name;
+        if (isRealMemoryAgentId(id) && name) next[id] = name;
       });
       setAgentNames(next);
       return next;
@@ -278,10 +285,15 @@ export default function DaydreamDiaryApp({ apiBase = "" }) {
 
   async function loadMemories() {
     try {
+      let names = agentNames;
+      if (!Object.keys(names).length) {
+        names = await loadAgentNames();
+      }
       const ids = Array.from(new Set([
         ...MEMORY_AGENT_IDS,
+        ...Object.keys(names),
         ...books.map((book) => book.memoryAgentId || book.agent_id || "").filter(Boolean),
-      ]));
+      ].filter(isRealMemoryAgentId)));
       const groups = await Promise.all(ids.slice(0, 8).map((id) => api(`/api/memories?agent_id=${encodeURIComponent(id)}&sort_by=created_at&order=desc&limit=80`).catch(() => ({ memories: [] }))));
       const seen = new Set();
       const next = [];
@@ -809,9 +821,11 @@ function PaperInput({ value, onChange, placeholder = "", multiline = false, auto
 function MemoryPanel({ memories, books, apiBase = "", agentNames = {}, onLoad }) {
   const [amberView, setAmberView] = useState("list");
   const [filter, setFilter] = useState("all");
+  const [visibilityFilter, setVisibilityFilter] = useState("all");
   const [sort, setSort] = useState("newest");
   const [personFilter, setPersonFilter] = useState("all");
   const [expanded, setExpanded] = useState({});
+  const [savingVisibilityId, setSavingVisibilityId] = useState("");
   const [customTags, setCustomTags] = useState([]);
   const [tagDraft, setTagDraft] = useState("");
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
@@ -844,12 +858,17 @@ function MemoryPanel({ memories, books, apiBase = "", agentNames = {}, onLoad })
     const rows = [{ id: "all", name: "全部角色" }];
     (books || []).forEach((book) => {
       const id = String(book.memoryAgentId || book.agent_id || "");
-      if (!id || seen.has(id)) return;
+      if (!isRealMemoryAgentId(id) || seen.has(id)) return;
       seen.add(id);
       rows.push({ id, name: agentNames[id] || book.agentName || id });
     });
     MEMORY_AGENT_IDS.forEach((id) => {
-      if (!seen.has(id)) rows.push({ id, name: agentNames[id] || MEMORY_AGENT_LABELS[id] || id });
+      if (isRealMemoryAgentId(id) && !seen.has(id)) rows.push({ id, name: agentNames[id] || MEMORY_AGENT_LABELS[id] || id });
+    });
+    Object.entries(agentNames || {}).forEach(([id, name]) => {
+      if (!isRealMemoryAgentId(id) || seen.has(id)) return;
+      seen.add(id);
+      rows.push({ id, name: name || id });
     });
     return rows;
   }, [books, agentNames]);
@@ -859,6 +878,7 @@ function MemoryPanel({ memories, books, apiBase = "", agentNames = {}, onLoad })
     const next = normalized.filter((memory) => {
       if (personFilter !== "all" && memory.person !== personFilter) return false;
       if (filter !== "all" && memory.type.toLowerCase() !== filter.toLowerCase()) return false;
+      if (visibilityFilter !== "all" && memory.visibility !== visibilityFilter) return false;
       return true;
     }).map((memory) => ({ ...memory, agentName: personNameById.get(memory.person) || memory.agent_id }));
     if (sort === "important") {
@@ -869,7 +889,7 @@ function MemoryPanel({ memories, books, apiBase = "", agentNames = {}, onLoad })
       next.sort((a, b) => new Date(b.dateISO || 0) - new Date(a.dateISO || 0));
     }
     return next;
-  }, [normalized, filter, sort, personFilter, personNameById]);
+  }, [normalized, filter, visibilityFilter, sort, personFilter, personNameById]);
 
   const currentPersonName = people.find((person) => person.id === personFilter)?.name || "全部角色";
   const stats = useMemo(() => buildAmberStats(normalized), [normalized]);
@@ -894,6 +914,23 @@ function MemoryPanel({ memories, books, apiBase = "", agentNames = {}, onLoad })
       setLabelError("");
     } catch (err) {
       setLabelError(`标签保存失败：${err.message}`);
+    }
+  }
+
+  async function updateMemoryVisibility(memory, visibility) {
+    if (!memory?.id || memory.visibility === visibility) return;
+    setSavingVisibilityId(memory.id);
+    try {
+      await amberApi(`/api/memories/${encodeURIComponent(memory.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ visibility }),
+      });
+      await onLoad();
+      setLabelError("");
+    } catch (err) {
+      setLabelError(`visibility update failed: ${err.message}`);
+    } finally {
+      setSavingVisibilityId("");
     }
   }
 
@@ -947,6 +984,11 @@ function MemoryPanel({ memories, books, apiBase = "", agentNames = {}, onLoad })
                 const value = label === "全部" ? "all" : label;
                 return <button key={label} onClick={() => setFilter(value)} style={amberTabStyle(filter.toLowerCase() === value.toLowerCase())}>{label}</button>;
               })}
+            </nav>
+            <nav style={{ display: "flex", gap: 8, overflowX: "auto", paddingTop: 8, paddingBottom: 2 }}>
+              {MEMORY_VISIBILITY_OPTIONS.map((value) => (
+                <button key={value} onClick={() => setVisibilityFilter(value)} style={amberTabStyle(visibilityFilter === value)}>{value}</button>
+              ))}
             </nav>
           </>
         )}
@@ -1043,7 +1085,7 @@ function MemoryPanel({ memories, books, apiBase = "", agentNames = {}, onLoad })
         </section>
       ) : (
         <section style={{ display: "flex", flexDirection: "column" }}>
-          {visible.map((memory) => <AmberItem key={memory.id} memory={{ ...memory, expanded: !!expanded[memory.id] }} onToggle={() => setExpanded((current) => ({ ...current, [memory.id]: !current[memory.id] }))} />)}
+          {visible.map((memory) => <AmberItem key={memory.id} memory={{ ...memory, expanded: !!expanded[memory.id] }} savingVisibility={savingVisibilityId === memory.id} onVisibilityChange={updateMemoryVisibility} onToggle={() => setExpanded((current) => ({ ...current, [memory.id]: !current[memory.id] }))} />)}
           {!visible.length && <p style={{ textAlign: "center", color: "rgba(180,170,165,0.6)", fontSize: 13, letterSpacing: "0.1em", padding: "40px 0" }}>空空如也</p>}
         </section>
       )}
@@ -1064,6 +1106,7 @@ function normalizeAmberMemory(memory, index) {
     agent_id: String(memory.agent_id || memory.person || "System"),
     type,
     level: type,
+    visibility: String(memory.visibility || "private"),
     tag: memory.visibility || "private",
     dateISO: date && !Number.isNaN(date.getTime()) ? date.toISOString() : "",
     date: date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString("zh-CN", { year: "numeric", month: "numeric", day: "numeric" }) : "",
@@ -1101,7 +1144,7 @@ function amberSortStyle(active) {
 function amberTabStyle(active) {
   return { whiteSpace: "nowrap", padding: "4px 14px", borderRadius: 999, border: `0.5px solid ${active ? "#5c5550" : "rgba(210,200,195,0.8)"}`, background: active ? "rgba(255,255,255,0.4)" : "transparent", color: active ? "#5c5550" : "rgba(150,140,135,0.8)", fontSize: 11, letterSpacing: "0.05em", cursor: "pointer" };
 }
-function AmberItem({ memory, onToggle }) {
+function AmberItem({ memory, onToggle, onVisibilityChange, savingVisibility = false }) {
   const importance = memory.importance ? Math.min(5, Math.max(1, Math.round(memory.importance))) : 0;
   const stars = importance ? "✦".repeat(importance) + "✧".repeat(5 - importance) : "";
   const dateShort = (memory.date || "").replace(/年|月/g, ".").replace("日", "");
@@ -1124,6 +1167,19 @@ function AmberItem({ memory, onToggle }) {
         {!memory.expanded && <span style={{ marginLeft: 6, color: "#d6b882", fontSize: 11, opacity: 0.9, letterSpacing: 2 }}>✧ ₊⁺</span>}
       </div>
       {memory.expanded && <div style={{ animation: "amberFadeIn 0.4s ease forwards" }}><div style={{ width: 24, height: 0.5, background: "rgba(200,190,185,0.6)", margin: "10px 0" }} />{memory.body.map((line, index) => <p key={index} style={{ margin: "0 0 8px", fontSize: 12, lineHeight: 1.58, color: "#635b56", fontWeight: 300 }}>{line}</p>)}<div style={{ textAlign: "center", marginTop: 16, color: "#d6b882", fontSize: 12, opacity: 0.7, letterSpacing: 4 }}>✧ ₊⁺ ✦ ⁺₊ ✧</div></div>}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+        {MEMORY_VISIBILITY_OPTIONS.filter((value) => value !== "all").map((value) => (
+          <button
+            key={value}
+            type="button"
+            disabled={savingVisibility}
+            onClick={() => onVisibilityChange?.(memory, value)}
+            style={{ border: `0.5px solid ${memory.visibility === value ? "#5c5550" : "rgba(210,200,195,0.8)"}`, borderRadius: 999, background: memory.visibility === value ? "rgba(255,255,255,0.55)" : "transparent", color: memory.visibility === value ? "#5c5550" : "rgba(150,140,135,0.82)", padding: "3px 9px", fontSize: 10, letterSpacing: "0.04em", cursor: savingVisibility ? "wait" : "pointer", opacity: savingVisibility ? 0.58 : 1 }}
+          >
+            {value}
+          </button>
+        ))}
+      </div>
       <button onClick={onToggle} style={{ display: "block", marginTop: 10, border: 0, background: "transparent", color: "rgba(170,160,155,0.8)", fontSize: 10, letterSpacing: "0.08em", padding: 0, cursor: "pointer" }}>{memory.expanded ? "- 收起" : "+ 展开原文"}</button>
     </article>
   );
