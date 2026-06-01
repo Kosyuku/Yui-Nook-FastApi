@@ -496,8 +496,8 @@ async def _loop():
     logger.info("Consciousness loop started, interval=%.1f hours", interval / 3600)
     while _status["running"]:
         try:
-            await run_once()
             await asyncio.sleep(interval)
+            await run_once()
         except asyncio.CancelledError:
             break
         except Exception:
