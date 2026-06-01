@@ -8256,6 +8256,9 @@ def _normalize_grimoire_entry(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def list_grimoire_tomes() -> list[dict[str, Any]]:
+    if _use_supabase_data():
+        rows = await _supabase_select("grimoire_tomes", order="updated_at.desc")
+        return [item for item in (_normalize_grimoire_tome(row) for row in rows) if item]
     conn = await get_db()
     cursor = await conn.execute("SELECT * FROM grimoire_tomes ORDER BY updated_at DESC")
     rows = await cursor.fetchall()
@@ -8263,6 +8266,9 @@ async def list_grimoire_tomes() -> list[dict[str, Any]]:
 
 
 async def get_grimoire_tome(tome_id: str) -> dict[str, Any] | None:
+    if _use_supabase_data():
+        rows = await _supabase_select("grimoire_tomes", filters={"id": f"eq.{tome_id}"}, limit=1)
+        return _normalize_grimoire_tome(rows[0]) if rows else None
     conn = await get_db()
     cursor = await conn.execute("SELECT * FROM grimoire_tomes WHERE id = ?", (tome_id,))
     row = await cursor.fetchone()
@@ -8291,6 +8297,12 @@ async def create_grimoire_tome(**kwargs) -> dict[str, Any]:
         "created_at": now,
         "updated_at": now,
     }
+    if _use_supabase_data():
+        row = await _supabase_insert_verified(
+            "grimoire_tomes",
+            {**payload, "palette": palette if isinstance(palette, dict) else {}},
+        )
+        return _normalize_grimoire_tome(row) or payload
     conn = await get_db()
     await conn.execute(
         "INSERT INTO grimoire_tomes (id, title, title_en, sub, spine, cover, gilt, sigil, sigil_style, kind, count, palette, created_at, updated_at) "
@@ -8321,6 +8333,15 @@ async def update_grimoire_tome(tome_id: str, **kwargs) -> dict[str, Any] | None:
             vals.append(val)
     if not sets:
         return row
+    if _use_supabase_data():
+        updates: dict[str, Any] = {}
+        for key in updatable:
+            if key in kwargs:
+                db_key = db_key_map.get(key, key.lower())
+                updates[db_key] = kwargs[key]
+        updates["updated_at"] = now
+        updated = await _supabase_update_verified("grimoire_tomes", {"id": f"eq.{tome_id}"}, updates)
+        return _normalize_grimoire_tome(updated) if updated else await get_grimoire_tome(tome_id)
     vals += [now, tome_id]
     conn = await get_db()
     await conn.execute(f"UPDATE grimoire_tomes SET {', '.join(sets)}, updated_at = ? WHERE id = ?", vals)
@@ -8329,6 +8350,9 @@ async def update_grimoire_tome(tome_id: str, **kwargs) -> dict[str, Any] | None:
 
 
 async def delete_grimoire_tome(tome_id: str) -> bool:
+    if _use_supabase_data():
+        await _supabase_delete("grimoire_entries", {"tome_id": f"eq.{tome_id}"})
+        return await _supabase_delete_verified("grimoire_tomes", {"id": f"eq.{tome_id}"})
     conn = await get_db()
     result = await conn.execute("DELETE FROM grimoire_tomes WHERE id = ?", (tome_id,))
     await conn.execute("DELETE FROM grimoire_entries WHERE tome_id = ?", (tome_id,))
@@ -8337,6 +8361,10 @@ async def delete_grimoire_tome(tome_id: str) -> bool:
 
 
 async def list_grimoire_entries(tome_id: str | None = None) -> list[dict[str, Any]]:
+    if _use_supabase_data():
+        filters = {"tome_id": f"eq.{tome_id}"} if tome_id else None
+        rows = await _supabase_select("grimoire_entries", filters=filters, order="updated_at.desc")
+        return [item for item in (_normalize_grimoire_entry(row) for row in rows) if item]
     conn = await get_db()
     if tome_id:
         cursor = await conn.execute("SELECT * FROM grimoire_entries WHERE tome_id = ? ORDER BY updated_at DESC", (tome_id,))
@@ -8347,6 +8375,9 @@ async def list_grimoire_entries(tome_id: str | None = None) -> list[dict[str, An
 
 
 async def get_grimoire_entry(entry_id: str) -> dict[str, Any] | None:
+    if _use_supabase_data():
+        rows = await _supabase_select("grimoire_entries", filters={"id": f"eq.{entry_id}"}, limit=1)
+        return _normalize_grimoire_entry(rows[0]) if rows else None
     conn = await get_db()
     cursor = await conn.execute("SELECT * FROM grimoire_entries WHERE id = ?", (entry_id,))
     row = await cursor.fetchone()
@@ -8379,6 +8410,13 @@ async def create_grimoire_entry(**kwargs) -> dict[str, Any]:
         "created_at": now,
         "updated_at": now,
     }
+    if _use_supabase_data():
+        supabase_payload = {**payload, "tags": tags, "fields": fields, "relations": relations}
+        row = await _supabase_insert_verified("grimoire_entries", supabase_payload)
+        if payload["tome_id"]:
+            rows = await _supabase_select("grimoire_entries", select="id", filters={"tome_id": f"eq.{payload['tome_id']}"}, limit=1000)
+            await _supabase_update("grimoire_tomes", {"id": f"eq.{payload['tome_id']}"}, {"count": len(rows), "updated_at": now})
+        return _normalize_grimoire_entry(row) or _normalize_grimoire_entry(supabase_payload) or supabase_payload
     conn = await get_db()
     await conn.execute(
         "INSERT INTO grimoire_entries (id, tome_id, type, title, title_en, sub, cover, cover_ink, cover_glyph, status, tags, fields, body, relations, created_at, updated_at) "
@@ -8416,6 +8454,18 @@ async def update_grimoire_entry(entry_id: str, **kwargs) -> dict[str, Any] | Non
         vals.append(val)
     if not sets:
         return row
+    if _use_supabase_data():
+        updates: dict[str, Any] = {}
+        for key, val in kwargs.items():
+            db_key = key_map.get(key, key.lower())
+            updates[db_key] = val
+        updates["updated_at"] = now
+        updated = await _supabase_update_verified("grimoire_entries", {"id": f"eq.{entry_id}"}, updates)
+        tome_id = updates.get("tome_id") or row.get("tome")
+        if tome_id:
+            rows = await _supabase_select("grimoire_entries", select="id", filters={"tome_id": f"eq.{tome_id}"}, limit=1000)
+            await _supabase_update("grimoire_tomes", {"id": f"eq.{tome_id}"}, {"count": len(rows), "updated_at": now})
+        return _normalize_grimoire_entry(updated) if updated else await get_grimoire_entry(entry_id)
     vals += [now, entry_id]
     conn = await get_db()
     await conn.execute(f"UPDATE grimoire_entries SET {', '.join(sets)}, updated_at = ? WHERE id = ?", vals)
@@ -8439,6 +8489,12 @@ async def delete_grimoire_entry(entry_id: str) -> bool:
         return False
     tome_id = row.get("tome")
     now = _now()
+    if _use_supabase_data():
+        deleted = await _supabase_delete_verified("grimoire_entries", {"id": f"eq.{entry_id}"})
+        if deleted and tome_id:
+            rows = await _supabase_select("grimoire_entries", select="id", filters={"tome_id": f"eq.{tome_id}"}, limit=1000)
+            await _supabase_update("grimoire_tomes", {"id": f"eq.{tome_id}"}, {"count": len(rows), "updated_at": now})
+        return deleted
     conn = await get_db()
     result = await conn.execute("DELETE FROM grimoire_entries WHERE id = ?", (entry_id,))
     if tome_id:
