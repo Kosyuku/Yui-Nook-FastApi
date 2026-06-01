@@ -33,6 +33,7 @@
   let bounceInitialized = false;
   let datePickerYear = 0;
   let datePickerMonth = 0;
+  let selectedCoverImage = '';
 
   function randomId() {
     return `event-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -63,6 +64,7 @@
       title: item.title || item.text || '未命名事件',
       detail: item.detail || item.description || '',
       tag: item.tag || '日常',
+      coverImage: item.coverImage || item.image || '',
     };
   }
 
@@ -243,6 +245,8 @@
     if (titleInput) titleInput.value = '';
     if (detailInput) detailInput.value = '';
     if (dateInput) dateInput.value = selectedDateKey || '';
+    selectedCoverImage = '';
+    renderCoverPreview();
     editingEventId = null;
     editingSourceDateKey = null;
     setActiveTag(selectedTag && getAllTags().includes(selectedTag) ? selectedTag : '纪念日');
@@ -256,6 +260,8 @@
     if (titleInput) titleInput.value = event.title || '';
     if (detailInput) detailInput.value = event.detail || '';
     if (dateInput) dateInput.value = dateKey || '';
+    selectedCoverImage = event.coverImage || event.image || '';
+    renderCoverPreview();
     editingEventId = event.id;
     editingSourceDateKey = dateKey;
     if (!getAllTags().includes(event.tag) && !customTags.includes(event.tag)) {
@@ -264,6 +270,26 @@
     }
     setActiveTag(event.tag || '纪念日');
     updateSheetActionText();
+  }
+
+  function renderCoverPreview() {
+    const preview = document.getElementById('event-cover-preview');
+    const clearButton = document.getElementById('event-cover-clear');
+    if (!preview) return;
+    preview.classList.toggle('hidden', !selectedCoverImage);
+    if (clearButton) clearButton.classList.toggle('hidden', !selectedCoverImage);
+    preview.innerHTML = selectedCoverImage ? `<img src="${selectedCoverImage}" alt="" />` : '';
+  }
+
+  function pickEventCover() {
+    document.getElementById('event-cover-input')?.click();
+  }
+
+  function clearEventCover() {
+    selectedCoverImage = '';
+    const input = document.getElementById('event-cover-input');
+    if (input) input.value = '';
+    renderCoverPreview();
   }
 
   function updateSheetDateInput() {
@@ -500,11 +526,38 @@
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'cal-day' + (dim ? ' dim' : '') + (isToday ? ' today' : '');
-    el.textContent = num;
+    const number = document.createElement('span');
+    number.className = 'cal-day-number';
+    number.textContent = num;
+    el.appendChild(number);
     if (Array.isArray(events) && events.length && !dim) {
-      const marker = document.createElement('span');
-      marker.className = `absolute bottom-1.5 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full ${getTagStyle(getPrimaryTag(events)).dot}`;
-      el.appendChild(marker);
+      const primary = normalizeEvent(events[0], 'primary', 0);
+      const sticker = document.createElement('span');
+      sticker.className = 'cal-day-sticker';
+      if (primary.coverImage) {
+        const image = document.createElement('img');
+        image.src = primary.coverImage;
+        image.alt = '';
+        sticker.appendChild(image);
+      } else {
+        sticker.classList.add('no-cover');
+        sticker.textContent = primary.title.slice(0, 1);
+      }
+      el.appendChild(sticker);
+      const dots = document.createElement('span');
+      dots.className = 'cal-day-dots';
+      events.slice(0, 3).forEach((event) => {
+        const dot = document.createElement('i');
+        dot.className = getTagStyle(normalizeEvent(event, 'dot', 0).tag).dot;
+        dots.appendChild(dot);
+      });
+      el.appendChild(dots);
+      if (events.length > 1) {
+        const count = document.createElement('em');
+        count.className = 'cal-day-count';
+        count.textContent = `×${events.length}`;
+        el.appendChild(count);
+      }
     }
     grid.appendChild(el);
     return el;
@@ -693,10 +746,10 @@
         nextEvents[sourceDateKey] = nextEvents[sourceDateKey].filter((item) => item.id !== editingEventId);
         if (!nextEvents[sourceDateKey].length) delete nextEvents[sourceDateKey];
       }
-      const nextItem = { ...(found?.event || {}), id: editingEventId, title, detail, tag: selectedTag || '纪念日' };
+      const nextItem = { ...(found?.event || {}), id: editingEventId, title, detail, tag: selectedTag || '纪念日', coverImage: selectedCoverImage };
       nextEvents[targetDateKey] = [...(nextEvents[targetDateKey] || []), nextItem];
     } else {
-      nextEvents[targetDateKey] = [...(nextEvents[targetDateKey] || []), { id: randomId(), title, detail, tag: selectedTag || '纪念日' }];
+      nextEvents[targetDateKey] = [...(nextEvents[targetDateKey] || []), { id: randomId(), title, detail, tag: selectedTag || '纪念日', coverImage: selectedCoverImage }];
     }
     clearEventInputs();
     closeEventSheet();
@@ -721,6 +774,17 @@
   document.getElementById('event-date-input')?.addEventListener('change', (e) => {
     if (!e.target.value) return;
     syncSelectedDate(e.target.value, true);
+  });
+
+  document.getElementById('event-cover-input')?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      selectedCoverImage = String(reader.result || '');
+      renderCoverPreview();
+    };
+    reader.readAsDataURL(file);
   });
 
   document.getElementById('tag-modal')?.addEventListener('click', (e) => {
@@ -756,6 +820,8 @@
   window.openTagModal = openTagModal;
   window.closeTagModal = closeTagModal;
   window.confirmCustomTag = confirmCustomTag;
+  window.pickEventCover = pickEventCover;
+  window.clearEventCover = clearEventCover;
 })();
 
 
