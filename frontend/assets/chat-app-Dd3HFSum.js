@@ -692,7 +692,7 @@ ${t.slice(-On)}`:""}const no='<svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 
           </div>
           <div class="settings-group glass-frost ai-panel">
             <h3>角色设定</h3>
-                <textarea class="ai-textarea persona-textarea contact-persona-textarea ${n.contactPersonaExpanded?"expanded":"collapsed"}" data-contact-field="persona" rows="${n.contactPersonaExpanded?"12":"4"}" placeholder="在这里输入 AI 的人设、角色说明、行为指令。">${d(e.persona||"")}</textarea>
+                <textarea class="ai-textarea persona-textarea contact-persona-textarea ${n.contactPersonaExpanded?"expanded":"collapsed"}" data-contact-field="persona" rows="${n.contactPersonaExpanded?"10":"4"}" style="${n.contactPersonaExpanded?"height:260px;max-height:46vh;overflow-y:auto;":"height:132px;max-height:132px;overflow-y:auto;resize:none;"}" placeholder="在这里输入 AI 的人设、角色说明、行为指令。">${d(e.persona||"")}</textarea>
             <button class="setting-row nav-row persona-collapse-toggle" data-action="toggle-contact-persona" aria-expanded="${n.contactPersonaExpanded?"true":"false"}">
               <div class="setting-copy">
                 <strong>${n.contactPersonaExpanded?"收起角色设定":"展开角色设定"}</strong>

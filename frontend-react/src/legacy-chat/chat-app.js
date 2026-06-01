@@ -2661,7 +2661,7 @@
           </div>
           <div class="settings-group glass-frost ai-panel">
             <h3>\u89d2\u8272\u8bbe\u5b9a</h3>
-                <textarea class="ai-textarea persona-textarea contact-persona-textarea ${state.contactPersonaExpanded ? 'expanded' : 'collapsed'}" data-contact-field="persona" rows="${state.contactPersonaExpanded ? '12' : '4'}" placeholder="\u5728\u8fd9\u91cc\u8f93\u5165 AI \u7684\u4eba\u8bbe\u3001\u89d2\u8272\u8bf4\u660e\u3001\u884c\u4e3a\u6307\u4ee4\u3002">${escapeHtml(c.persona || '')}</textarea>
+                <textarea class="ai-textarea persona-textarea contact-persona-textarea ${state.contactPersonaExpanded ? 'expanded' : 'collapsed'}" data-contact-field="persona" rows="${state.contactPersonaExpanded ? '10' : '4'}" style="${state.contactPersonaExpanded ? 'height:260px;max-height:46vh;overflow-y:auto;' : 'height:132px;max-height:132px;overflow-y:auto;resize:none;'}" placeholder="\u5728\u8fd9\u91cc\u8f93\u5165 AI \u7684\u4eba\u8bbe\u3001\u89d2\u8272\u8bf4\u660e\u3001\u884c\u4e3a\u6307\u4ee4\u3002">${escapeHtml(c.persona || '')}</textarea>
             <button class="setting-row nav-row persona-collapse-toggle" data-action="toggle-contact-persona" aria-expanded="${state.contactPersonaExpanded ? 'true' : 'false'}">
               <div class="setting-copy">
                 <strong>${state.contactPersonaExpanded ? '\u6536\u8d77\u89d2\u8272\u8bbe\u5b9a' : '\u5c55\u5f00\u89d2\u8272\u8bbe\u5b9a'}</strong>
