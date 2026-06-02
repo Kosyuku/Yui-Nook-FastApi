@@ -539,12 +539,49 @@ def _split_default_murmur_mock_contacts(contacts: Any) -> tuple[list[dict[str, A
     return real_contacts, removed, only_default_mock
 
 
+def _normalize_murmur_contact_id(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _normalize_deleted_murmur_contact_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    ids: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        contact_id = _normalize_murmur_contact_id(item)
+        if contact_id and contact_id not in seen:
+            seen.add(contact_id)
+            ids.append(contact_id)
+    return ids
+
+
+def _filter_deleted_murmur_contacts(contacts: list[dict[str, Any]], deleted_ids: list[str]) -> list[dict[str, Any]]:
+    deleted = set(deleted_ids)
+    if not deleted:
+        return contacts
+    return [
+        contact for contact in contacts
+        if _normalize_murmur_contact_id(contact.get("id") or contact.get("agent_id")) not in deleted
+    ]
+
+
 def _sanitize_murmur_sync_payload(payload: Any) -> tuple[dict[str, Any], int, bool]:
     safe_payload = payload.copy() if isinstance(payload, dict) else {}
+    deleted_ids = _normalize_deleted_murmur_contact_ids(safe_payload.get("deletedContactIds"))
+    restored_ids = _normalize_deleted_murmur_contact_ids(safe_payload.get("restoredContactIds"))
+    if restored_ids:
+        restored = set(restored_ids)
+        deleted_ids = [contact_id for contact_id in deleted_ids if contact_id not in restored]
+    safe_payload["deletedContactIds"] = deleted_ids
+    safe_payload["restoredContactIds"] = restored_ids
     if not isinstance(safe_payload.get("contacts"), list):
         return safe_payload, 0, False
     real_contacts, removed, only_default_mock = _split_default_murmur_mock_contacts(safe_payload.get("contacts"))
+    real_contacts = _filter_deleted_murmur_contacts(real_contacts, deleted_ids)
     if removed:
+        safe_payload["contacts"] = real_contacts
+    elif deleted_ids:
         safe_payload["contacts"] = real_contacts
     return safe_payload, removed, only_default_mock
 
@@ -1790,6 +1827,19 @@ async def sync_push(body: SyncPushPayload):
     if not isinstance(body.payload, dict):
         raise HTTPException(status_code=400, detail="payload must be an object")
     payload, removed_default_mock_contacts, only_default_mock = _sanitize_murmur_sync_payload(body.payload)
+    existing_payload = await _load_legacy_sync_payload()
+    existing_deleted_ids = _normalize_deleted_murmur_contact_ids(existing_payload.get("deletedContactIds"))
+    incoming_deleted_ids = _normalize_deleted_murmur_contact_ids(payload.get("deletedContactIds"))
+    restored_ids = set(_normalize_deleted_murmur_contact_ids(payload.get("restoredContactIds")))
+    merged_deleted_ids = [
+        contact_id for contact_id
+        in _normalize_deleted_murmur_contact_ids([*existing_deleted_ids, *incoming_deleted_ids])
+        if contact_id not in restored_ids
+    ]
+    if merged_deleted_ids:
+        payload["deletedContactIds"] = merged_deleted_ids
+        if isinstance(payload.get("contacts"), list):
+            payload["contacts"] = _filter_deleted_murmur_contacts(payload["contacts"], merged_deleted_ids)
 
     if only_default_mock:
         cleanup = await _cleanup_default_murmur_mock_sync_contacts()
