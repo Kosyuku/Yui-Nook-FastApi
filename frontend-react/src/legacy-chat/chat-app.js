@@ -2014,6 +2014,13 @@
 
     function renderMessage(message, contact, meta = {}) {
         if (!isRenderableMessage(message)) return '';
+        if (message.role === 'event') {
+            return `
+      <div class="message-row from-event" data-msg-id="${message.id}">
+        <span class="message-event-pill">${escapeHtml(messageTextValue(message))}</span>
+      </div>
+    `;
+        }
         const roleClass = message.role === 'user' ? 'from-user' : 'from-ai';
         const msgSource = String(message.source || message.provider || '').toLowerCase();
         const isCodexSource = msgSource === 'codex';
@@ -2661,13 +2668,13 @@
           </div>
           <div class="settings-group glass-frost ai-panel">
             <h3>\u89d2\u8272\u8bbe\u5b9a</h3>
-                <textarea class="ai-textarea persona-textarea contact-persona-textarea ${state.contactPersonaExpanded ? 'expanded' : 'collapsed'}" data-contact-field="persona" rows="${state.contactPersonaExpanded ? '10' : '4'}" style="${state.contactPersonaExpanded ? 'height:260px;max-height:46vh;overflow-y:auto;' : 'height:132px;max-height:132px;overflow-y:auto;resize:none;'}" placeholder="\u5728\u8fd9\u91cc\u8f93\u5165 AI \u7684\u4eba\u8bbe\u3001\u89d2\u8272\u8bf4\u660e\u3001\u884c\u4e3a\u6307\u4ee4\u3002">${escapeHtml(c.persona || '')}</textarea>
             <button class="setting-row nav-row persona-collapse-toggle" data-action="toggle-contact-persona" aria-expanded="${state.contactPersonaExpanded ? 'true' : 'false'}">
               <div class="setting-copy">
                 <strong>${state.contactPersonaExpanded ? '\u6536\u8d77\u89d2\u8272\u8bbe\u5b9a' : '\u5c55\u5f00\u89d2\u8272\u8bbe\u5b9a'}</strong>
               </div>
               <span class="row-chevron advanced-chevron ${state.contactPersonaExpanded ? 'open' : ''}">${icon('chevron')}</span>
             </button>
+                <textarea class="ai-textarea persona-textarea contact-persona-textarea ${state.contactPersonaExpanded ? 'expanded' : 'collapsed'}" data-contact-field="persona" rows="${state.contactPersonaExpanded ? '10' : '3'}" style="${state.contactPersonaExpanded ? 'height:260px;max-height:46vh;overflow-y:auto;' : 'height:96px;max-height:96px;overflow-y:auto;resize:none;'}" placeholder="\u5728\u8fd9\u91cc\u8f93\u5165 AI \u7684\u4eba\u8bbe\u3001\u89d2\u8272\u8bf4\u660e\u3001\u884c\u4e3a\u6307\u4ee4\u3002">${escapeHtml(c.persona || '')}</textarea>
             ${switchRow('显示推理内容', '仅在模型返回推理内容时显示', s.reasoning_visibility || false, 'toggle-contact', 'reasoning_visibility')}
           </div>
           <div class="settings-group glass-frost ai-panel">
@@ -3200,17 +3207,34 @@
         return map[contactId] || map.ayan;
     }
 
-    function activityLogAccent(kind = '') {
-        if (kind === 'activity_event') return 'violet';
-        if (kind === 'proactive_message') return 'gold';
-        if (kind === 'cot_log') return 'blue';
+    function activityLogStream(item = {}) {
+        const kind = String(item.kind || '');
+        const raw = item.raw || {};
+        const logType = String(item.logType || raw.log_type || '').toLowerCase();
+        const source = String(item.source || raw.source || '').toLowerCase();
+        const title = String(item.title || '').toLowerCase();
+        const summary = String(item.summary || '').toLowerCase();
+        const haystack = `${logType} ${source} ${title} ${summary}`;
+        if (kind === 'activity_event') return 'activity';
+        if (kind === 'proactive_message') return 'action';
+        if (haystack.includes('memory_candidate') || haystack.includes('diary_candidate') || haystack.includes('note') || haystack.includes('纸条') || haystack.includes('候选')) return 'note';
+        if (item.toolName || haystack.includes('tool') || haystack.includes('action') || haystack.includes('write') || haystack.includes('create') || haystack.includes('update')) return 'action';
+        return 'thought';
+    }
+
+    function activityLogAccent(streamType = '') {
+        if (streamType === 'activity') return 'violet';
+        if (streamType === 'action') return 'gold';
+        if (streamType === 'note') return 'pink';
+        if (streamType === 'thought') return 'blue';
         return 'neutral';
     }
 
-    function activityLogMode(kind = '') {
-        if (kind === 'activity_event') return '被动';
-        if (kind === 'proactive_message') return '主动';
-        if (kind === 'cot_log') return '日志';
+    function activityLogMode(streamType = '') {
+        if (streamType === 'activity') return '触发';
+        if (streamType === 'action') return '行动';
+        if (streamType === 'note') return '纸条';
+        if (streamType === 'thought') return '思考';
         return '记录';
     }
 
@@ -3227,6 +3251,7 @@
 
     function normalizeActivityLogItem(item = {}) {
         const raw = item.raw || {};
+        const streamType = activityLogStream(item);
         const steps = [];
         if (item.kind === 'activity_event') {
             steps.push({ type: 'thought', label: '事件', text: item.summary || item.title || '' });
@@ -3246,17 +3271,18 @@
                 steps.push({ type: 'thought', label: '依据', text: String(raw.reason_context).slice(0, 220) });
             }
         } else {
-            const label = item.toolName ? '工具调用' : '日志';
-            steps.push({ type: item.toolName ? 'tool' : 'thought', label, text: item.summary || item.title || '' });
+            const label = item.toolName ? '工具调用' : (streamType === 'note' ? '小纸条' : '思考');
+            steps.push({ type: item.toolName ? 'tool' : (streamType === 'note' ? 'note' : 'thought'), label, text: item.summary || item.title || '' });
             if (raw.content) {
-                steps.push({ type: item.toolName ? 'result' : 'thought', label: '内容', text: String(raw.content).slice(0, 500) });
+                steps.push({ type: item.toolName ? 'result' : (streamType === 'note' ? 'note' : 'thought'), label: '内容', text: String(raw.content).slice(0, 500) });
             }
         }
         return {
             id: String(item.id || `${item.kind}_${item.occurredAt || item.createdAt || Date.now()}`),
-            mode: activityLogMode(item.kind),
+            streamType,
+            mode: activityLogMode(streamType),
             badge: activityLogBadge(item),
-            accent: activityLogAccent(item.kind),
+            accent: activityLogAccent(streamType),
             score: item.shouldHandle || item.shouldNotifyLlm ? '有效' : '',
             latency: '',
             amount: item.source || '',
@@ -3294,6 +3320,14 @@
         }
     }
 
+    function activityLogItemStreamType(item = {}) {
+        if (item.streamType) return item.streamType;
+        const steps = Array.isArray(item.steps) ? item.steps : [];
+        if (steps.some((step) => step.type === 'note')) return 'note';
+        if (steps.some((step) => ['tool', 'result', 'reply'].includes(step.type))) return 'action';
+        return 'thought';
+    }
+
     function renderCotStep(step) {
         return `
       <div class="cot-log-step ${step.type}">
@@ -3305,35 +3339,35 @@
 
     function renderCotLogPage() {
         const c = byId(state.currentContactId) || state.contacts[0];
-        const isNoteMode = state.cotLogMode === 'note';
+        const modes = [
+            { key: 'thought', label: '思考' },
+            { key: 'action', label: '行动' },
+            { key: 'note', label: '纸条' },
+            { key: 'activity', label: '触发' },
+        ];
+        if (!modes.some((mode) => mode.key === state.cotLogMode)) state.cotLogMode = 'thought';
         const sourceLogs = state.activityLogLoadedAt ? state.activityLogEntries : getCotLogEntries(c.id);
-        const logs = sourceLogs.filter((item) => {
-            if (state.cotLogMode === 'short') return item.mode !== '\u4e3b\u52a8';
-            if (state.cotLogMode === 'note') return item.steps.some((step) => step.type === 'note');
-            return true;
-        });
-        const noteCount = sourceLogs.filter((item) => item.steps.some((step) => step.type === 'note')).length;
+        const logs = sourceLogs.filter((item) => activityLogItemStreamType(item) === state.cotLogMode);
+        const currentMode = modes.find((mode) => mode.key === state.cotLogMode) || modes[0];
         return `
       <section class="cot-log-page page-block">
         <div class="cot-log-toolbar glass-frost">
           <button class="cot-log-tool-btn avatar" aria-label="${escapeHtml(c.name)}">
             <img src="${c.avatar}" alt="${escapeHtml(c.name)}" />
           </button>
-          <div class="cot-log-segment-shell">
-            <button class="cot-log-segment-btn ${state.cotLogMode === 'short' ? 'active' : ''}" data-action="switch-cot-log-mode" data-mode="short">\u77ed\u6d88\u606f</button>
-            <button class="cot-log-segment-btn ${state.cotLogMode === 'long' ? 'active' : ''}" data-action="switch-cot-log-mode" data-mode="long">\u957f\u6d88\u606f</button>
+          <div class="cot-log-segment-shell thought-flow">
+            ${modes.map((mode) => `
+              <button class="cot-log-segment-btn ${state.cotLogMode === mode.key ? 'active' : ''}" data-action="switch-cot-log-mode" data-mode="${mode.key}">${mode.label}</button>
+            `).join('')}
           </div>
-          <button class="cot-log-tool-btn note ${state.cotLogMode === 'note' ? 'active' : ''}" data-action="switch-cot-log-mode" data-mode="note">${icon('file')}${noteCount ? `<em>${noteCount}</em>` : ''}</button>
         </div>
         <div class="cot-log-stack">
           ${state.activityLogLoading ? '<div class="cot-log-empty glass-frost"><span class="cot-log-empty-icon">' + icon('cot') + '</span><strong>正在加载活动日志</strong><p>等一下，别盯着白板发呆。</p></div>' : ''}
-          ${!state.activityLogLoading && state.activityLogLoadedAt && !logs.length ? '<div class="cot-log-empty glass-frost"><span class="cot-log-empty-icon">' + icon('file') + '</span><strong>还没有活动日志</strong><p>这个模式下暂时没有主动消息、工具调用或小纸条。</p></div>' : ''}
+          ${!state.activityLogLoading && state.activityLogLoadedAt && !logs.length ? `<div class="cot-log-empty glass-frost"><span class="cot-log-empty-icon">${icon('file')}</span><strong>还没有${currentMode.label}记录</strong><p>别急，这种脑内流现在还没掉下来。</p></div>` : ''}
           ${logs.map((item) => {
-            const visibleSteps = isNoteMode
-                ? item.steps.filter((step) => step.type === 'note')
-                : item.steps;
+            const visibleSteps = item.steps;
             return `
-            <article class="cot-log-card glass-frost ${isNoteMode ? 'note-only' : ''}">
+            <article class="cot-log-card glass-frost ${state.cotLogMode === 'note' ? 'note-only' : ''}">
               <div class="cot-log-topline">
                 <div class="cot-log-badges">
                   <span class="cot-log-mode ${item.accent}">${escapeHtml(item.mode)}</span>
@@ -3347,7 +3381,7 @@
                 <span class="cot-log-cost">${escapeHtml(item.amount)}</span>
                 <span>${escapeHtml(item.time)}</span>
               </div>
-              ${isNoteMode ? '' : `<div class="cot-log-summary">${escapeHtml(item.summary)}</div>`}
+              ${state.cotLogMode === 'note' ? '' : `<div class="cot-log-summary">${escapeHtml(item.summary)}</div>`}
               <div class="cot-log-steps">
                 ${visibleSteps.map(renderCotStep).join('')}
               </div>
@@ -3867,7 +3901,7 @@
         if (action === 'open-cot-log') {
             state._prevContactSettingsTab = state.currentSettingsTab;
             state.currentView = 'cotLog';
-            state.cotLogMode = 'long';
+            state.cotLogMode = 'thought';
             state.activityLogLoadedAt = '';
             state.activityLogEntries = [];
             render();
@@ -3884,7 +3918,7 @@
         }
 
         if (action === 'switch-cot-log-mode') {
-            state.cotLogMode = target.dataset.mode || 'long';
+            state.cotLogMode = target.dataset.mode || 'thought';
             render();
             return;
         }
@@ -4610,6 +4644,8 @@
             c.settings[key] = !c.settings[key];
             render();
             restoreBodyScroll(scrollY);
+            persistLocalSnapshot();
+            queueLocalSyncIfChanged(120);
         }
 
         if (action === 'back-home') {
@@ -4629,9 +4665,9 @@
             state.quickActionDropHintId = '';
             state.quickActionDropDirection = '';
             state.quickActionReorderPulseId = '';
+            state.contactPersonaExpanded = false;
             if (state.currentSettingsTab !== 'model') {
                 state.contactModelAdvancedOpen = false;
-                state.contactPersonaExpanded = false;
             }
             render();
             if (state.currentSettingsTab === 'memory') loadCompanionState();
@@ -4880,6 +4916,13 @@
         return !!messageTextValue(message) || hasMessageAttachments(message) || !!message.typing || !!message.streaming || !!message.thinking || (Array.isArray(message.toolCalls) && message.toolCalls.length > 0);
     }
 
+    function isEventStoredMessage(message = {}) {
+        const role = String(message.role || message.from || '').toLowerCase();
+        const model = String(message.model || '').toLowerCase();
+        const source = String(message.source || message.provider || '').toLowerCase();
+        return role === 'event' || (role === 'system' && (model === 'event' || source === 'activity_event'));
+    }
+
     function compactMessageMinute(message = {}) {
         const stamp = comparableTime(message.created_at || message.timestamp);
         if (stamp) return Math.floor(stamp / 60000);
@@ -4936,7 +4979,9 @@
     }
 
     function normalizeStoredMessage(message = {}) {
-        const role = String(message.role || message.from || '').toLowerCase() === 'user' || message.from === 'me' ? 'user' : 'ai';
+        const role = isEventStoredMessage(message)
+            ? 'event'
+            : (String(message.role || message.from || '').toLowerCase() === 'user' || message.from === 'me' ? 'user' : 'ai');
         const content = messageTextValue(message);
         const createdAt = String(message.created_at || message.timestamp || '');
         const time = String(message.time || '');
@@ -5174,6 +5219,30 @@
         });
     }
 
+    function parseDndRange(range = '') {
+        const match = String(range || '23:00 - 08:00').match(/(\d{1,2})(?::(\d{2}))?\s*(?:-|—|~|至|到)\s*(\d{1,2})(?::(\d{2}))?/);
+        if (!match) return { start: 23 * 60, end: 8 * 60 };
+        const startHour = Math.max(0, Math.min(23, Number(match[1]) || 0));
+        const startMinute = Math.max(0, Math.min(59, Number(match[2]) || 0));
+        const endHour = Math.max(0, Math.min(23, Number(match[3]) || 0));
+        const endMinute = Math.max(0, Math.min(59, Number(match[4]) || 0));
+        return { start: startHour * 60 + startMinute, end: endHour * 60 + endMinute };
+    }
+
+    function isWithinDndRange(range = '', date = new Date()) {
+        const { start, end } = parseDndRange(range);
+        const nowMinutes = date.getHours() * 60 + date.getMinutes();
+        if (start === end) return false;
+        if (start < end) return nowMinutes >= start && nowMinutes < end;
+        return nowMinutes >= start || nowMinutes < end;
+    }
+
+    function shouldDeliverProactiveMessage(contact) {
+        if (!state.globalSettings?.proactiveGlobal) return false;
+        if (!contact?.settings?.proactiveEnabled) return false;
+        return !isWithinDndRange(contact.settings.dndRange || '23:00 - 08:00');
+    }
+
     async function markProactiveRead(messageId) {
         const id = String(messageId || '').trim();
         if (!id) return;
@@ -5212,6 +5281,9 @@
                         handle: `@${agentId}`,
                         messages: [],
                     });
+                }
+                if (!shouldDeliverProactiveMessage(contact)) {
+                    continue;
                 }
 
                 const beforeCount = (state.conversations?.[contact.id] || contact.messages || []).length;
@@ -7571,6 +7643,7 @@
             const imp = item.importance ?? 3;
             const temp = item.temperature ?? 0;
             const impDots = '★'.repeat(imp) + '☆'.repeat(5 - imp);
+            const memoryId = String(item.id || '').trim();
             return `
             <div class="theme-choice-item active" style="cursor:default; display:block;">
               <div class="theme-choice-copy" style="display:block;">
@@ -7583,8 +7656,8 @@
                 ${item.expires_at ? `<em>过期：${escapeHtml(String(item.expires_at))}</em>` : ''}
               </div>
               <div class="ai-inline-actions" style="margin-top:10px;">
-                <button class="ghost-action" data-action="memory-service-edit" data-memory-id="${escapeHtml(String(item.id || ''))}">编辑</button>
-                <button class="ghost-action" data-action="memory-service-delete" data-memory-id="${escapeHtml(String(item.id || ''))}">删除</button>
+                <button class="ghost-action" data-action="memory-service-edit" data-memory-id="${escapeHtml(memoryId)}" ${memoryId ? '' : 'disabled'}>编辑</button>
+                <button class="ghost-action" data-action="memory-service-delete" data-memory-id="${escapeHtml(memoryId)}" ${memoryId ? '' : 'disabled'}>删除</button>
               </div>
             </div>`;
           }).join('')}
@@ -7713,12 +7786,15 @@
     }
 
     async function deleteMemoryServiceEntry(memoryId) {
+        memoryId = String(memoryId || '').trim();
+        if (!memoryId) throw new Error('missing memory id');
         if (!window.confirm('\u5220\u9664\u8fd9\u6761\u8bb0\u5fc6\uff1f')) return;
         const resp = await fetch(`${API_BASE}/api/memories/${encodeURIComponent(memoryId)}`, {
             method: 'DELETE',
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) throw new Error(data?.detail || `HTTP ${resp.status}`);
+        state.memoryServiceEntries = (state.memoryServiceEntries || []).filter((item) => String(item.id || '') !== memoryId);
     }
 
     function renderBackendSyncPage() {

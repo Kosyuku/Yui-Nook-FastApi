@@ -567,6 +567,24 @@
   justify-content: flex-end;
 }
 
+.message-row.from-event {
+  justify-content: center;
+  padding: 2px 0;
+}
+
+.message-event-pill {
+  max-width: min(72%, 320px);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.48);
+  border: 1px solid rgba(174, 160, 170, 0.18);
+  color: rgba(96, 84, 92, 0.58);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.42);
+}
+
 .bubble-avatar {
   width: 28px;
   height: 28px;
@@ -3582,6 +3600,10 @@
     inset 4px 4px 8px rgba(216, 209, 216, .88);
 }
 
+.cot-log-segment-shell.thought-flow {
+  gap: 1px;
+}
+
 .cot-log-segment-btn {
   position: relative;
   flex: 1;
@@ -3597,6 +3619,11 @@
   letter-spacing: 0;
   z-index: 0;
   text-shadow: 0 1px 0 rgba(255,255,255,.4);
+}
+
+.cot-log-segment-shell.thought-flow .cot-log-segment-btn {
+  padding: 0 4px;
+  font-size: 10px;
 }
 
 .cot-log-segment-btn.active {
@@ -3790,6 +3817,11 @@
 .cot-log-mode.blue {
   background: rgba(221, 242, 255, 0.92);
   color: rgba(68, 142, 184, 0.95);
+}
+
+.cot-log-mode.pink {
+  background: rgba(255, 228, 242, 0.92);
+  color: rgba(190, 93, 133, 0.95);
 }
 
 .cot-log-mode.neutral {
@@ -5929,9 +5961,9 @@ button.model-choice-item {
 }
 
 .contact-settings-page .contact-persona-textarea.collapsed {
-  height: 132px !important;
-  min-height: 132px !important;
-  max-height: 132px !important;
+  height: 96px !important;
+  min-height: 96px !important;
+  max-height: 96px !important;
   overflow-y: auto;
   resize: none;
 }
