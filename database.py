@@ -4187,6 +4187,19 @@ async def get_messages(session_id: str, limit: int = 50) -> list[dict[str, Any]]
     return [dict(row) for row in rows]
 
 
+async def delete_message(message_id: str) -> bool:
+    message_id = str(message_id or "").strip()
+    if not message_id:
+        return False
+    if _use_supabase_data():
+        rows = await _supabase_delete(settings.supabase_messages_table, {"id": f"eq.{message_id}"})
+        return len(rows) > 0
+    db = await get_db()
+    result = await db.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+    await db.commit()
+    return result.rowcount > 0
+
+
 async def list_messages_for_agent(agent_id: str | None, limit: int = 200) -> list[dict[str, Any]]:
     normalized = normalize_agent_id_value(agent_id)
     if not normalized:

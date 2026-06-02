@@ -550,6 +550,14 @@ async def delete_session(session_id: str):
     return {"ok": True}
 
 
+@api.delete("/messages/{message_id}")
+async def delete_message(message_id: str):
+    ok = await db.delete_message(message_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="消息不存在")
+    return {"ok": True}
+
+
 # ==================== 记忆相关 (Memories) ====================
 
 @api.get("/memories")
