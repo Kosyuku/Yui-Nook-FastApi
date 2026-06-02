@@ -41,6 +41,56 @@ def _reasoning_as_visible_fallback(reasoning_parts: list[str]) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_BRIDGE_META_MARKERS = (
+    "我需要", "我应该", "我会", "让我", "我现在", "当前时间", "当前", "不需要工具",
+    "工具调用", "我的印象", "关系处于", "核心身份", "我了解我的角色", "按理说",
+    "原本靠", "听到这声", "用户", "模型", "系统提示", "上下文", "prompt",
+    "i need", "i should", "i will", "let me", "the user", "current context",
+    "tool call", "system prompt",
+)
+
+_BRIDGE_REPLY_CUES = (
+    "来了", "过来", "嗯", "好", "啧", "行", "别", "笨", "傻", "小酒", "阿湛",
+    "在", "听见", "收到",
+)
+
+
+def _split_bridge_reply(reply: str) -> tuple[str, str]:
+    """Split obvious bridge self-analysis away from the visible chat reply.
+
+    Codex/CC bridge outputs are plain text, so this is intentionally conservative:
+    strip only leading paragraphs that look like meta reasoning, and keep the rest
+    visible. Removed text is logged as COT instead of being lost.
+    """
+    text = str(reply or "").strip()
+    if not text:
+        return "", ""
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n+", text) if part.strip()]
+    if len(paragraphs) <= 1:
+        return text, ""
+
+    removed: list[str] = []
+    kept = list(paragraphs)
+    for idx, paragraph in enumerate(paragraphs):
+        compact = paragraph.strip().lower()
+        marker_hits = sum(1 for marker in _BRIDGE_META_MARKERS if marker.lower() in compact)
+        starts_like_reply = any(paragraph.startswith(cue) for cue in _BRIDGE_REPLY_CUES)
+        next_starts_like_reply = idx + 1 < len(paragraphs) and any(
+            paragraphs[idx + 1].startswith(cue) for cue in _BRIDGE_REPLY_CUES
+        )
+        looks_meta = marker_hits >= 2 or (idx == 0 and marker_hits >= 1 and len(paragraph) >= 80)
+        looks_meta = looks_meta or (idx == 0 and len(paragraph) >= 180 and next_starts_like_reply)
+        if looks_meta and not starts_like_reply:
+            removed.append(paragraph)
+            kept = paragraphs[idx + 1:]
+            continue
+        break
+
+    visible = "\n\n".join(kept).strip()
+    thinking = "\n\n".join(removed).strip()
+    return visible or text, thinking
+
+
 def _looks_like_memory_candidate(text: str) -> bool:
     stripped = (text or "").strip()
     if not stripped:
@@ -340,6 +390,7 @@ def _codex_prompt_from_built_messages(messages: list[dict]) -> str:
     parts: list[str] = [
         "You are answering inside YUI Nook through the Codex bridge.",
         "Use the context below as your active chat prompt. Reply only to the latest user message.",
+        "Return only the final visible chat reply. Do not include analysis, hidden reasoning, tool decisions, self-checks, or descriptions of how you will respond.",
         "Do not mention implementation details unless the user asks.",
     ]
     for message in messages:
@@ -1057,14 +1108,27 @@ async def codex_chat(body: CodexChatRequest):
         logger.exception("Codex bridge failed")
         raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
 
+    visible_reply, bridge_thinking = _split_bridge_reply(result.reply)
+
     try:
         assistant_message = await db.add_message(
             session["id"],
             "assistant",
-            result.reply,
+            visible_reply,
             model="codex",
             agent_id=agent_id,
         )
+        if bridge_thinking:
+            await db.add_cot_log(
+                session["id"],
+                agent_id=agent_id,
+                source="codex_bridge",
+                log_type="reasoning",
+                title="Codex bridge reasoning",
+                summary=bridge_thinking,
+                content=bridge_thinking,
+                status="filtered",
+            )
     except Exception as exc:
         logger.exception("Codex bridge persistence failed")
         raise HTTPException(status_code=502, detail=f"Codex replied but failed to save messages: {exc}") from exc
@@ -1079,7 +1143,7 @@ async def codex_chat(body: CodexChatRequest):
     return {
         "conversation_key": result.conversation_key,
         "thread_id": result.thread_id,
-        "reply": result.reply,
+        "reply": visible_reply,
         "user_message": user_message,
         "assistant_message": assistant_message,
         "prompt_debug": built_prompt.debug if (settings.prompt_debug and built_prompt) else None,
@@ -1144,14 +1208,27 @@ async def claude_code_chat(body: ClaudeCodeChatRequest):
         logger.exception("Claude Code tmux bridge failed")
         raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
 
+    visible_reply, bridge_thinking = _split_bridge_reply(result.reply)
+
     try:
         assistant_message = await db.add_message(
             session["id"],
             "assistant",
-            result.reply,
+            visible_reply,
             model="claude-code",
             agent_id=agent_id,
         )
+        if bridge_thinking:
+            await db.add_cot_log(
+                session["id"],
+                agent_id=agent_id,
+                source="claude_code_bridge",
+                log_type="reasoning",
+                title="Claude Code bridge reasoning",
+                summary=bridge_thinking,
+                content=bridge_thinking,
+                status="filtered",
+            )
     except Exception as exc:
         logger.exception("Claude Code bridge persistence failed")
         raise HTTPException(status_code=502, detail=f"Claude Code replied but failed to save messages: {exc}") from exc
@@ -1159,7 +1236,7 @@ async def claude_code_chat(body: ClaudeCodeChatRequest):
     return {
         "conversation_key": result.conversation_key,
         "session_name": result.session_name,
-        "reply": result.reply,
+        "reply": visible_reply,
         "user_message": user_message,
         "assistant_message": assistant_message,
     }
