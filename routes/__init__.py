@@ -55,7 +55,7 @@ _BRIDGE_REPLY_CUES = (
 )
 
 
-def _split_bridge_reply(reply: str) -> tuple[str, str]:
+def _split_bridge_reply(reply: str, *, fallback_to_original: bool = True) -> tuple[str, str]:
     """Split obvious bridge self-analysis away from the visible chat reply.
 
     Codex/CC bridge outputs are plain text, so this is intentionally conservative:
@@ -67,7 +67,7 @@ def _split_bridge_reply(reply: str) -> tuple[str, str]:
         return "", ""
     paragraphs = [part.strip() for part in re.split(r"\n\s*\n+", text) if part.strip()]
     if len(paragraphs) <= 1:
-        return text, ""
+        return (text, "") if fallback_to_original else ("", text)
 
     removed: list[str] = []
     kept = list(paragraphs)
@@ -88,7 +88,11 @@ def _split_bridge_reply(reply: str) -> tuple[str, str]:
 
     visible = "\n\n".join(kept).strip()
     thinking = "\n\n".join(removed).strip()
-    return visible or text, thinking
+    if visible:
+        return visible, thinking
+    if fallback_to_original:
+        return text, thinking
+    return "", thinking or text
 
 
 def _looks_like_memory_candidate(text: str) -> bool:
@@ -870,12 +874,22 @@ async def chat(body: ChatRequest):
 
             complete_text = "".join(full_response)
             reasoning_used_as_text = False
+            reasoning_cot_text = "\n".join(reasoning_buffer)
             if not complete_text.strip() and reasoning_buffer:
-                complete_text = _reasoning_as_visible_fallback(reasoning_buffer)
-                if complete_text:
+                fallback_text = _reasoning_as_visible_fallback(reasoning_buffer)
+                visible_fallback, filtered_reasoning = _split_bridge_reply(
+                    fallback_text,
+                    fallback_to_original=False,
+                )
+                if filtered_reasoning:
+                    reasoning_cot_text = filtered_reasoning
+                if visible_fallback:
+                    complete_text = visible_fallback
                     reasoning_used_as_text = True
-                    logger.info("Chat stream used reasoning as visible fallback for provider=%s", model_info)
+                    logger.info("Chat stream used filtered reasoning fallback for provider=%s", model_info)
                     yield {"event": "message", "data": jsonlib.dumps({"content": complete_text}, ensure_ascii=False)}
+                else:
+                    logger.info("Chat stream suppressed reasoning-only fallback for provider=%s", model_info)
 
             if not tool_calls_buffer and b"<execute>" in complete_text.encode('utf-8'):
                 import re as regex
@@ -984,17 +998,18 @@ async def chat(body: ChatRequest):
                 except Exception as e:
                     logger.warning(f"上下文摘要触发失败(assistant): {e}")
 
+            if reasoning_buffer:
+                await db.add_cot_log(
+                    body.session_id,
+                    agent_id=resolved_agent_id,
+                    log_type="reasoning",
+                    title="模型思考摘要",
+                    summary=reasoning_cot_text,
+                    content=reasoning_cot_text,
+                    status="done" if not reasoning_used_as_text else "filtered",
+                )
+
             if complete_text:
-                if reasoning_buffer and not reasoning_used_as_text:
-                    await db.add_cot_log(
-                        body.session_id,
-                        agent_id=resolved_agent_id,
-                        log_type="reasoning",
-                        title="模型思考摘要",
-                        summary=" ".join(reasoning_buffer),
-                        content="\n".join(reasoning_buffer),
-                        status="done",
-                    )
                 await db.add_cot_log(
                     body.session_id,
                     agent_id=resolved_agent_id,
