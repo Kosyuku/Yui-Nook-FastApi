@@ -375,10 +375,7 @@ class OpenAICompatAdapter(ModelAdapter):
                 if not text.strip():
                     continue
                 if item_type in {"reasoning", "reasoning_text", "thinking", "thought", "summary_text"}:
-                    if allow_reasoning:
-                        reasoning_parts.append(text)
-                    else:
-                        text_parts.append(text)
+                    reasoning_parts.append(text)
                 elif item_type == "text":
                     text_parts.append(text)
             if reasoning_parts:
@@ -405,10 +402,8 @@ class OpenAICompatAdapter(ModelAdapter):
                 text = value.get("text") or value.get("content") or value.get("summary")
                 if isinstance(text, str):
                     reasoning_text = text.strip()
-            if reasoning_text and allow_reasoning:
+            if reasoning_text:
                 reasoning_outputs.append(reasoning_text)
-            elif reasoning_text:
-                text_outputs.append(reasoning_text)
 
         seen_text: set[str] = set()
         for text in text_outputs:

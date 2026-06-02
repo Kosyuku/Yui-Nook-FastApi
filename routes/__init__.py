@@ -57,6 +57,21 @@ _BRIDGE_REPLY_CUES = (
     "在", "听见", "收到",
 )
 
+_BRIDGE_META_MARKERS = _BRIDGE_META_MARKERS + (
+    "我需要", "我应该", "我会", "让我", "当前时间", "当前", "不需要工具", "工具调用",
+    "我的印象", "关系处于", "核心身份", "我了解我的角色", "按理说", "原本", "听到这",
+    "用户", "模型", "系统提示", "上下文", "现在时间", "她说的是", "我需要确认",
+    "如果是这样", "技术问题", "作为ai", "我可以理解", "自然地回应", "承认她说的问题",
+    "保持", "语调", "微微", "带着", "从沙发", "坐直", "内心", "角色", "情绪",
+    "小酒说", "语气里带着", "流式消息", "接受了现状", "让我慢慢来改",
+    "我应该怎么回应", "首先", "不需要长篇大论",
+)
+
+_BRIDGE_REPLY_CUES = _BRIDGE_REPLY_CUES + (
+    "来了", "过来", "嗯", "好", "嗳", "行", "别", "笑", "喏", "小酒", "阿湛",
+    "在", "听见", "收到",
+)
+
 
 def _looks_like_leading_meta_text(reply: str) -> bool:
     text = str(reply or "").lstrip()
@@ -133,6 +148,8 @@ def _split_bridge_reply(reply: str, *, fallback_to_original: bool = True) -> tup
         compact = paragraph.strip().lower()
         marker_hits = sum(1 for marker in _BRIDGE_META_MARKERS if marker.lower() in compact)
         starts_like_reply = any(paragraph.startswith(cue) for cue in _BRIDGE_REPLY_CUES)
+        if paragraph.startswith(("小酒说", "阿湛想", "用户", "她说")):
+            starts_like_reply = False
         next_starts_like_reply = idx + 1 < len(paragraphs) and any(
             paragraphs[idx + 1].startswith(cue) for cue in _BRIDGE_REPLY_CUES
         )
