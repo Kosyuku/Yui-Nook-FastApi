@@ -1570,6 +1570,18 @@ async def _supabase_delete_memory(memory_id: str) -> bool:
         await _supabase_delete("memory_label_items", {"memory_id": f"eq.{memory_id}"})
     except Exception as exc:
         logger.warning("Supabase memory label cleanup failed for %s: %s", memory_id, exc)
+    try:
+        await _supabase_delete(settings.supabase_memory_logs_table, {"memory_id": f"eq.{memory_id}"})
+    except Exception as exc:
+        logger.warning("Supabase memory log cleanup failed for %s: %s", memory_id, exc)
+    try:
+        await _supabase_update(
+            settings.supabase_proactive_messages_table,
+            {"source_memory_id": f"eq.{memory_id}"},
+            {"source_memory_id": ""},
+        )
+    except Exception as exc:
+        logger.warning("Supabase proactive source cleanup failed for %s: %s", memory_id, exc)
     async with httpx.AsyncClient(
         timeout=20.0,
         trust_env=settings.supabase_httpx_trust_env,
@@ -5020,6 +5032,8 @@ async def delete_memory(memory_id: str) -> bool:
         return ok
     db = await get_db()
     await db.execute("DELETE FROM memory_label_items WHERE memory_id = ?", (memory_id,))
+    await db.execute("DELETE FROM memory_logs WHERE memory_id = ?", (memory_id,))
+    await db.execute("UPDATE proactive_messages SET source_memory_id = '' WHERE source_memory_id = ?", (memory_id,))
     result = await db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
     await db.commit()
     if result.rowcount > 0:
