@@ -1257,6 +1257,139 @@ async def claude_code_chat(body: ClaudeCodeChatRequest):
     }
 
 
+@api.post("/claude-code/chat/stream")
+async def claude_code_chat_stream(body: ClaudeCodeChatRequest):
+    """
+    Stream Claude Code tmux transcript progress as SSE while keeping the same
+    persistence behavior as /claude-code/chat.
+    """
+    raw_agent_id = (body.agent_id or body.conversation_key.rsplit(":", 1)[-1] or "").strip()
+    agent_id = db.normalize_agent_id_value(raw_agent_id)
+    session_title = f"Claude Code bridge: {body.conversation_key.strip()}"
+
+    async def event_generator():
+        try:
+            session = await db.get_latest_session_for_agent_source(
+                agent_id=agent_id,
+                source_app="claude_code_bridge",
+                title=session_title,
+            )
+            if not session:
+                session = await db.create_session(
+                    title=session_title,
+                    model="claude-code",
+                    source_app="claude_code_bridge",
+                    agent_id=agent_id,
+                )
+            if body.reset:
+                await db.update_session(session["id"], last_summarized_message_id="")
+        except Exception as exc:
+            logger.exception("Claude Code stream session setup failed")
+            yield {"event": "error", "data": f"Claude Code session setup failed: {exc}"}
+            return
+
+        try:
+            await db.add_message(
+                session["id"],
+                "user",
+                body.content,
+                model="claude-code",
+                agent_id=agent_id,
+            )
+        except Exception as exc:
+            logger.exception("Claude Code stream user persistence failed")
+            yield {"event": "error", "data": f"Claude Code failed to save user message: {exc}"}
+            return
+
+        try:
+            await _auto_capture_memory_from_user_text(body.content, agent_id)
+        except Exception as exc:
+            logger.warning("Claude Code stream auto memory capture failed: %s", exc)
+
+        progress_queue: asyncio.Queue = asyncio.Queue()
+
+        async def on_progress(partial: str):
+            await progress_queue.put(("progress", partial))
+
+        async def run_bridge():
+            try:
+                result = await claude_tmux_chat(
+                    conversation_key=body.conversation_key,
+                    content=body.content,
+                    reset=body.reset,
+                    timeout_seconds=body.timeout_seconds or 120,
+                    on_progress=on_progress,
+                )
+                await progress_queue.put(("done", result))
+            except Exception as exc:
+                await progress_queue.put(("error", exc))
+
+        task = asyncio.create_task(run_bridge())
+        sent_visible = ""
+
+        while True:
+            kind, payload = await progress_queue.get()
+            if kind == "progress":
+                visible, _thinking = _split_bridge_reply(str(payload or ""))
+                if not visible or visible == sent_visible:
+                    continue
+                delta = visible[len(sent_visible):] if visible.startswith(sent_visible) else ""
+                if not delta and not sent_visible:
+                    delta = visible
+                if delta:
+                    sent_visible = visible
+                    yield {"event": "message", "data": jsonlib.dumps({"content": delta}, ensure_ascii=False)}
+                continue
+
+            if kind == "error":
+                task.cancel()
+                logger.error(
+                    "Claude Code stream bridge failed",
+                    exc_info=(type(payload), payload, payload.__traceback__),
+                )
+                yield {"event": "error", "data": str(payload) or repr(payload)}
+                return
+
+            result = payload
+            visible_reply, bridge_thinking = _split_bridge_reply(result.reply)
+            if visible_reply and visible_reply != sent_visible:
+                delta = visible_reply[len(sent_visible):] if visible_reply.startswith(sent_visible) else ""
+                if not delta and not sent_visible:
+                    delta = visible_reply
+                if delta:
+                    sent_visible = visible_reply
+                    yield {"event": "message", "data": jsonlib.dumps({"content": delta}, ensure_ascii=False)}
+
+            try:
+                await db.add_message(
+                    session["id"],
+                    "assistant",
+                    visible_reply,
+                    model="claude-code",
+                    agent_id=agent_id,
+                )
+                if bridge_thinking:
+                    await db.add_cot_log(
+                        session["id"],
+                        agent_id=agent_id,
+                        source="claude_code_bridge",
+                        log_type="reasoning",
+                        title="Claude Code bridge reasoning",
+                        summary=bridge_thinking,
+                        content=bridge_thinking,
+                        status="filtered",
+                    )
+            except Exception as exc:
+                logger.exception("Claude Code stream persistence failed")
+                yield {"event": "error", "data": f"Claude Code replied but failed to save messages: {exc}"}
+                return
+
+            yield {"event": "done", "data": "[DONE]"}
+            return
+
+    return EventSourceResponse(event_generator())
+
+
 @api.get("/claude-code/sessions")
 async def claude_code_sessions():
     """列出所有活跃的 Claude Code tmux sessions 及消息计数。"""
