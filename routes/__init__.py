@@ -55,6 +55,35 @@ _BRIDGE_REPLY_CUES = (
 )
 
 
+def _strip_leading_reasoning_blocks(reply: str) -> tuple[str, str]:
+    """Remove leading parenthetical self-analysis from a visible reply."""
+    text = str(reply or "").strip()
+    if not text:
+        return "", ""
+    removed: list[str] = []
+    while text:
+        stripped = text.lstrip()
+        leading_ws_len = len(text) - len(stripped)
+        if leading_ws_len:
+            text = stripped
+        opener = text[:1]
+        closer = "）" if opener == "（" else ")" if opener == "(" else ""
+        if not closer:
+            break
+        close_idx = text.find(closer, 1)
+        if close_idx < 0:
+            break
+        block = text[1:close_idx].strip()
+        compact = block.lower()
+        marker_hits = sum(1 for marker in _BRIDGE_META_MARKERS if marker.lower() in compact)
+        looks_meta = marker_hits >= 1 or len(block) >= 28
+        if not looks_meta:
+            break
+        removed.append(text[:close_idx + 1].strip())
+        text = text[close_idx + 1:].lstrip()
+    return text.strip(), "\n\n".join(removed).strip()
+
+
 def _split_bridge_reply(reply: str, *, fallback_to_original: bool = True) -> tuple[str, str]:
     """Split obvious bridge self-analysis away from the visible chat reply.
 
@@ -67,7 +96,10 @@ def _split_bridge_reply(reply: str, *, fallback_to_original: bool = True) -> tup
         return "", ""
     paragraphs = [part.strip() for part in re.split(r"\n\s*\n+", text) if part.strip()]
     if len(paragraphs) <= 1:
-        return (text, "") if fallback_to_original else ("", text)
+        visible, thinking = _strip_leading_reasoning_blocks(text)
+        if visible:
+            return visible, thinking
+        return (text, "") if fallback_to_original else ("", thinking or text)
 
     removed: list[str] = []
     kept = list(paragraphs)
@@ -88,6 +120,10 @@ def _split_bridge_reply(reply: str, *, fallback_to_original: bool = True) -> tup
 
     visible = "\n\n".join(kept).strip()
     thinking = "\n\n".join(removed).strip()
+    stripped_visible, inline_thinking = _strip_leading_reasoning_blocks(visible)
+    if inline_thinking:
+        visible = stripped_visible
+        thinking = "\n\n".join(part for part in [thinking, inline_thinking] if part).strip()
     if visible:
         return visible, thinking
     if fallback_to_original:
@@ -829,6 +865,7 @@ async def chat(body: ChatRequest):
 
         while True:
             full_response = []
+            sent_visible_text = ""
             tool_calls_buffer = {}
 
             try:
@@ -864,7 +901,17 @@ async def chat(body: ChatRequest):
                         usage_info = _usage_payload_from_chunk(chunk)
                     elif isinstance(chunk, str):
                         full_response.append(chunk)
-                        yield {"event": "message", "data": jsonlib.dumps({"content": chunk}, ensure_ascii=False)}
+                        raw_visible_source = "".join(full_response)
+                        starts_with_reasoning_block = raw_visible_source.lstrip().startswith(("（", "("))
+                        visible_text, _inline_reasoning = _split_bridge_reply(
+                            raw_visible_source,
+                            fallback_to_original=not starts_with_reasoning_block,
+                        )
+                        if visible_text and visible_text != sent_visible_text:
+                            delta = visible_text[len(sent_visible_text):] if visible_text.startswith(sent_visible_text) else visible_text
+                            sent_visible_text = visible_text
+                            if delta:
+                                yield {"event": "message", "data": jsonlib.dumps({"content": delta}, ensure_ascii=False)}
 
             except Exception as e:
                 logger.exception("Chat stream error")
@@ -880,9 +927,10 @@ async def chat(body: ChatRequest):
                 yield {"event": "error", "data": str(e)}
                 return
 
-            complete_text = "".join(full_response)
+            raw_complete_text = "".join(full_response)
+            complete_text, inline_reasoning_text = _split_bridge_reply(raw_complete_text, fallback_to_original=True)
             reasoning_used_as_text = False
-            reasoning_cot_text = "\n".join(reasoning_buffer)
+            reasoning_cot_text = "\n\n".join(part for part in ["\n".join(reasoning_buffer), inline_reasoning_text] if part)
             if not complete_text.strip() and reasoning_buffer:
                 fallback_text = _reasoning_as_visible_fallback(reasoning_buffer)
                 visible_fallback, filtered_reasoning = _split_bridge_reply(
