@@ -1,5 +1,43 @@
 # YUI Nook MCP Server
 
+## Shared YUI Tool Bridge
+
+Use `yui_tool_bridge.py` when Codex, Claude Code, or another takeover client
+needs direct access to YUI tools with one shared schema. It is a local stdio MCP
+server and reuses the existing database/R2 implementation.
+
+```json
+{
+  "mcpServers": {
+    "yui_tool_bridge": {
+      "command": "D:/YUI Nook/backend/.venv/Scripts/python.exe",
+      "args": ["D:/YUI Nook/yui_tool_bridge.py"]
+    }
+  }
+}
+```
+
+Exposed tools:
+
+- `diary.list_books`
+- `diary.search_entries`
+- `diary.get_entry`
+- `diary.create_entry`
+- `diary.update_entry`
+- `grimoire.create_entry`
+- `curio.save_item`
+- `moments.create_post`
+
+First smoke-test path:
+
+1. `diary.list_books`
+2. `diary.create_entry`
+3. `diary.search_entries`
+
+For Curio, large or forced HTML content is uploaded to R2 and the directory item
+is stored through the existing Curio artifact DB path. For Moments images,
+provide an existing URL or R2 object key in `image`.
+
 项目现在提供两种 MCP 方式：
 
 1. 本地 `stdio` 模式，给 Claude Desktop 直连。
