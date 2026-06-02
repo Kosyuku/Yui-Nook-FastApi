@@ -6,6 +6,7 @@ through the existing database and R2 helpers.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -318,7 +319,10 @@ async def curio_save_item(
         if _artifact_should_use_r2(item_content, item_storage):
             data = item_content.encode("utf-8")
             storage_key = _artifact_storage_key(title)
-            media_storage.r2_client.put_object(storage_key, data, mime_type="text/html; charset=utf-8")
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, lambda: media_storage.r2_client.put_object(storage_key, data, mime_type="text/html; charset=utf-8")
+            )
             item_content = storage_key
             item_storage = "r2"
             metadata.update({"size_bytes": len(data), "r2_mime_type": "text/html; charset=utf-8"})
