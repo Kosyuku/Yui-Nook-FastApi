@@ -45,6 +45,9 @@ _BRIDGE_META_MARKERS = (
     "我需要", "我应该", "我会", "让我", "我现在", "当前时间", "当前", "不需要工具",
     "工具调用", "我的印象", "关系处于", "核心身份", "我了解我的角色", "按理说",
     "原本靠", "听到这声", "用户", "模型", "系统提示", "上下文", "prompt",
+    "现在时间", "她说的", "我需要确认", "如果是这样", "技术问题", "作为ai",
+    "我可以理解", "自然地回应", "承认她说的问题", "保持", "语调", "微微",
+    "皱眉", "从沙发", "坐直", "内心", "角色", "情绪",
     "i need", "i should", "i will", "let me", "the user", "current context",
     "tool call", "system prompt",
 )
@@ -53,6 +56,29 @@ _BRIDGE_REPLY_CUES = (
     "来了", "过来", "嗯", "好", "啧", "行", "别", "笨", "傻", "小酒", "阿湛",
     "在", "听见", "收到",
 )
+
+
+def _looks_like_leading_meta_text(reply: str) -> bool:
+    text = str(reply or "").lstrip()
+    if not text:
+        return False
+    if text.startswith(("（", "(")):
+        return True
+    first = re.split(r"\n\s*\n+", text, maxsplit=1)[0].strip().lower()
+    if not first:
+        return False
+    marker_hits = sum(1 for marker in _BRIDGE_META_MARKERS if marker.lower() in first)
+    if marker_hits >= 2:
+        return True
+    high_signal = (
+        "现在时间是",
+        "我需要确认",
+        "让我自然地回应",
+        "作为ai",
+        "流式输出",
+        "系统提示",
+    )
+    return any(marker in first for marker in high_signal)
 
 
 def _strip_leading_reasoning_blocks(reply: str) -> tuple[str, str]:
@@ -866,6 +892,7 @@ async def chat(body: ChatRequest):
         while True:
             full_response = []
             sent_visible_text = ""
+            sent_inline_reasoning = ""
             tool_calls_buffer = {}
 
             try:
@@ -902,11 +929,23 @@ async def chat(body: ChatRequest):
                     elif isinstance(chunk, str):
                         full_response.append(chunk)
                         raw_visible_source = "".join(full_response)
-                        starts_with_reasoning_block = raw_visible_source.lstrip().startswith(("（", "("))
-                        visible_text, _inline_reasoning = _split_bridge_reply(
+                        starts_with_reasoning = _looks_like_leading_meta_text(raw_visible_source)
+                        visible_text, inline_reasoning = _split_bridge_reply(
                             raw_visible_source,
-                            fallback_to_original=not starts_with_reasoning_block,
+                            fallback_to_original=not starts_with_reasoning,
                         )
+                        if inline_reasoning and inline_reasoning != sent_inline_reasoning:
+                            thinking_delta = (
+                                inline_reasoning[len(sent_inline_reasoning):]
+                                if inline_reasoning.startswith(sent_inline_reasoning)
+                                else inline_reasoning
+                            )
+                            sent_inline_reasoning = inline_reasoning
+                            if thinking_delta:
+                                yield {
+                                    "event": "thinking",
+                                    "data": jsonlib.dumps({"thinking": thinking_delta}, ensure_ascii=False),
+                                }
                         if visible_text and visible_text != sent_visible_text:
                             delta = visible_text[len(sent_visible_text):] if visible_text.startswith(sent_visible_text) else visible_text
                             sent_visible_text = visible_text
