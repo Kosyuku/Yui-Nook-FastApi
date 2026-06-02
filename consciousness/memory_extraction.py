@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,6 +21,23 @@ logger = logging.getLogger(__name__)
 
 VALID_TAGS = frozenset(
     {"fact", "taste", "mood", "stance", "lore", "moment", "ritual", "intimate", "project", "creation"}
+)
+
+MAX_EXTRACTED_CONTENT_CHARS = 260
+
+_NOISE_MESSAGE_PATTERNS = (
+    r"\b(exit code|wall time|total output lines)\b",
+    r"\b(baked|cooked|sautéed|sauteed)\s+for\s+\d",
+    r"\b(ctrl\+o|domcontentloaded|fetch/xhr|localhost:\d+)\b",
+    r"\b(git\s+(pull|push|status|commit|rebase)|npm\s+run|node\s+--check)\b",
+)
+
+_NOISE_MEMORY_PATTERNS = (
+    r"\b(baked|cooked|sautéed|sauteed)\s+for\s+\d",
+    r"\b(exit code|wall time|total output lines|traceback|stack trace)\b",
+    r"\b(ctrl\+o|domcontentloaded|fetch/xhr|network tab|devtools)\b",
+    r"\b(git\s+(pull|push|status|rebase)|npm\s+run|node\s+--check)\b",
+    r"^\s*(修|改|push|同步|截图|看图|继续|好|嗯|啊|哦|晚安)[~!！。,.，\s]*$",
 )
 
 # 上次提取的检查点 key（per agent，存在 app_settings 里）
@@ -111,6 +129,13 @@ def _content_hash(content: str) -> str:
     return hashlib.md5(content.strip().lower().encode("utf-8")).hexdigest()[:16]
 
 
+def _is_noise_text(text: str, patterns: tuple[str, ...]) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    if not normalized:
+        return True
+    return any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns)
+
+
 async def _load_checkpoint(agent_id: str) -> str:
     row = await db.get_setting(_checkpoint_key(agent_id))
     return str(row.get("value") or "") if row else ""
@@ -174,6 +199,8 @@ def _format_messages_for_prompt(messages: list[dict[str, Any]]) -> str:
         content = str(msg.get("content") or "").strip()
         if not content:
             continue
+        if _is_noise_text(content, _NOISE_MESSAGE_PATTERNS):
+            continue
         # 截断超长消息（代码、长文等不需要全保留）
         if len(content) > 400:
             content = content[:400] + "…"
@@ -205,6 +232,15 @@ def _validate_item(item: Any) -> dict[str, Any] | None:
         logger.debug("memory_extraction: invalid tag %r, skipping", tag)
         return None
     if not content or len(content) < 5:
+        return None
+    if len(content) > MAX_EXTRACTED_CONTENT_CHARS:
+        logger.debug("memory_extraction: content too long, skipping: %s", content[:80])
+        return None
+    if _is_noise_text(content, _NOISE_MEMORY_PATTERNS):
+        logger.debug("memory_extraction: noise content, skipping: %s", content[:80])
+        return None
+    if re.search(r"https?://|www\.", content, flags=re.IGNORECASE) and tag not in {"project", "creation"}:
+        logger.debug("memory_extraction: non-project url content, skipping: %s", content[:80])
         return None
     try:
         importance = max(1, min(5, int(item.get("importance") or 3)))

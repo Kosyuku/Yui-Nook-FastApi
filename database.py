@@ -340,6 +340,9 @@ CREATE TABLE IF NOT EXISTS proactive_messages (
     content         TEXT NOT NULL,
     trigger_reason  TEXT DEFAULT '',  -- care | share | diary | silent
     status          TEXT NOT NULL DEFAULT 'pending',  -- pending | delivered | read
+    source_memory_id TEXT DEFAULT '',
+    topic_key       TEXT DEFAULT '',
+    similarity_key  TEXT DEFAULT '',
     created_at      TEXT NOT NULL
 );
 
@@ -1551,7 +1554,22 @@ async def _supabase_update_memory(memory_id: str, **kwargs) -> bool:
 
 
 async def _supabase_delete_memory(memory_id: str) -> bool:
+    memory_id = str(memory_id or "").strip()
+    if not memory_id:
+        return False
     params = {"id": f"eq.{memory_id}"}
+    existing = await _supabase_select(
+        settings.supabase_memories_table,
+        filters=params,
+        select="id",
+        limit=1,
+    )
+    if not existing:
+        return False
+    try:
+        await _supabase_delete("memory_label_items", {"memory_id": f"eq.{memory_id}"})
+    except Exception as exc:
+        logger.warning("Supabase memory label cleanup failed for %s: %s", memory_id, exc)
     async with httpx.AsyncClient(
         timeout=20.0,
         trust_env=settings.supabase_httpx_trust_env,
@@ -1559,8 +1577,13 @@ async def _supabase_delete_memory(memory_id: str) -> bool:
         resp = await client.delete(_supabase_memories_endpoint(), headers=_supabase_headers(True), params=params)
         if resp.status_code >= 300:
             raise RuntimeError(f"Supabase delete_memory failed: {resp.status_code} {resp.text[:200]}")
-        rows = resp.json()
-        return len(rows) > 0
+    remaining = await _supabase_select(
+        settings.supabase_memories_table,
+        filters=params,
+        select="id",
+        limit=1,
+    )
+    return not remaining
 
 
 async def _supabase_search_memories(
@@ -2691,6 +2714,9 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
         ("reason_type",        "TEXT    DEFAULT ''"),
         ("reason_context",     "TEXT    DEFAULT ''"),
         ("source_snapshot_at", "TEXT    DEFAULT ''"),
+        ("source_memory_id",   "TEXT    DEFAULT ''"),
+        ("topic_key",          "TEXT    DEFAULT ''"),
+        ("similarity_key",     "TEXT    DEFAULT ''"),
         ("is_read",            "INTEGER NOT NULL DEFAULT 0"),
     ]
     for _col, _ddl in _proactive_new_cols:
@@ -4984,12 +5010,16 @@ async def update_memory(memory_id: str, **kwargs) -> bool:
 
 
 async def delete_memory(memory_id: str) -> bool:
+    memory_id = str(memory_id or "").strip()
+    if not memory_id:
+        return False
     if _use_supabase_memory():
         ok = await _supabase_delete_memory(memory_id)
         if ok:
             await _delete_embedding(memory_id)
         return ok
     db = await get_db()
+    await db.execute("DELETE FROM memory_label_items WHERE memory_id = ?", (memory_id,))
     result = await db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
     await db.commit()
     if result.rowcount > 0:
@@ -6811,6 +6841,9 @@ async def add_proactive_message(
     reason_type: str = "",
     reason_context: str = "",
     source_snapshot_at: str = "",
+    source_memory_id: str = "",
+    topic_key: str = "",
+    similarity_key: str = "",
 ) -> dict[str, Any]:
     if _use_supabase_data():
         pid = _new_id()
@@ -6826,6 +6859,9 @@ async def add_proactive_message(
             "reason_type": reason_type,
             "reason_context": reason_context,
             "source_snapshot_at": source_snapshot_at,
+            "source_memory_id": str(source_memory_id or "").strip(),
+            "topic_key": str(topic_key or "").strip(),
+            "similarity_key": str(similarity_key or topic_key or "").strip(),
             "is_read": 0,
         }
         return await _supabase_insert_verified(settings.supabase_proactive_messages_table, payload)
@@ -6836,19 +6872,24 @@ async def add_proactive_message(
         """
         INSERT INTO proactive_messages (
             id, content, trigger_reason, status, created_at,
-            agent_id, output_type, reason_type, reason_context, source_snapshot_at, is_read
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            agent_id, output_type, reason_type, reason_context, source_snapshot_at,
+            source_memory_id, topic_key, similarity_key, is_read
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             pid, content, trigger_reason, "pending", now,
-            agent_id, output_type, reason_type, reason_context, source_snapshot_at, 0
+            agent_id, output_type, reason_type, reason_context, source_snapshot_at,
+            str(source_memory_id or "").strip(), str(topic_key or "").strip(),
+            str(similarity_key or topic_key or "").strip(), 0
         ),
     )
     await db.commit()
     return {
         "id": pid, "content": content, "trigger_reason": trigger_reason, "status": "pending", "created_at": now,
         "agent_id": agent_id, "output_type": output_type, "reason_type": reason_type,
-        "reason_context": reason_context, "source_snapshot_at": source_snapshot_at, "is_read": 0,
+        "reason_context": reason_context, "source_snapshot_at": source_snapshot_at,
+        "source_memory_id": str(source_memory_id or "").strip(), "topic_key": str(topic_key or "").strip(),
+        "similarity_key": str(similarity_key or topic_key or "").strip(), "is_read": 0,
     }
 
 

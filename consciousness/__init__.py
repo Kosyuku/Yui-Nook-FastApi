@@ -341,6 +341,28 @@ async def run_daily_loop_once(agent_id: str | None = None) -> dict[str, Any]:
 
     report = _normalize_daily_loop_report(data, agent_id=resolved_agent_id, counts=counts, status=status)
     report["draft_writes"] = await _apply_daily_loop_second_stage(report)
+    try:
+        await db.add_cot_log(
+            f"daily_loop:{resolved_agent_id}",
+            agent_id=resolved_agent_id,
+            source="daily_loop",
+            log_type="thought",
+            title="意识循环碎碎念",
+            summary=report.get("summary") or report.get("reason") or "意识循环完成",
+            content=json.dumps({
+                "summary": report.get("summary", ""),
+                "activity_digest": report.get("activity_digest", ""),
+                "state_digest": report.get("state_digest", ""),
+                "should_write_diary": report.get("should_write_diary", False),
+                "should_write_memory": report.get("should_write_memory", False),
+                "reason": report.get("reason", ""),
+                "draft_writes": report.get("draft_writes", {}),
+            }, ensure_ascii=False),
+            status=str(report.get("status") or "ok"),
+            ttl_days=7,
+        )
+    except Exception as exc:
+        logger.warning("daily_loop: cot log write failed: %s", exc)
     await db.set_setting(_daily_loop_report_key(resolved_agent_id), json.dumps(report, ensure_ascii=False))
     logger.info(
         "daily_loop: saved report status=%s diary=%s memory=%s",

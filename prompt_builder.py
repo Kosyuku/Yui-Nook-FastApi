@@ -593,7 +593,9 @@ def _render_partition_messages(messages: list[dict[str, Any]], *, latest_user_te
     for item in messages:
         role = str(item.get("role") or "").strip()
         content = str(item.get("content") or "").strip()
-        if role not in {"user", "assistant"} or not content:
+        if role == "system":
+            role = "event"
+        if role not in {"user", "assistant", "event"} or not content:
             continue
         if latest and role == "user" and content == latest:
             continue
@@ -716,7 +718,9 @@ async def _load_history_block(
     for row in rows:
         role = str(row.get("role") or "").strip()
         content = str(row.get("content") or "").strip()
-        if role not in {"user", "assistant"} or not content:
+        if role == "system":
+            role = "event"
+        if role not in {"user", "assistant", "event"} or not content:
             continue
         if latest and role == "user" and content == latest:
             continue

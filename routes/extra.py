@@ -1202,6 +1202,44 @@ async def get_activity_event_shortcut_template():
     }
 
 
+def _activity_event_chat_hint(event_type: str, event_value: str, content: str) -> str:
+    normalized_type = str(event_type or "").strip().lower()
+    value = str(event_value or "").strip()
+    text = str(content or "").strip()
+    if normalized_type not in {"app", "app_open"} or not value:
+        return ""
+    if re.search(r"(浏览|刷|看)", text):
+        return f"正在浏览{value}"
+    return f"打开了{value}"
+
+
+async def _inject_activity_event_message(event: dict[str, Any], *, deduped: bool = False) -> dict[str, Any] | None:
+    if deduped:
+        return None
+    hint = _activity_event_chat_hint(
+        str(event.get("event_type") or ""),
+        str(event.get("event_value") or ""),
+        str(event.get("content") or ""),
+    )
+    if not hint:
+        return None
+    try:
+        sessions = await db.list_sessions()
+        session = next((item for item in sessions if str(item.get("source_app") or "") == "yui_nook"), None)
+        if not session:
+            return None
+        return await db.add_message(
+            str(session.get("id") or ""),
+            "system",
+            hint,
+            model="event",
+            agent_id=str(session.get("agent_id") or ""),
+        )
+    except Exception as exc:
+        logger.warning("activity event message inject failed: id=%s error=%s", event.get("id"), exc)
+        return None
+
+
 @extra_api.post("/activity-events")
 async def create_activity_event(body: ActivityEventPayload):
     event_type = str(body.eventType or "").strip()
@@ -1231,13 +1269,16 @@ async def create_activity_event(body: ActivityEventPayload):
             gate = serialize_gate_result(gate_result)
         except Exception as exc:
             logger.warning("activity event gate failed: id=%s error=%s", event.get("id"), exc)
+    injected_message = await _inject_activity_event_message(event, deduped=deduped)
     logger.info(
-        "activity event accepted: id=%s deduped=%s gate=%s",
+        "activity event accepted: id=%s deduped=%s gate=%s injected_message=%s",
         event.get("id"),
         deduped,
         (gate or {}).get("status") if isinstance(gate, dict) else "",
+        (injected_message or {}).get("id") if injected_message else "",
     )
-    return {"ok": True, "event": event, "deduped": deduped, "gate": gate}
+    return {"ok": True, "event": event, "deduped": deduped, "gate": gate, "message": injected_message}
+
 
 
 @extra_api.get("/activity-events/recent")

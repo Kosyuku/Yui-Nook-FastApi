@@ -1,7 +1,9 @@
 import json
 import logging
+import re
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 
 import database as db
 from config import settings
@@ -16,6 +18,7 @@ class ReasonContext:
     source: str
     source_id: str
     timestamp: str
+    topic_key: str = ""
 
 
 @dataclass
@@ -101,6 +104,160 @@ def _looks_like_model_failure(text: str) -> bool:
         "未知错误",
     )
     return any(marker in normalized for marker in failure_markers)
+
+
+def _topic_key(text: str) -> str:
+    normalized = str(text or "").lower()
+    normalized = re.sub(r"https?://\S+", " ", normalized)
+    normalized = re.sub(r"[^\w\u4e00-\u9fff]+", " ", normalized)
+    replacements = {
+        "\u4ee5\u540e": "",
+        "\u53ef\u4ee5": "",
+        "\u5e94\u8be5": "",
+        "\u8bb0\u5f97": "",
+        "\u7528\u6237": "",
+        "\u5979": "",
+        "\u4ed6": "",
+        "\u6211": "",
+        "\u4f60": "",
+        "\u53eb": "\u79f0\u547c",
+        "\u558a": "\u79f0\u547c",
+    }
+    for old, new in replacements.items():
+        normalized = normalized.replace(old, new)
+    stop_words = {"the", "and", "that", "this", "with", "about", "memory", "important"}
+    parts = [p for p in normalized.split() if p and p not in stop_words]
+    compact = "".join(parts)
+    return compact[:80]
+
+
+def _topic_similar(left: str, right: str) -> bool:
+    left_key = _topic_key(left)
+    right_key = _topic_key(right)
+    if not left_key or not right_key:
+        return False
+    if left_key in right_key or right_key in left_key:
+        return min(len(left_key), len(right_key)) >= 4
+    return SequenceMatcher(None, left_key, right_key).ratio() >= 0.72
+
+
+def _parse_dt(value: str, fallback_tz=None) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(value or ""))
+        if dt.tzinfo is None and fallback_tz is not None:
+            dt = dt.replace(tzinfo=fallback_tz)
+        return dt
+    except Exception:
+        return None
+
+
+def _proactive_source_memory_id(message: dict) -> str:
+    direct = str(message.get("source_memory_id") or "").strip()
+    if direct:
+        return direct
+    try:
+        context = json.loads(str(message.get("reason_context") or "{}"))
+        if str(context.get("source") or "") == "memory":
+            return str(context.get("source_id") or "").strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _proactive_topic_key(message: dict) -> str:
+    direct = str(message.get("topic_key") or message.get("similarity_key") or "").strip()
+    if direct:
+        return direct
+    try:
+        context = json.loads(str(message.get("reason_context") or "{}"))
+        return _topic_key(f"{context.get('topic') or ''} {context.get('detail') or ''}")
+    except Exception:
+        return _topic_key(str(message.get("content") or ""))
+
+
+def _memory_was_updated_after(memory: dict, proactive_message: dict, now: datetime) -> bool:
+    memory_updated = _parse_dt(str(memory.get("updated_at") or memory.get("last_touched_at") or ""), now.tzinfo)
+    used_at = _parse_dt(str(proactive_message.get("created_at") or ""), now.tzinfo)
+    return bool(memory_updated and used_at and memory_updated > used_at)
+
+
+async def _recent_proactive_usage(agent_id: str, limit: int = 100) -> list[dict]:
+    return await db.list_proactive_messages(limit=limit, agent_id=agent_id)
+
+
+async def _select_memory_for_proactive(check_input: ProactiveCheckInput, now: datetime) -> dict | None:
+    memories = list(check_input.high_importance_memories or [])
+    if not memories:
+        return None
+    recent = await _recent_proactive_usage(check_input.agent_id, limit=100)
+    recent_memory_ids = [_proactive_source_memory_id(item) for item in recent[:20]]
+    recent_memory_ids = [item for item in recent_memory_ids if item]
+    recent_topic_keys = [_proactive_topic_key(item) for item in recent[:20]]
+    recent_topic_keys = [item for item in recent_topic_keys if item]
+    cooldown_start = now - timedelta(days=7)
+
+    for memory in memories:
+        memory_id = str(memory.get("id") or "").strip()
+        detail = db.memory_display_content(memory) or db.memory_raw_content(memory) or str(memory.get("content") or "")
+        topic_key = _topic_key(detail)
+        if not memory_id or not detail:
+            continue
+        prior_for_memory = [item for item in recent if _proactive_source_memory_id(item) == memory_id]
+        if memory_id in recent_memory_ids and not any(_memory_was_updated_after(memory, item, now) for item in prior_for_memory):
+            continue
+        if prior_for_memory and not any(_memory_was_updated_after(memory, item, now) for item in prior_for_memory):
+            continue
+        latest_prior = prior_for_memory[0] if prior_for_memory else None
+        latest_prior_at = _parse_dt(str((latest_prior or {}).get("created_at") or ""), now.tzinfo)
+        if latest_prior_at and latest_prior_at >= cooldown_start and not _memory_was_updated_after(memory, latest_prior, now):
+            continue
+        if any(_topic_similar(topic_key, recent_key) for recent_key in recent_topic_keys):
+            continue
+        selected = dict(memory)
+        selected["_proactive_detail"] = detail
+        selected["_proactive_topic_key"] = topic_key
+        return selected
+    return None
+
+
+async def should_send_proactive_message(
+    agent_id: str,
+    source_memory_id: str,
+    content: str,
+    now: datetime,
+    *,
+    topic_key: str = "",
+    memory: dict | None = None,
+) -> bool:
+    if not str(content or "").strip():
+        return False
+    recent = await _recent_proactive_usage(agent_id, limit=100)
+    source_memory_id = str(source_memory_id or "").strip()
+    topic_key = str(topic_key or _topic_key(content)).strip()
+    cooldown_start = now - timedelta(days=7)
+    recent_20_ids = [_proactive_source_memory_id(item) for item in recent[:20]]
+    if source_memory_id and source_memory_id in recent_20_ids:
+        recent_items = [item for item in recent[:20] if _proactive_source_memory_id(item) == source_memory_id]
+        if not (memory and any(_memory_was_updated_after(memory, item, now) for item in recent_items)):
+            logger.info("proactive_check: source memory rejected by recent consumption: %s", source_memory_id)
+            return False
+    for item in recent:
+        used_memory_id = _proactive_source_memory_id(item)
+        used_at = _parse_dt(str(item.get("created_at") or ""), now.tzinfo)
+        if source_memory_id and used_memory_id == source_memory_id:
+            if memory and _memory_was_updated_after(memory, item, now):
+                continue
+            logger.info("proactive_check: source memory already used: %s", source_memory_id)
+            return False
+        if source_memory_id and used_memory_id == source_memory_id and used_at and used_at >= cooldown_start:
+            return False
+        recent_key = _proactive_topic_key(item)
+        if source_memory_id and used_memory_id == source_memory_id and memory and _memory_was_updated_after(memory, item, now):
+            continue
+        if topic_key and recent_key and _topic_similar(topic_key, recent_key):
+            logger.info("proactive_check: topic rejected by similarity: %s", topic_key)
+            return False
+    return True
 
 
 async def _build_check_input(agent_id: str, now: datetime | None = None) -> ProactiveCheckInput:
@@ -202,8 +359,8 @@ async def _generate_draft_message(reason_context: ReasonContext) -> str:
         return ""
 
 
-def _build_context_candidates(check_input: ProactiveCheckInput) -> list[tuple[str, str, ReasonContext]]:
-    candidates: list[tuple[str, str, ReasonContext]] = []
+async def _build_context_candidates(check_input: ProactiveCheckInput, now: datetime) -> list[tuple[str, str, ReasonContext, dict | None]]:
+    candidates: list[tuple[str, str, ReasonContext, dict | None]] = []
     if check_input.open_loops_count > 0 and check_input.open_loops_summary:
         candidates.append((
             "open_loop_followup",
@@ -214,21 +371,26 @@ def _build_context_candidates(check_input: ProactiveCheckInput) -> list[tuple[st
                 source="open_loop",
                 source_id="",
                 timestamp=check_input.consciousness_updated_at,
+                topic_key=_topic_key(check_input.open_loops_summary),
             ),
+            None,
         ))
     if check_input.high_importance_memory_count > 0 and check_input.high_importance_memories:
-        mem = check_input.high_importance_memories[0]
-        candidates.append((
-            "important_memory_followup",
-            "memory",
-            ReasonContext(
-                topic="Important Memory",
-                detail=mem.get("content", ""),
-                source="memory",
-                source_id=mem.get("id", ""),
-                timestamp=check_input.consciousness_updated_at,
-            ),
-        ))
+        mem = await _select_memory_for_proactive(check_input, now)
+        if mem:
+            candidates.append((
+                "important_memory_followup",
+                "memory",
+                ReasonContext(
+                    topic="Important Memory",
+                    detail=mem.get("_proactive_detail", "") or mem.get("content", ""),
+                    source="memory",
+                    source_id=mem.get("id", ""),
+                    timestamp=check_input.consciousness_updated_at,
+                    topic_key=mem.get("_proactive_topic_key", "") or _topic_key(mem.get("content", "")),
+                ),
+                mem,
+            ))
     if check_input.background_activity_candidates:
         events = check_input.background_activity_candidates[:3]
         candidates.append((
@@ -240,7 +402,9 @@ def _build_context_candidates(check_input: ProactiveCheckInput) -> list[tuple[st
                 source="recent_activity",
                 source_id=str(events[0].get("id", "")),
                 timestamp=str(events[0].get("occurred_at") or events[0].get("created_at") or check_input.consciousness_updated_at),
+                topic_key=_topic_key(db.format_recent_activity_block(events)),
             ),
+            None,
         ))
     if check_input.presence_gap:
         candidates.append((
@@ -252,7 +416,9 @@ def _build_context_candidates(check_input: ProactiveCheckInput) -> list[tuple[st
                 source="presence_gap",
                 source_id="",
                 timestamp=check_input.consciousness_updated_at,
+                topic_key=_topic_key(check_input.presence_gap),
             ),
+            None,
         ))
     return candidates
 
@@ -292,7 +458,7 @@ def _json_bool(value: object) -> bool:
 
 async def _run_proactive_light_report(
     check_input: ProactiveCheckInput,
-    candidates: list[tuple[str, str, ReasonContext]],
+    candidates: list[tuple[str, str, ReasonContext, dict | None]],
 ) -> ProactiveLightReport | None:
     if not candidates:
         return ProactiveLightReport(False, "no usable context", "", "")
@@ -305,7 +471,7 @@ async def _run_proactive_light_report(
             "detail": context.detail[:1200],
             "timestamp": context.timestamp,
         }
-        for reason_type, source, context in candidates
+        for reason_type, source, context, _memory in candidates
     ]
     system_prompt = (
         "You are the lightweight proactive gate for an AI companion.\n"
@@ -397,7 +563,7 @@ async def run_proactive_check(agent_id: str) -> ProactiveCheckResult:
         return _reject(agent_id)
 
     # 4. proactive_gate: build candidates, then let the lightweight model decide whether to speak.
-    candidates = _build_context_candidates(check_input)
+    candidates = await _build_context_candidates(check_input, now)
     if not candidates:
         logger.info("proactive_check: no content available to discuss")
         return _reject(agent_id)
@@ -407,11 +573,11 @@ async def run_proactive_check(agent_id: str) -> ProactiveCheckResult:
         logger.info("proactive_check: light gate rejected: %s", report.reason)
         return _reject(agent_id)
 
-    reason_type, _, context = candidates[0]
+    reason_type, _, context, selected_memory = candidates[0]
     if report and report.selected_source:
         selected = next((item for item in candidates if item[1] == report.selected_source), None)
         if selected:
-            reason_type, _, context = selected
+            reason_type, _, context, selected_memory = selected
     elif report is None:
         logger.info("proactive_check: light gate unavailable, using rule fallback")
 
@@ -430,6 +596,18 @@ async def run_proactive_check(agent_id: str) -> ProactiveCheckResult:
         logger.info("proactive_check: failed to generate draft")
         return _reject(agent_id)
 
+    source_memory_id = context.source_id if context.source == "memory" else ""
+    topic_key = context.topic_key or _topic_key(f"{context.topic} {context.detail}")
+    if not await should_send_proactive_message(
+        agent_id,
+        source_memory_id,
+        draft,
+        now,
+        topic_key=topic_key,
+        memory=selected_memory,
+    ):
+        return _reject(agent_id)
+
     ctx_json = json.dumps(asdict(context), ensure_ascii=False)
     await db.add_proactive_message(
         content=draft,
@@ -439,6 +617,9 @@ async def run_proactive_check(agent_id: str) -> ProactiveCheckResult:
         reason_type=reason_type,
         reason_context=ctx_json,
         source_snapshot_at=check_input.consciousness_updated_at,
+        source_memory_id=source_memory_id,
+        topic_key=topic_key,
+        similarity_key=topic_key,
     )
 
     from consciousness import _status
@@ -493,7 +674,7 @@ async def inspect_proactive_check(agent_id: str, *, run_model: bool = False) -> 
         elif check_input.hours_since_last_proactive < req_cooldown:
             style_reject_reason = f"style {check_input.agent_proactive_style} rejected by cooldown"
 
-    candidates = _build_context_candidates(check_input)
+    candidates = await _build_context_candidates(check_input, now)
     report = None
     if run_model and not hard_reject_reason and not style_reject_reason and candidates:
         report = await _run_proactive_light_report(check_input, candidates)
@@ -515,7 +696,7 @@ async def inspect_proactive_check(agent_id: str, *, run_model: bool = False) -> 
                 "source": source,
                 "context": asdict(context),
             }
-            for reason_type, source, context in candidates
+            for reason_type, source, context, _memory in candidates
         ],
         "hard_reject_reason": hard_reject_reason,
         "style_reject_reason": style_reject_reason,

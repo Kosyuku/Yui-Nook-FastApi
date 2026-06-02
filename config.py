@@ -111,7 +111,7 @@ class AppConfig:
     # 活跃时段（本地时区整数小时，支持跨午夜）
     # 含起始不含结束；start=8, end=1 → 08:00 到次日 01:00
     proactive_active_start_hour: int = 8
-    proactive_active_end_hour: int = 1
+    proactive_active_end_hour: int = 23
 
     # ── Token / Prompt 预算 ──
     chat_recent_messages_limit: int = 12
@@ -275,7 +275,7 @@ class AppConfig:
             proactive_check_interval_hours=float(os.getenv("PROACTIVE_CHECK_INTERVAL_HOURS", "1.5")),
             proactive_message_cooldown_hours=float(os.getenv("PROACTIVE_MESSAGE_COOLDOWN_HOURS", "2.0")),
             proactive_active_start_hour=int(os.getenv("PROACTIVE_ACTIVE_START_HOUR", "8")),
-            proactive_active_end_hour=int(os.getenv("PROACTIVE_ACTIVE_END_HOUR", "1")),
+            proactive_active_end_hour=int(os.getenv("PROACTIVE_ACTIVE_END_HOUR", "23")),
             # Prompt / token 预算
             chat_recent_messages_limit=int(os.getenv("CHAT_RECENT_MESSAGES_LIMIT", "12")),
             tool_result_max_chars=int(os.getenv("TOOL_RESULT_MAX_CHARS", "1200")),
