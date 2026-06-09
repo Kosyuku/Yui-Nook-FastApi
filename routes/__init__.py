@@ -396,18 +396,23 @@ async def _auto_capture_memory_from_user_text(user_text: str, agent_id: str | No
         if _normalize_memory_text(db.memory_raw_content(m)) == normalized:
             return
 
-    await db.add_memory(
-        content=text,
-        raw_content=text,
-        category=category,
-        tags="auto",
-        source="auto_rule",
-        agent_id=agent_id,
-        visibility="private",
-        source_agent_id=agent_id,
-        importance=int(memory_meta["importance"]),
-        expires_at=str(memory_meta.get("expires_at") or ""),
-    )
+    try:
+        await db.add_memory(
+            content=text,
+            raw_content=text,
+            category=category,
+            tags="auto",
+            source="auto_rule",
+            agent_id=agent_id,
+            visibility="private",
+            source_agent_id=agent_id,
+            importance=int(memory_meta["importance"]),
+            expires_at=str(memory_meta.get("expires_at") or ""),
+            apply_filter=True,
+        )
+    except db.MemoryRejected as exc:
+        logger.info("Auto memory filtered (%s): %s", exc.reason, text[:80])
+        return
     logger.info("Auto memory captured: category=%s content=%s", category, text[:80])
 
 

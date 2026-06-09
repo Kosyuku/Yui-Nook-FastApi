@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS memories (
     visibility  TEXT NOT NULL DEFAULT 'private',
     source_agent_id TEXT NOT NULL DEFAULT 'default',
     content     TEXT NOT NULL,
+    normalized_content TEXT NOT NULL DEFAULT '',
     raw_content TEXT NOT NULL DEFAULT '',
     compressed_content TEXT DEFAULT '',
     category    TEXT NOT NULL,
@@ -178,6 +179,8 @@ CREATE INDEX IF NOT EXISTS idx_memories_agent_category
     ON memories(agent_id, category);
 CREATE INDEX IF NOT EXISTS idx_memories_agent_visibility
     ON memories(agent_id, visibility);
+CREATE INDEX IF NOT EXISTS idx_memories_agent_normalized
+    ON memories(agent_id, normalized_content);
 CREATE INDEX IF NOT EXISTS idx_memories_agent_created_at
     ON memories(agent_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_agent_updated_at
@@ -634,6 +637,17 @@ def _now() -> str:
 
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+class MemoryRejected(Exception):
+    """Raised when a candidate memory is filtered out before storage.
+
+    Only triggered for automatic sources (add_memory(..., apply_filter=True)).
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(f"memory rejected: {reason}")
+        self.reason = reason
 
 
 class AgentResolutionError(ValueError):
@@ -1435,6 +1449,7 @@ async def _supabase_add_memory(
     source: str = "",
     importance: int = 3,
     expires_at: str | None = None,
+    normalized_content: str = "",
 ) -> dict[str, Any]:
     mid = _new_id()
     now = _now()
@@ -1451,6 +1466,7 @@ async def _supabase_add_memory(
         "agent_id": normalize_agent_id(agent_id),
         "visibility": normalize_visibility(visibility),
         "source_agent_id": resolve_source_agent_id(agent_id, source_agent_id),
+        "normalized_content": normalized_content,
         "raw_content": raw_content,
         "compressed_content": compressed_content,
         "importance": importance,
@@ -2400,8 +2416,13 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
         alter_statements.append("ALTER TABLE memories ADD COLUMN last_touched_at TEXT DEFAULT ''")
     if not await _sqlite_column_exists(db, "memories", "touch_count"):
         alter_statements.append("ALTER TABLE memories ADD COLUMN touch_count INTEGER NOT NULL DEFAULT 0")
+    if not await _sqlite_column_exists(db, "memories", "normalized_content"):
+        alter_statements.append("ALTER TABLE memories ADD COLUMN normalized_content TEXT NOT NULL DEFAULT ''")
     for stmt in alter_statements:
         await db.execute(stmt)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memories_agent_normalized ON memories(agent_id, normalized_content)"
+    )
     if not await _sqlite_column_exists(db, "companion_state", "agent_id"):
         await db.execute("ALTER TABLE companion_state ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'")
     await db.execute("UPDATE companion_state SET agent_id = 'default' WHERE COALESCE(agent_id, '') = ''")
@@ -4817,6 +4838,71 @@ async def get_messages_after(session_id: str, after_message_id: str = "", limit:
 
 # ==================== Semantic Memory ====================
 
+def _memory_normalize_content(text: str) -> str:
+    """Canonical form of memory text for exact dedup (lazy import to avoid cycle)."""
+    from consciousness.memory_filter import normalize_memory_text
+    return normalize_memory_text(text)
+
+
+def _memory_filter_candidate(content: str, *, tag: str = "", source: str = "") -> None:
+    """Raise MemoryRejected if an automatic-source candidate should not be stored."""
+    from consciousness.memory_filter import should_store_memory
+    ok, reason = should_store_memory(content, tag=tag, source=source)
+    if not ok:
+        raise MemoryRejected(reason)
+
+
+async def _find_duplicate_memory(agent_id: str, normalized_content: str) -> dict[str, Any] | None:
+    """Find an existing active memory for this agent with identical normalized content."""
+    normalized = (normalized_content or "").strip()
+    if not normalized:
+        return None
+    owner = normalize_agent_id(agent_id)
+    if _use_supabase_memory():
+        if await _supabase_table_has_column(settings.supabase_memories_table, "normalized_content"):
+            rows = await _supabase_select(
+                settings.supabase_memories_table,
+                filters={
+                    "agent_id": f"eq.{owner}",
+                    "normalized_content": f"eq.{normalized}",
+                },
+                order="updated_at.desc",
+                limit=1,
+            )
+            return rows[0] if rows else None
+        # Column not migrated yet — fall back to in-memory comparison.
+        rows = await _supabase_list_memories(limit=2000, agent_id=owner, include_cross_agent=False)
+        for row in rows:
+            if _memory_normalize_content(memory_raw_content(row)) == normalized:
+                return row
+        return None
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM memories WHERE agent_id = ? AND normalized_content = ? "
+        "ORDER BY updated_at DESC LIMIT 1",
+        (owner, normalized),
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def _merge_duplicate_memory(existing: dict[str, Any], importance_value: int) -> dict[str, Any]:
+    """Merge a duplicate write into an existing memory: bump importance, warm it up."""
+    mid = str(existing.get("id") or "").strip()
+    if not mid:
+        return existing
+    new_importance = max(_memory_importance(existing), int(importance_value or 0)) or 3
+    try:
+        if new_importance != _memory_importance(existing):
+            await update_memory(mid, importance=new_importance)
+            existing["importance"] = new_importance
+        await touch_memories([mid], reason="dedup_merge", delta=0.5)
+    except Exception as exc:
+        logger.warning("memory dedup merge failed for %s: %s", mid, exc)
+    logger.info("add_memory: merged duplicate into %s (importance=%d)", mid, new_importance)
+    return existing
+
+
 async def add_memory(
     content: str,
     category: str,
@@ -4835,6 +4921,7 @@ async def add_memory(
     external_source: str | None = None,
     external_id: str | None = None,
     oauth_client_id: str | None = None,
+    apply_filter: bool = False,
 ) -> dict[str, Any]:
     normalized_agent = await resolve_agent_id(
         agent_id=agent_id,
@@ -4852,19 +4939,35 @@ async def add_memory(
     if not stored_content:
         stored_content = raw_text or compressed_text
     importance_value = max(1, min(5, int(importance or 3)))
+    # 无到期时间统一存 NULL（而非 ''），否则 active 过滤会把空串当成已过期而隐藏记忆。
+    expires_value = (expires_at or "").strip() or None
+
+    # 自动来源统一过滤：过程文本/工具说明/报错/临时状态/自我解释一律拒绝。
+    candidate_text = raw_text or stored_content
+    if apply_filter:
+        _memory_filter_candidate(candidate_text, tag=tags or "", source=source or "")
+
+    # 精确去重：同 agent 下归一化内容相同则 merge 既有记忆，不插新行。
+    normalized_content = _memory_normalize_content(candidate_text)
+    duplicate = await _find_duplicate_memory(normalized_agent, normalized_content)
+    if duplicate is not None:
+        return await _merge_duplicate_memory(duplicate, importance_value)
+
+    resolved_source_agent = await resolve_source_agent_id_checked(normalized_agent, source_agent_id)
     if _use_supabase_memory():
         memory = await _supabase_add_memory(
             agent_id=normalized_agent,
             visibility=normalize_visibility(visibility),
-            source_agent_id=await resolve_source_agent_id_checked(normalized_agent, source_agent_id),
+            source_agent_id=resolved_source_agent,
             content=stored_content,
+            normalized_content=normalized_content,
             raw_content=raw_text,
             compressed_content=compressed_text,
             category=normalized_category,
             tags=tags,
             source=source,
             importance=importance_value,
-            expires_at=expires_at,
+            expires_at=expires_value,
         )
         try:
             await _schedule_memory_processing(memory["id"], raw_text)
@@ -4878,22 +4981,23 @@ async def add_memory(
     await db.execute(
         """
         INSERT INTO memories (
-            id, agent_id, visibility, source_agent_id, content, raw_content, compressed_content, category, tags, source, importance, expires_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, agent_id, visibility, source_agent_id, content, normalized_content, raw_content, compressed_content, category, tags, source, importance, expires_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mid,
             normalized_agent,
             normalize_visibility(visibility),
-            await resolve_source_agent_id_checked(normalized_agent, source_agent_id),
+            resolved_source_agent,
             stored_content,
+            normalized_content,
             raw_text,
             compressed_text,
             normalized_category,
             tags,
             source,
             importance_value,
-            expires_at or "",
+            expires_value,
             now,
             now,
         ),
@@ -4903,8 +5007,9 @@ async def add_memory(
         "id": mid,
         "agent_id": normalized_agent,
         "visibility": normalize_visibility(visibility),
-        "source_agent_id": await resolve_source_agent_id_checked(normalized_agent, source_agent_id),
+        "source_agent_id": resolved_source_agent,
         "content": stored_content,
+        "normalized_content": normalized_content,
         "raw_content": raw_text,
         "compressed_content": compressed_text,
         "category": normalized_category,
@@ -4914,7 +5019,7 @@ async def add_memory(
         "temperature": 0.0,
         "last_touched_at": "",
         "touch_count": 0,
-        "expires_at": expires_at or "",
+        "expires_at": expires_value or "",
         "created_at": now,
         "updated_at": now,
     }

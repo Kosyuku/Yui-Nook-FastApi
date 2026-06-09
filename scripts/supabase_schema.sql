@@ -141,6 +141,7 @@ create table if not exists memories (
     visibility text not null default 'private',
     source_agent_id text not null default 'default',
     content text not null,
+    normalized_content text not null default '',
     raw_content text not null default '',
     compressed_content text default '',
     category text not null,
@@ -163,10 +164,13 @@ alter table memories add column if not exists source_agent_id text not null defa
 alter table memories add column if not exists temperature double precision not null default 0;
 alter table memories add column if not exists last_touched_at timestamptz null;
 alter table memories add column if not exists touch_count integer not null default 0;
+alter table memories add column if not exists normalized_content text not null default '';
 
 update memories set visibility = 'private' where coalesce(visibility, '') = '';
 update memories set visibility = 'shared' where visibility = 'restricted';
 update memories set source_agent_id = agent_id where coalesce(source_agent_id, '') = '';
+update memories set normalized_content = lower(regexp_replace(coalesce(nullif(raw_content, ''), content), '[[:space:][:punct:]]+', '', 'g'))
+    where coalesce(normalized_content, '') = '';
 
 create index if not exists idx_memories_category
     on memories(category, updated_at);
@@ -174,6 +178,8 @@ create index if not exists idx_memories_agent_category
     on memories(agent_id, category);
 create index if not exists idx_memories_agent_visibility
     on memories(agent_id, visibility);
+create index if not exists idx_memories_agent_normalized
+    on memories(agent_id, normalized_content);
 create index if not exists idx_memories_agent_created_at
     on memories(agent_id, created_at desc);
 create index if not exists idx_memories_agent_updated_at

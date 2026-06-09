@@ -9,13 +9,16 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from typing import Any
 
 import database as db
-from config import settings
+from consciousness.memory_filter import normalize_memory_text, should_store_memory
 
 logger = logging.getLogger(__name__)
+
+# 相似内容 merge 阈值：归一化后 ratio ≥ 此值且同 tag 视为重复，不重复插入。
+SIMILARITY_MERGE_THRESHOLD = 0.86
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 
@@ -32,16 +35,10 @@ _NOISE_MESSAGE_PATTERNS = (
     r"\b(git\s+(pull|push|status|commit|rebase)|npm\s+run|node\s+--check)\b",
 )
 
-_NOISE_MEMORY_PATTERNS = (
-    r"\b(baked|cooked|sautéed|sauteed)\s+for\s+\d",
-    r"\b(exit code|wall time|total output lines|traceback|stack trace)\b",
-    r"\b(ctrl\+o|domcontentloaded|fetch/xhr|network tab|devtools)\b",
-    r"\b(git\s+(pull|push|status|rebase)|npm\s+run|node\s+--check)\b",
-    r"^\s*(修|改|push|同步|截图|看图|继续|好|嗯|啊|哦|晚安)[~!！。,.，\s]*$",
-)
-
-# 上次提取的检查点 key（per agent，存在 app_settings 里）
-_CHECKPOINT_KEY_PREFIX = "memory_extraction_checkpoint"
+# 每个 session 各自的提取检查点（per agent，存 app_settings，JSON：{session_id: last_message_id}）
+_CHECKPOINTS_KEY_PREFIX = "memory_extraction_checkpoints"
+# 旧版单值检查点 key（向后兼容迁移用）
+_LEGACY_CHECKPOINT_KEY_PREFIX = "memory_extraction_checkpoint"
 # 已写入记忆的 content hash 集合（防短期重复，per agent）
 _SEEN_HASHES_KEY_PREFIX = "memory_extraction_seen_hashes"
 
@@ -117,8 +114,12 @@ USER_PROMPT_TEMPLATE = """\
 
 # ── 内部工具 ──────────────────────────────────────────────────────────────────
 
-def _checkpoint_key(agent_id: str) -> str:
-    return f"{_CHECKPOINT_KEY_PREFIX}:{db.normalize_agent_id(agent_id)}"
+def _checkpoints_key(agent_id: str) -> str:
+    return f"{_CHECKPOINTS_KEY_PREFIX}:{db.normalize_agent_id(agent_id)}"
+
+
+def _legacy_checkpoint_key(agent_id: str) -> str:
+    return f"{_LEGACY_CHECKPOINT_KEY_PREFIX}:{db.normalize_agent_id(agent_id)}"
 
 
 def _seen_hashes_key(agent_id: str) -> str:
@@ -136,13 +137,28 @@ def _is_noise_text(text: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns)
 
 
-async def _load_checkpoint(agent_id: str) -> str:
-    row = await db.get_setting(_checkpoint_key(agent_id))
-    return str(row.get("value") or "") if row else ""
+async def _load_checkpoints(agent_id: str) -> dict[str, str]:
+    """加载每个 session 的提取检查点 {session_id: last_message_id}。"""
+    row = await db.get_setting(_checkpoints_key(agent_id))
+    if row and row.get("value"):
+        try:
+            data = json.loads(row["value"])
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items()}
+        except Exception:
+            pass
+    # 向后兼容：迁移旧版单值检查点（无法对应到具体 session，丢弃即可，
+    # 后续会被新的 per-session map 接管）。
+    legacy = await db.get_setting(_legacy_checkpoint_key(agent_id))
+    if legacy and legacy.get("value"):
+        logger.info("memory_extraction: migrating legacy single checkpoint for %s", agent_id)
+    return {}
 
 
-async def _save_checkpoint(agent_id: str, message_id: str) -> None:
-    await db.set_setting(_checkpoint_key(agent_id), message_id)
+async def _save_checkpoints(agent_id: str, checkpoints: dict[str, str]) -> None:
+    # 只保留最近活跃的 50 个 session，防止无限增长
+    trimmed = dict(list(checkpoints.items())[-50:])
+    await db.set_setting(_checkpoints_key(agent_id), json.dumps(trimmed, ensure_ascii=False))
 
 
 async def _load_seen_hashes(agent_id: str) -> set[str]:
@@ -223,7 +239,7 @@ def _format_existing_memories(memories: list[dict[str, Any]]) -> str:
 
 
 def _validate_item(item: Any) -> dict[str, Any] | None:
-    """校验并规范化单条提取结果。"""
+    """校验并规范化单条提取结果。tag 体系校验在此，入库内容过滤统一走 should_store_memory。"""
     if not isinstance(item, dict):
         return None
     tag = str(item.get("tag") or "").strip().lower()
@@ -231,16 +247,9 @@ def _validate_item(item: Any) -> dict[str, Any] | None:
     if tag not in VALID_TAGS:
         logger.debug("memory_extraction: invalid tag %r, skipping", tag)
         return None
-    if not content or len(content) < 5:
-        return None
-    if len(content) > MAX_EXTRACTED_CONTENT_CHARS:
-        logger.debug("memory_extraction: content too long, skipping: %s", content[:80])
-        return None
-    if _is_noise_text(content, _NOISE_MEMORY_PATTERNS):
-        logger.debug("memory_extraction: noise content, skipping: %s", content[:80])
-        return None
-    if re.search(r"https?://|www\.", content, flags=re.IGNORECASE) and tag not in {"project", "creation"}:
-        logger.debug("memory_extraction: non-project url content, skipping: %s", content[:80])
+    ok, reason = should_store_memory(content, tag=tag, source="extraction")
+    if not ok:
+        logger.debug("memory_extraction: rejected (%s): %s", reason, content[:80])
         return None
     try:
         importance = max(1, min(5, int(item.get("importance") or 3)))
@@ -265,53 +274,91 @@ async def run_memory_extraction(agent_id: str) -> dict[str, Any]:
     result: dict[str, Any] = {
         "extracted": 0,
         "skipped": 0,
+        "merged": 0,
         "messages_used": 0,
+        "sessions_processed": 0,
         "checkpoint_advanced": False,
     }
 
-    # 1. 拉取上次检查点以来的新消息（跨所有 session）
-    checkpoint = await _load_checkpoint(agent_id)
-    recent_sessions = (await db.list_sessions())[:10]
+    normalized_agent = db.normalize_agent_id(agent_id)
+
+    # 1. 只处理「本 agent」的 session，且只取各 session 自己检查点之后的增量消息。
+    #    （隔离：不读其他 agent 的对话；增量：避免每轮重复扫描整段上下文。）
+    checkpoints = await _load_checkpoints(agent_id)
+    all_sessions = await db.list_sessions()
+    agent_sessions = [
+        s for s in all_sessions
+        if db.normalize_agent_id(s.get("agent_id")) == normalized_agent
+    ][:10]
 
     all_new_messages: list[dict[str, Any]] = []
-    latest_msg_id: str = checkpoint
+    new_last_per_session: dict[str, str] = {}
 
-    for session in recent_sessions:
-        sid = session.get("id") or session.get("session_id") or ""
+    for session in agent_sessions:
+        sid = str(session.get("id") or session.get("session_id") or "")
         if not sid:
             continue
-        msgs = await db.get_messages_after(session_id=sid, after_message_id=checkpoint, limit=200)
+        cp = checkpoints.get(sid, "")
+        msgs = await db.get_messages_after(session_id=sid, after_message_id=cp, limit=200)
+        if not msgs:
+            continue
+        # 记录该 session 最后一条消息 id（即便后续按 agent 过滤掉，也要推进 checkpoint）
+        new_last_per_session[sid] = str(msgs[-1].get("id") or cp)
         for m in msgs:
+            # 兜底：丢弃任何不属于本 agent 的消息，绝不跨 agent 入库
+            if db.normalize_agent_id(m.get("agent_id")) != normalized_agent:
+                continue
             m["_session_id"] = sid
-        all_new_messages.extend(msgs)
+            all_new_messages.append(m)
+
+    result["sessions_processed"] = len(new_last_per_session)
 
     if not all_new_messages:
-        logger.info("memory_extraction: no new messages since checkpoint=%s", checkpoint[:8] if checkpoint else "none")
+        logger.info("memory_extraction[%s]: no new messages since last checkpoints", normalized_agent)
+        # 没有可用消息时也推进 checkpoint（可能全是其他 agent 的消息），避免反复扫描
+        if new_last_per_session:
+            checkpoints.update(new_last_per_session)
+            await _save_checkpoints(agent_id, checkpoints)
+            result["checkpoint_advanced"] = True
         return result
 
     # 按时间排序（如果有 created_at）
     all_new_messages.sort(key=lambda m: str(m.get("created_at") or ""))
-
     result["messages_used"] = len(all_new_messages)
-    if all_new_messages:
-        latest_msg_id = str(all_new_messages[-1].get("id") or checkpoint)
 
-    # 2. 拉取已有高重要度记忆（importance >= 3）作为 existing_memories 注入
+    async def _advance_checkpoints() -> None:
+        if new_last_per_session:
+            checkpoints.update(new_last_per_session)
+            await _save_checkpoints(agent_id, checkpoints)
+            result["checkpoint_advanced"] = True
+
+    # 2. 拉取已有记忆：高重要度的注入 prompt；更大一池用于相似去重。
     existing_memories = await db.list_memories(
-        limit=30,
-        agent_id=agent_id,
+        limit=300,
+        agent_id=normalized_agent,
         sort_by="importance",
         order="desc",
         include_cross_agent=False,
     )
     high_importance = [m for m in existing_memories if int(m.get("importance") or 3) >= 3]
 
+    # 已有记忆的去重池：(normalized_content, tag)
+    dedup_pool: list[tuple[str, str]] = []
+    seen_normalized: set[str] = set()
+    for m in existing_memories:
+        norm = normalize_memory_text(db.memory_raw_content(m))
+        if not norm:
+            continue
+        seen_normalized.add(norm)
+        dedup_pool.append((norm, str(m.get("tags") or m.get("category") or "")))
+
     # 3. 构建 prompt
     conversation_text = _format_messages_for_prompt(all_new_messages[:80])  # 最多 80 条
     existing_text = _format_existing_memories(high_importance[:20])
 
     if not conversation_text.strip():
-        logger.info("memory_extraction: no usable message content")
+        logger.info("memory_extraction[%s]: no usable message content", normalized_agent)
+        await _advance_checkpoints()
         return result
 
     user_prompt = USER_PROMPT_TEMPLATE.format(
@@ -328,20 +375,23 @@ async def run_memory_extraction(agent_id: str) -> dict[str, Any]:
         from consciousness import _collect_consciousness_text
         raw_output = await _collect_consciousness_text(messages, temperature=0.1)
     except Exception as exc:
-        logger.warning("memory_extraction: model call failed: %s", exc)
+        # 模型失败不推进 checkpoint，下次重试这批消息
+        logger.warning("memory_extraction[%s]: model call failed: %s", normalized_agent, exc)
         return result
 
     if not raw_output:
-        logger.info("memory_extraction: model returned empty output")
+        logger.info("memory_extraction[%s]: model returned empty output", normalized_agent)
+        await _advance_checkpoints()
         return result
 
     # 5. 解析
     items = _parse_extraction_result(raw_output)
     if not isinstance(items, list):
-        logger.warning("memory_extraction: could not parse JSON array from model output: %.200s", raw_output)
+        logger.warning("memory_extraction[%s]: could not parse JSON array: %.200s", normalized_agent, raw_output)
+        await _advance_checkpoints()
         return result
 
-    logger.info("memory_extraction: model returned %d candidates", len(items))
+    logger.info("memory_extraction[%s]: model returned %d candidates", normalized_agent, len(items))
 
     # 6. 去重 + 写入
     seen_hashes = await _load_seen_hashes(agent_id)
@@ -352,40 +402,82 @@ async def run_memory_extraction(agent_id: str) -> dict[str, Any]:
             result["skipped"] += 1
             continue
 
-        h = _content_hash(item["content"])
+        content = item["content"]
+        tag = item["tag"]
+        norm = normalize_memory_text(content)
+
+        # 6a. 精确去重（归一化内容相同）
+        if norm and norm in seen_normalized:
+            logger.debug("memory_extraction: exact-duplicate, skipping: %s", content[:60])
+            result["merged"] += 1
+            continue
+        h = _content_hash(content)
         if h in seen_hashes:
-            logger.debug("memory_extraction: skipping duplicate content hash %s", h)
-            result["skipped"] += 1
+            result["merged"] += 1
             continue
 
+        # 6b. 相似去重（同 tag 且 ratio ≥ 阈值视为重复，不重复插入）
+        if _is_similar_to_pool(norm, tag, dedup_pool):
+            logger.debug("memory_extraction: similar-duplicate, skipping: %s", content[:60])
+            result["merged"] += 1
+            continue
+
+        # 6c. 写入（统一过滤 + DB 级精确去重在 add_memory 内）。
+        #     scope=source=当前 agent，绝不混用其他 agent。
         try:
             await db.add_memory(
-                content=item["content"],
-                category=item["tag"],
-                raw_content=item["content"],
+                content=content,
+                category=tag,
+                raw_content=content,
                 importance=item["importance"],
                 source="extraction",
-                agent_id=agent_id,
-                tags=item["tag"],
+                agent_id=normalized_agent,
+                source_agent_id=normalized_agent,
+                visibility="private",
+                tags=tag,
+                apply_filter=True,
             )
-            seen_hashes.add(h)
-            result["extracted"] += 1
-            logger.info(
-                "memory_extraction: wrote [%s/imp%d] %s",
-                item["tag"], item["importance"], item["content"][:60],
-            )
+        except db.MemoryRejected as exc:
+            logger.debug("memory_extraction: filtered (%s): %s", exc.reason, content[:60])
+            result["skipped"] += 1
+            continue
         except Exception as exc:
             logger.warning("memory_extraction: failed to write memory: %s", exc)
             result["skipped"] += 1
+            continue
 
-    # 7. 保存状态
+        if norm:
+            seen_normalized.add(norm)
+            dedup_pool.append((norm, tag))
+        seen_hashes.add(h)
+        result["extracted"] += 1
+        logger.info("memory_extraction: wrote [%s/imp%d] %s", tag, item["importance"], content[:60])
+
+    # 7. 保存状态 + 推进 checkpoint
     await _save_seen_hashes(agent_id, seen_hashes)
-    if latest_msg_id and latest_msg_id != checkpoint:
-        await _save_checkpoint(agent_id, latest_msg_id)
-        result["checkpoint_advanced"] = True
+    await _advance_checkpoints()
 
     logger.info(
-        "memory_extraction: done extracted=%d skipped=%d messages=%d",
-        result["extracted"], result["skipped"], result["messages_used"],
+        "memory_extraction[%s]: done extracted=%d merged=%d skipped=%d messages=%d sessions=%d",
+        normalized_agent, result["extracted"], result["merged"],
+        result["skipped"], result["messages_used"], result["sessions_processed"],
     )
     return result
+
+
+def _is_similar_to_pool(normalized: str, tag: str, pool: list[tuple[str, str]]) -> bool:
+    """与去重池中同 tag 的条目比对，归一化文本相似度 ≥ 阈值则判为重复。"""
+    if not normalized:
+        return False
+    matcher = SequenceMatcher()
+    matcher.set_seq2(normalized)
+    for pool_norm, pool_tag in pool:
+        if pool_tag and tag and pool_tag != tag:
+            continue
+        # 长度差异过大直接跳过，省去昂贵比对
+        if abs(len(pool_norm) - len(normalized)) > max(len(normalized), 1) * 0.5:
+            continue
+        matcher.set_seq1(pool_norm)
+        if matcher.ratio() >= SIMILARITY_MERGE_THRESHOLD:
+            return True
+    return False
