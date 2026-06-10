@@ -3132,11 +3132,18 @@ async def promote_memory_candidate(
 
 
 @extra_api.delete("/consciousness/memory-candidates/{log_id}")
-async def dismiss_memory_candidate(log_id: str):
+async def dismiss_memory_candidate(
+    log_id: str,
+    agent_id: Optional[str] = Query(None),
+):
     """忽略候选：标记 cot_log status=dismissed，不写入 memory。"""
+    rows = await db.list_memory_candidates(agent_id=agent_id, status="candidate", limit=100)
+    row = next((r for r in rows if str(r.get("id") or "") == log_id), None)
+    if not row:
+        raise HTTPException(status_code=404, detail="候选不存在或已处理")
     ok = await db.update_cot_log_status(log_id, "dismissed")
     if not ok:
-        raise HTTPException(status_code=404, detail="候选不存在")
+        raise HTTPException(status_code=404, detail="候选不存在或已处理")
     return {"ok": True}
 
 
