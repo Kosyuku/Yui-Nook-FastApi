@@ -2002,9 +2002,13 @@ async def _store_embedding(memory_id: str, content: str, embedding: list[float])
 
 
 async def _delete_embedding(memory_id: str) -> None:
-    db = await get_db()
-    await db.execute("DELETE FROM memory_embeddings WHERE memory_id = ?", (memory_id,))
-    await db.commit()
+    # 本地 embedding 缓存清理是 best-effort：失败也不能让记忆删除本身报错。
+    try:
+        db = await get_db()
+        await db.execute("DELETE FROM memory_embeddings WHERE memory_id = ?", (memory_id,))
+        await db.commit()
+    except Exception as exc:
+        logger.warning("Failed to delete local embedding cache for %s: %s", memory_id, exc)
 
 
 async def _ensure_memory_embedding(memory_id: str, content: str) -> list[float] | None:
@@ -2404,13 +2408,8 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     )
     if not await _sqlite_column_exists(db, "memory_logs", "agent_id"):
         await db.execute("ALTER TABLE memory_logs ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'")
-    await db.execute(
-        """
-        UPDATE memory_logs
-        SET agent_id = COALESCE((SELECT agent_id FROM memories WHERE memories.id = memory_logs.memory_id), 'default')
-        WHERE COALESCE(agent_id, '') = ''
-        """
-    )
+    # memories 的列要先补齐：下面 memory_logs 的回填 UPDATE 会读 memories.agent_id，
+    # 必须保证该列已存在（否则旧库会报 "no such column: agent_id"）。
     if not await _sqlite_column_exists(db, "memories", "agent_id"):
         alter_statements.append("ALTER TABLE memories ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'")
     if not await _sqlite_column_exists(db, "memories", "visibility"):
@@ -2429,6 +2428,13 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
         await db.execute(stmt)
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_memories_agent_normalized ON memories(agent_id, normalized_content)"
+    )
+    await db.execute(
+        """
+        UPDATE memory_logs
+        SET agent_id = COALESCE((SELECT agent_id FROM memories WHERE memories.id = memory_logs.memory_id), 'default')
+        WHERE COALESCE(agent_id, '') = ''
+        """
     )
     if not await _sqlite_column_exists(db, "companion_state", "agent_id"):
         await db.execute("ALTER TABLE companion_state ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'")
