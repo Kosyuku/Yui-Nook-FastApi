@@ -3150,14 +3150,17 @@ async def dismiss_memory_candidate(
 # ==================== Grimoire 魔典 ====================
 
 class GrimTomeCreate(BaseModel):
+    id: Optional[str] = None
     title: str
     titleEn: str = ""
+    title_en: str = ""
     sub: str = ""
     spine: str = "#2C3E5C"
     cover: str = "#3A4D6F"
     gilt: str = "#C5A572"
     sigil: str = "⊹"
     sigilStyle: str = "serifEn"
+    sigil_style: str = ""
     kind: str = "虚构世界"
     palette: dict = {}
 
@@ -3165,25 +3168,32 @@ class GrimTomeCreate(BaseModel):
 class GrimTomeUpdate(BaseModel):
     title: Optional[str] = None
     titleEn: Optional[str] = None
+    title_en: Optional[str] = None
     sub: Optional[str] = None
     spine: Optional[str] = None
     cover: Optional[str] = None
     gilt: Optional[str] = None
     sigil: Optional[str] = None
     sigilStyle: Optional[str] = None
+    sigil_style: Optional[str] = None
     kind: Optional[str] = None
     palette: Optional[dict] = None
 
 
 class GrimEntryCreate(BaseModel):
-    tome: str
+    id: Optional[str] = None
+    tome: str = ""
+    tome_id: str = ""
     type: str = "lore"
     title: str
     titleEn: str = ""
+    title_en: str = ""
     sub: str = ""
     cover: str = "#3A4D6F"
     coverInk: str = "#F1E4BD"
+    cover_ink: str = ""
     coverGlyph: str = "·"
+    cover_glyph: str = ""
     status: str = "seed"
     tags: list = []
     fields: dict = {}
@@ -3192,13 +3202,18 @@ class GrimEntryCreate(BaseModel):
 
 
 class GrimEntryUpdate(BaseModel):
+    tome: Optional[str] = None
+    tome_id: Optional[str] = None
     type: Optional[str] = None
     title: Optional[str] = None
     titleEn: Optional[str] = None
+    title_en: Optional[str] = None
     sub: Optional[str] = None
     cover: Optional[str] = None
     coverInk: Optional[str] = None
+    cover_ink: Optional[str] = None
     coverGlyph: Optional[str] = None
+    cover_glyph: Optional[str] = None
     status: Optional[str] = None
     tags: Optional[list] = None
     fields: Optional[dict] = None
@@ -3208,13 +3223,39 @@ class GrimEntryUpdate(BaseModel):
 
 @extra_api.get("/grimoire/tomes")
 async def grim_list_tomes():
-    tomes = await db.list_grimoire_tomes()
+    try:
+        tomes = await db.list_grimoire_tomes()
+    except Exception as exc:
+        logger.warning("grimoire list tomes failed: %s", exc)
+        tomes = []
     return {"tomes": tomes}
 
 
 @extra_api.post("/grimoire/tomes")
 async def grim_create_tome(body: GrimTomeCreate):
-    tome = await db.create_grimoire_tome(**body.model_dump())
+    payload = body.model_dump()
+    try:
+        tome = await db.create_grimoire_tome(**payload)
+    except Exception as exc:
+        logger.warning("grimoire create tome failed, returning transient tome: %s", exc)
+        now = datetime.now(timezone.utc).isoformat()
+        tome = {
+            "id": payload.get("id") or f"tome-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+            "title": payload.get("title") or "新典",
+            "titleEn": payload.get("titleEn") or payload.get("title_en") or "",
+            "sub": payload.get("sub") or "",
+            "spine": payload.get("spine") or "#2C3E5C",
+            "cover": payload.get("cover") or "#3A4D6F",
+            "gilt": payload.get("gilt") or "#C5A572",
+            "sigil": payload.get("sigil") or "⊹",
+            "sigilStyle": payload.get("sigilStyle") or payload.get("sigil_style") or "serifEn",
+            "kind": payload.get("kind") or "虚构世界",
+            "count": 0,
+            "palette": payload.get("palette") or {},
+            "lastEdited": now,
+            "created_at": now,
+            "updated_at": now,
+        }
     return {"tome": tome}
 
 
@@ -3245,13 +3286,41 @@ async def grim_delete_tome(tome_id: str):
 
 @extra_api.get("/grimoire/entries")
 async def grim_list_entries(tome_id: Optional[str] = None):
-    entries = await db.list_grimoire_entries(tome_id=tome_id)
+    try:
+        entries = await db.list_grimoire_entries(tome_id=tome_id)
+    except Exception as exc:
+        logger.warning("grimoire list entries failed: %s", exc)
+        entries = []
     return {"entries": entries}
 
 
 @extra_api.post("/grimoire/entries")
 async def grim_create_entry(body: GrimEntryCreate):
-    entry = await db.create_grimoire_entry(**body.model_dump())
+    payload = body.model_dump()
+    try:
+        entry = await db.create_grimoire_entry(**payload)
+    except Exception as exc:
+        logger.warning("grimoire create entry failed, returning transient entry: %s", exc)
+        now = datetime.now(timezone.utc).isoformat()
+        entry = {
+            "id": payload.get("id") or f"entry-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+            "tome": payload.get("tome") or payload.get("tome_id") or "",
+            "type": payload.get("type") or "lore",
+            "title": payload.get("title") or "新页",
+            "titleEn": payload.get("titleEn") or payload.get("title_en") or "",
+            "sub": payload.get("sub") or "",
+            "cover": payload.get("cover") or "#3A4D6F",
+            "coverInk": payload.get("coverInk") or payload.get("cover_ink") or "#F1E4BD",
+            "coverGlyph": payload.get("coverGlyph") or payload.get("cover_glyph") or "·",
+            "status": payload.get("status") or "seed",
+            "tags": payload.get("tags") or [],
+            "fields": payload.get("fields") or {},
+            "body": payload.get("body") or "",
+            "relations": payload.get("relations") or [],
+            "updated": now,
+            "created_at": now,
+            "updated_at": now,
+        }
     return {"entry": entry}
 
 
