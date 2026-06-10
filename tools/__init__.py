@@ -11,6 +11,7 @@ This module exposes:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -20,6 +21,7 @@ from typing import Any, Callable
 import database as db
 import media_storage
 from config import settings
+from yui_app_tool_registry import register_app_tools
 
 logger = logging.getLogger(__name__)
 
@@ -42,18 +44,21 @@ async def execute_add_memory(args: dict) -> str:
     category = args.get("category")
     tags = args.get("tags", "")
     try:
-        res = await db.add_memory(
-            content=content,
-            raw_content=args.get("raw_content") or content,
-            category=category,
-            tags=tags,
-            source=args.get("source") or "agent_tool",
-            agent_id=args.get("agent_id"),
-            visibility=args.get("visibility") or "private",
-            source_agent_id=args.get("source_agent_id") or args.get("agent_id"),
-            importance=args.get("importance"),
-            expires_at=args.get("expires_at"),
-        )
+        kwargs = {
+            "content": content,
+            "raw_content": args.get("raw_content") or content,
+            "category": category,
+            "tags": tags,
+            "source": args.get("source") or "agent_tool",
+            "agent_id": args.get("agent_id"),
+            "visibility": args.get("visibility") or "private",
+            "source_agent_id": args.get("source_agent_id") or args.get("agent_id"),
+            "importance": args.get("importance"),
+            "expires_at": args.get("expires_at"),
+        }
+        if "apply_filter" in inspect.signature(db.add_memory).parameters:
+            kwargs["apply_filter"] = bool(args.get("apply_filter", True))
+        res = await db.add_memory(**kwargs)
         return json.dumps({"status": "success", "memory_id": res["id"]}, ensure_ascii=False)
     except Exception as exc:
         return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
@@ -287,6 +292,7 @@ TOOLS_SCHEMA = [
                     "visibility": {"type": "string", "enum": ["private", "shared", "global"]},
                     "source_agent_id": {"type": "string", "description": "original source agent id"},
                     "source": {"type": "string", "description": "write source label"},
+                    "apply_filter": {"type": "boolean", "description": "apply memory quality filter; defaults to true"},
                 },
                 "required": ["content", "category"],
             },
@@ -707,6 +713,9 @@ def register_tool(schema: dict, executor: Callable):
     name = schema["function"]["name"]
     TOOL_EXECUTORS[name] = executor
     logger.info("Tool registered: %s", name)
+
+
+register_app_tools(register_tool, set(TOOL_EXECUTORS))
 
 
 async def execute_tool_with_guard(name: str, args: dict) -> str:
