@@ -2161,6 +2161,13 @@ async def _generate_memory_compressed_content(raw_content: str) -> str | None:
             return None
         if len(compressed) > 240:
             compressed = compressed[:240].rstrip()
+        # summary 模型可能把推理旁白（"Let me first search…"）当输出流出来；
+        # 用统一 gate 兜底，过程/自我解释文本一律丢弃，让前端回退显示干净的 content。
+        from consciousness.memory_filter import should_store_memory
+        ok, reason = should_store_memory(compressed)
+        if not ok:
+            logger.info("memory compression rejected (%s): %s", reason, compressed[:80])
+            return None
         return compressed
     except Exception as exc:
         logger.warning("Async memory compression generation failed: %s", exc)

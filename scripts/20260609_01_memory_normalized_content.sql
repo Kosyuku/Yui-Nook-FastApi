@@ -3,11 +3,17 @@
 
 alter table memories add column if not exists normalized_content text not null default '';
 
--- Backfill canonical form: lowercased, whitespace + punctuation stripped.
--- Mirrors consciousness.memory_filter.normalize_memory_text().
+-- Backfill canonical form: lowercased, whitespace + ASCII/CJK punctuation stripped.
+-- Mirrors consciousness.memory_filter.normalize_memory_text() (CJK punctuation
+-- is listed explicitly so backfilled rows match the app-layer normalization even
+-- if the DB locale does not classify full-width punctuation as [:punct:]).
 update memories
 set normalized_content = lower(
-        regexp_replace(coalesce(nullif(raw_content, ''), content), '[[:space:][:punct:]]+', '', 'g')
+        regexp_replace(
+            coalesce(nullif(raw_content, ''), content),
+            '[[:space:][:punct:]，。、；：“”‘’！？…—·（）《》【】]+',
+            '', 'g'
+        )
     )
 where coalesce(normalized_content, '') = '';
 
