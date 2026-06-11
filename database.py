@@ -4857,6 +4857,28 @@ def _memory_normalize_content(text: str) -> str:
     return normalize_memory_text(text)
 
 
+def _sanitize_memory_role_labels(text: str) -> str:
+    value = re.sub(r"\s+", " ", str(text or "").strip())
+    if not value:
+        return ""
+    replacements = [
+        (r"(?:用户|使用者|User)\s*(?:和|与|及|、|/)\s*(?:助手|助理|Assistant)", "双方"),
+        (r"(?:助手|助理|Assistant)\s*(?:和|与|及|、|/)\s*(?:用户|使用者|User)", "双方"),
+        (r"用户\s*对\s*助手", "对当前角色"),
+        (r"用户\s*称呼\s*助手", "称呼当前角色"),
+        (r"用户\s*希望\s*助手", "希望当前角色"),
+        (r"用户\s*要求\s*助手", "要求当前角色"),
+    ]
+    for pattern, replacement in replacements:
+        value = re.sub(pattern, replacement, value, flags=re.IGNORECASE)
+    value = re.sub(r"^(?:用户|使用者|User|助手|助理|Assistant)\s*[：:，,、-]\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^(?:用户|使用者|User)\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^(?:助手|助理|Assistant)\s*", "当前角色", value, flags=re.IGNORECASE)
+    value = re.sub(r"(?:用户|使用者|User)", "对方", value, flags=re.IGNORECASE)
+    value = re.sub(r"(?:助手|助理|Assistant)", "当前角色", value, flags=re.IGNORECASE)
+    return value.strip(" ，,。")
+
+
 def _memory_filter_candidate(content: str, *, tag: str = "", source: str = "") -> None:
     """Raise MemoryRejected if an automatic-source candidate should not be stored."""
     from consciousness.memory_filter import should_store_memory
@@ -4946,9 +4968,9 @@ async def add_memory(
         purpose="add_memory",
     )
     normalized_category = normalize_memory_category(category)
-    stored_content = (content or "").strip()
-    raw_text = (raw_content if raw_content is not None else stored_content).strip()
-    compressed_text = (compressed_content or "").strip()
+    stored_content = _sanitize_memory_role_labels(content)
+    raw_text = _sanitize_memory_role_labels(raw_content if raw_content is not None else stored_content)
+    compressed_text = _sanitize_memory_role_labels(compressed_content)
     if not stored_content:
         stored_content = raw_text or compressed_text
     importance_value = max(1, min(5, int(importance or 3)))

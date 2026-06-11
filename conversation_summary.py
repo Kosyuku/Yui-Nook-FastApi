@@ -215,6 +215,8 @@ async def _run_memory_summarizer(
             ) + (
                 "You extract only durable long-term memories from dialogue. "
                 "Ignore transient emotions, one-off chatter, and unstable details. "
+                "Write memory content directly, without role labels like 用户, 助手, user, or assistant. "
+                "Use natural phrasing such as 今天没去上班 or 称呼当前角色为 Az. "
                 "Return strict JSON only: {\"memories\": [...]}."
             ),
         },
