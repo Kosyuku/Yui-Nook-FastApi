@@ -799,6 +799,62 @@ async def _module_list_items(module: str, status: str, type: str, agent_id: str,
     return _ok(items=items, count=len(items))
 
 
+def _folio_media_book_as_item(book: dict[str, Any]) -> dict[str, Any]:
+    metadata = book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
+    return {
+        "id": f"media:{book.get('id')}",
+        "source": "media",
+        "target_module": "folio",
+        "status": "accepted",
+        "type": "book",
+        "title": book.get("title") or metadata.get("original_filename") or book.get("storage_key") or "Untitled book",
+        "content": "",
+        "source_excerpt": book.get("storage_key") or "",
+        "agent_id": book.get("agent_id") or "",
+        "metadata": {
+            **metadata,
+            "media_item_id": book.get("id"),
+            "owner_type": book.get("owner_type") or "",
+            "storage_provider": book.get("storage_provider") or "",
+            "storage_key": book.get("storage_key") or "",
+            "mime_type": book.get("mime_type") or "",
+            "size_bytes": book.get("size_bytes"),
+        },
+        "created_at": book.get("created_at") or "",
+        "updated_at": book.get("updated_at") or "",
+    }
+
+
+async def _folio_list_items(status: str, type: str, agent_id: str, limit: int, offset: int) -> str:
+    extracted_items = await db.list_extracted_items(
+        status=status or None,
+        type=type or None,
+        target_module="folio",
+        agent_id=agent_id or None,
+        limit=limit,
+        offset=offset,
+    )
+    normalized_type = str(type or "").strip().lower()
+    normalized_status = str(status or "").strip().lower()
+    include_books = normalized_type in {"", "book", "books", "novel", "text"} and normalized_status in {"", "accepted"}
+    media_books: list[dict[str, Any]] = []
+    if include_books:
+        media_books = await db.list_media_items(
+            type="book",
+            limit=limit,
+        )
+    book_items = [_folio_media_book_as_item(book) for book in media_books]
+    items = [*book_items, *extracted_items]
+    return _ok(
+        items=items,
+        count=len(items),
+        books=media_books,
+        book_count=len(media_books),
+        extracted_items=extracted_items,
+        extracted_count=len(extracted_items),
+    )
+
+
 async def _module_create_item(
     module: str,
     title: str,
@@ -858,9 +914,9 @@ async def inbox_create_item(
 
 @mcp.tool(name="folio.list_items")
 async def folio_list_items(status: str = "", type: str = "", agent_id: str = "", limit: int = 50, offset: int = 0) -> str:
-    """List extracted items routed to Folio."""
+    """List Folio items, including extracted notes and R2-backed book media."""
     try:
-        return await _module_list_items("folio", status, type, agent_id, limit, offset)
+        return await _folio_list_items(status, type, agent_id, limit, offset)
     except Exception as exc:
         logger.exception("folio.list_items failed")
         return _err(str(exc))
@@ -950,10 +1006,12 @@ async def drift_create_item(
 async def media_list_items(type: str = "", owner_type: str = "", agent_id: str = "", limit: int = 100) -> str:
     """List media items used by Perle/Folio-style apps."""
     try:
+        normalized_owner = str(owner_type or "").strip().lower()
+        query_agent_id = (agent_id or None) if normalized_owner == "agent" else None
         items = await db.list_media_items(
             type=type or None,
             owner_type=owner_type or None,
-            agent_id=agent_id or None,
+            agent_id=query_agent_id,
             limit=limit,
         )
         return _ok(items=items, count=len(items))
