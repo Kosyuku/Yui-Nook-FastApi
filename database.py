@@ -7658,7 +7658,7 @@ async def list_extracted_items(
         if target_module:
             filters["target_module"] = f"eq.{target_module}"
         if agent_id:
-            filters["agent_id"] = f"eq.{agent_id}"
+            filters["or"] = f"(agent_id.eq.{agent_id},agent_id.is.null,agent_id.eq.)"
         rows = await _supabase_select(
             settings.supabase_extracted_items_table,
             filters=filters or None,
@@ -7680,7 +7680,7 @@ async def list_extracted_items(
         clauses.append("target_module = ?")
         params.append(target_module)
     if agent_id:
-        clauses.append("agent_id = ?")
+        clauses.append("(agent_id = ? OR agent_id IS NULL OR agent_id = '')")
         params.append(agent_id)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params += [limit, offset]
