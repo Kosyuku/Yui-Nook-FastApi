@@ -15,7 +15,7 @@ import inspect
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import database as db
@@ -27,10 +27,15 @@ logger = logging.getLogger(__name__)
 
 
 async def execute_get_current_time(args: dict) -> str:
-    now = datetime.now()
+    timezone_name = "Asia/Shanghai"
+    now = datetime.now(timezone(timedelta(hours=8)))
     weekday_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    display = f"北京时间 {now.year}年{now.month}月{now.day}日 {now:%H:%M}"
     return json.dumps(
         {
+            "datetime": now.isoformat(timespec="seconds"),
+            "timezone": timezone_name,
+            "display": display,
             "current_time": now.isoformat(),
             "weekday": weekday_cn[now.weekday()],
             "formatted": now.strftime("%Y年%m月%d日 %H:%M"),
@@ -270,7 +275,7 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "get_current_time",
-            "description": "Get server local date/time and weekday.",
+            "description": "Get the current Beijing time in Asia/Shanghai with timezone metadata.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
