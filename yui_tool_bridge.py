@@ -1101,6 +1101,47 @@ async def media_delete_item(item_id: str) -> str:
         return _err(str(exc))
 
 
+@mcp.tool(name="voice.speak")
+async def voice_speak(
+    text: str,
+    agent_id: str = "",
+    session_id: str = "",
+    voice_id: str = "",
+    emotion: str = "",
+    speed: float | None = None,
+    speaker: str = "",
+    output_format: str = "",
+) -> str:
+    """Synthesize text into speech and return an audioUrl."""
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        return _err("text is required")
+    import voice as voice_service
+
+    try:
+        result = await voice_service.speak_text(
+            text=clean_text,
+            agent_id=agent_id or None,
+            session_id=session_id or None,
+            voice_id=voice_id or None,
+            emotion=emotion or None,
+            speed=speed,
+            speaker=speaker or None,
+            output_format=output_format or None,
+        )
+        return _ok(text=clean_text, agent_id=agent_id or None, session_id=session_id or None, **result)
+    except voice_service.VoiceConfigError as exc:
+        return _err(str(exc), reason="voice_not_configured")
+    except voice_service.VoiceServiceError as exc:
+        return _err(str(exc), reason="voice_service_failed")
+    except Exception as exc:
+        logger.exception("voice.speak failed")
+        return _err(str(exc))
+
+
+send_voice = voice_speak
+
+
 @mcp.tool(name="moments.list_posts")
 async def moments_list_posts(limit: int = 100, viewer_id: str = "", viewer_type: str = "user") -> str:
     """List visible Moments posts."""

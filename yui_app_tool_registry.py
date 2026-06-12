@@ -53,6 +53,8 @@ APP_TOOL_ALIASES = [
     "media_create_item",
     "media_update_item",
     "media_delete_item",
+    "voice_speak",
+    "send_voice",
     "moments_list_posts",
     "moments_get_post",
     "moments_create_post",
