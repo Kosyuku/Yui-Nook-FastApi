@@ -1058,6 +1058,24 @@ async def chat(body: ChatRequest):
                     except Exception as ex:
                         result = jsonlib.dumps({"error": str(ex)})
 
+                    # 语音工具：把 audioUrl 单独推给前端渲染成语音条；
+                    # 并把喂回模型的结果换成短说明，避免巨大的 data URL 污染上下文。
+                    if func_name in {"voice_speak", "send_voice", "voice.speak"} and isinstance(result, str):
+                        try:
+                            voice_payload = jsonlib.loads(result)
+                        except Exception:
+                            voice_payload = {}
+                        audio_url = str(voice_payload.get("audioUrl") or "")
+                        if voice_payload.get("success") and audio_url:
+                            yield {
+                                "event": "voice",
+                                "data": jsonlib.dumps({
+                                    "audioUrl": audio_url,
+                                    "mimeType": voice_payload.get("mimeType") or "audio/mpeg",
+                                }, ensure_ascii=False),
+                            }
+                            result = jsonlib.dumps({"success": True, "note": "voice message delivered"}, ensure_ascii=False)
+
                     # 控制工具返回长度，避免工具输出污染上下文并拉高 token 成本
                     if isinstance(result, str):
                         max_chars = max(80, settings.tool_result_max_chars)
