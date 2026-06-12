@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS messages (
     agent_id    TEXT NOT NULL DEFAULT 'default',
     role        TEXT NOT NULL,
     content     TEXT NOT NULL,
+    voice_url   TEXT DEFAULT '',
     model       TEXT DEFAULT '',
     created_at  TEXT NOT NULL
 );
@@ -2390,6 +2391,8 @@ async def _ensure_sqlite_memory_schema(db: aiosqlite.Connection) -> None:
     await db.execute("UPDATE sessions SET agent_id = 'default' WHERE COALESCE(agent_id, '') = ''")
     if not await _sqlite_column_exists(db, "messages", "agent_id"):
         await db.execute("ALTER TABLE messages ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'")
+    if not await _sqlite_column_exists(db, "messages", "voice_url"):
+        await db.execute("ALTER TABLE messages ADD COLUMN voice_url TEXT DEFAULT ''")
     await db.execute(
         """
         UPDATE messages
@@ -4165,9 +4168,11 @@ async def add_message(
     model: str = "",
     *,
     agent_id: str | None = None,
+    voice_url: str = "",
 ) -> dict[str, Any]:
     session = await get_session(session_id)
     resolved_agent_id = normalize_agent_id(agent_id or (session or {}).get("agent_id"))
+    clean_voice_url = str(voice_url or "").strip()
     if _use_supabase_data():
         mid = _new_id()
         now = _now()
@@ -4180,15 +4185,20 @@ async def add_message(
             "model": model,
             "created_at": now,
         }
+        if clean_voice_url:
+            payload["voice_url"] = clean_voice_url
         row = await _supabase_insert_verified(settings.supabase_messages_table, payload)
         await _supabase_update(settings.supabase_sessions_table, {"id": f"eq.{session_id}"}, {"updated_at": now})
+        if clean_voice_url:
+            row.setdefault("voice_url", clean_voice_url)
+            row.setdefault("voiceUrl", clean_voice_url)
         return row
     db = await get_db()
     mid = _new_id()
     now = _now()
     await db.execute(
-        "INSERT INTO messages (id, session_id, agent_id, role, content, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (mid, session_id, resolved_agent_id, role, content, model, now),
+        "INSERT INTO messages (id, session_id, agent_id, role, content, voice_url, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (mid, session_id, resolved_agent_id, role, content, clean_voice_url, model, now),
     )
     # update session time
     await db.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
@@ -4199,26 +4209,35 @@ async def add_message(
         "agent_id": resolved_agent_id,
         "role": role,
         "content": content,
+        "voice_url": clean_voice_url,
+        "voiceUrl": clean_voice_url,
         "model": model,
         "created_at": now,
     }
 
 
 async def get_messages(session_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    def expose_voice_url(row: dict[str, Any]) -> dict[str, Any]:
+        voice_url = str(row.get("voiceUrl") or row.get("voice_url") or "").strip()
+        if voice_url:
+            row["voiceUrl"] = voice_url
+        return row
+
     if _use_supabase_data():
-        return await _supabase_select(
+        rows = await _supabase_select(
             settings.supabase_messages_table,
             filters={"session_id": f"eq.{session_id}"},
             order="created_at.asc",
             limit=limit,
         )
+        return [expose_voice_url(dict(row)) for row in rows]
     db = await get_db()
     cursor = await db.execute(
         "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?",
         (session_id, limit),
     )
     rows = await cursor.fetchall()
-    return [dict(row) for row in rows]
+    return [expose_voice_url(dict(row)) for row in rows]
 
 
 async def delete_message(message_id: str) -> bool:

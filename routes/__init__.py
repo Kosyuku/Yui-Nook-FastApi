@@ -910,6 +910,7 @@ async def chat(body: ChatRequest):
             current_messages = [{"role": "system", "content": system_prompt}] + recent.copy()
         reasoning_buffer: list[str] = []
         usage_info = {"status": "not available"}
+        persisted_voice_url = ""
 
         while True:
             full_response = []
@@ -1067,6 +1068,7 @@ async def chat(body: ChatRequest):
                             voice_payload = {}
                         audio_url = str(voice_payload.get("audioUrl") or "")
                         if voice_payload.get("success") and audio_url:
+                            persisted_voice_url = audio_url
                             yield {
                                 "event": "voice",
                                 "data": jsonlib.dumps({
@@ -1108,6 +1110,7 @@ async def chat(body: ChatRequest):
                     complete_text,
                     model=f"{model_info.get('provider', '?')}/{model_info.get('model', '?')}",
                     agent_id=resolved_agent_id,
+                    voice_url=persisted_voice_url,
                 )
                 if settings.conversation_partitions_enabled:
                     try:
