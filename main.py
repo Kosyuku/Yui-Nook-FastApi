@@ -22,6 +22,7 @@ from models import init_router
 from routes import api
 import routes
 from routes.extra import extra_api
+from routes.openai_compat import v1_api
 from tools import init_external_tools
 
 logging.basicConfig(
@@ -91,6 +92,7 @@ async def gateway_auth(request: Request, call_next):
 
 app.include_router(api)
 app.include_router(extra_api)
+app.include_router(v1_api)
 
 
 @app.get("/api/health")
