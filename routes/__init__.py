@@ -1042,6 +1042,7 @@ async def chat(body: ChatRequest):
                     raw_args = tc["function"]["arguments"]
                     call_id = tc["id"]
 
+                    tool_status = "done"
                     try:
                         args = jsonlib.loads(raw_args) if raw_args else {}
                         if func_name in TOOL_EXECUTORS:
@@ -1050,13 +1051,11 @@ async def chat(body: ChatRequest):
                                 "data": jsonlib.dumps({"name": func_name, "status": "running"}, ensure_ascii=False),
                             }
                             result = await execute_tool_with_guard(func_name, args)
-                            yield {
-                                "event": "tool_call",
-                                "data": jsonlib.dumps({"name": func_name, "status": "done"}, ensure_ascii=False),
-                            }
                         else:
+                            tool_status = "error"
                             result = jsonlib.dumps({"error": f"Tool {func_name} not found"})
                     except Exception as ex:
+                        tool_status = "error"
                         result = jsonlib.dumps({"error": str(ex)})
 
                     # 语音工具：把 audioUrl 单独推给前端渲染成语音条；
@@ -1077,6 +1076,23 @@ async def chat(body: ChatRequest):
                                 }, ensure_ascii=False),
                             }
                             result = jsonlib.dumps({"success": True, "note": "voice message delivered"}, ensure_ascii=False)
+                        else:
+                            tool_status = "error"
+                            voice_error = str(
+                                voice_payload.get("error")
+                                or voice_payload.get("message")
+                                or voice_payload.get("detail")
+                                or "voice synthesis failed"
+                            )
+                            yield {
+                                "event": "voice",
+                                "data": jsonlib.dumps({"error": voice_error}, ensure_ascii=False),
+                            }
+
+                    yield {
+                        "event": "tool_call",
+                        "data": jsonlib.dumps({"name": func_name, "status": tool_status}, ensure_ascii=False),
+                    }
 
                     # 控制工具返回长度，避免工具输出污染上下文并拉高 token 成本
                     if isinstance(result, str):
@@ -1092,7 +1108,7 @@ async def chat(body: ChatRequest):
                         summary=result if isinstance(result, str) else jsonlib.dumps(result, ensure_ascii=False),
                         content=jsonlib.dumps({"arguments": raw_args, "result": result}, ensure_ascii=False),
                         tool_name=func_name,
-                        status="done" if func_name in TOOL_EXECUTORS else "missing",
+                        status=tool_status if func_name in TOOL_EXECUTORS else "missing",
                     )
 
                     current_messages.append({
