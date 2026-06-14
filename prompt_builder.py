@@ -1172,7 +1172,19 @@ def _tools_for_profile(tool_profile: str) -> list[dict]:
     if len(TOOLS_SCHEMA) <= 1:
         return TOOLS_SCHEMA[:]
     max_chat_tools = min(max(1, settings.prompt_tool_count_max), len(TOOLS_SCHEMA) - 1)
-    return TOOLS_SCHEMA[:max_chat_tools]
+    pinned = {"voice_speak", "send_voice"}
+    selected: list[dict] = []
+    seen: set[str] = set()
+    for tool in TOOLS_SCHEMA[:max_chat_tools]:
+        name = str((tool.get("function") or {}).get("name") or "")
+        selected.append(tool)
+        seen.add(name)
+    for tool in TOOLS_SCHEMA:
+        name = str((tool.get("function") or {}).get("name") or "")
+        if name in pinned and name not in seen:
+            selected.append(tool)
+            seen.add(name)
+    return selected
 
 
 def _tool_schema_revision(tool_profile: str) -> str:
