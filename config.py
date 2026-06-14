@@ -96,12 +96,6 @@ class AppConfig:
     voice_service_url: str = ""
     voice_service_api_key: str = ""
     voice_service_timeout: float = 15.0
-    # TTS 模型 id（ElevenLabs 默认 v3，可换 eleven_turbo_v2_5 / eleven_multilingual_v2）
-    voice_model_id: str = "eleven_v3"
-    # 音频输出模式：inline = base64 data URL（不落 R2，零堆积）；r2 = 存进 R2 桶返回 URL
-    voice_output_mode: str = "inline"
-    # R2 公开域名（配了就用 {base}/{key} 拼固定 URL；否则 r2 模式用 presigned）
-    r2_public_base: str = ""
 
     # ── 意识循环 ──
     consciousness_enabled: bool = True
@@ -189,6 +183,13 @@ class AppConfig:
     telegram_bot_token: str = ""
     telegram_allowed_chat_ids: str = ""
 
+    # StackChan device bridge (drives the physical robot via the self-hosted
+    # 小智 server's command adapter; see CODEX_TASK.md). Left blank = disabled.
+    stackchan_endpoint: str = ""
+    stackchan_token: str = ""
+    openai_inbound_token: str = ""
+    stackchan_agent_id: str = ""
+
     @classmethod
     def from_env(cls) -> "AppConfig":
         """从环境变量加载配置"""
@@ -272,9 +273,6 @@ class AppConfig:
             voice_service_url=os.getenv("VOICE_SERVICE_URL", "").strip(),
             voice_service_api_key=os.getenv("VOICE_SERVICE_API_KEY", "").strip(),
             voice_service_timeout=float(os.getenv("VOICE_SERVICE_TIMEOUT", "15")),
-            voice_model_id=os.getenv("VOICE_MODEL_ID", "eleven_v3").strip(),
-            voice_output_mode=os.getenv("VOICE_OUTPUT_MODE", "inline").strip().lower(),
-            r2_public_base=os.getenv("R2_PUBLIC_BASE", "").strip().rstrip("/"),
             # 意识循环
             consciousness_enabled=os.getenv("CONSCIOUSNESS_ENABLED", "true").lower() == "true",
             consciousness_interval_hours=float(os.getenv("CONSCIOUSNESS_INTERVAL_HOURS", "6.0")),
@@ -357,6 +355,16 @@ class AppConfig:
             oauth_refresh_token_ttl_seconds=int(os.getenv("OAUTH_REFRESH_TOKEN_TTL_SECONDS", "2592000")),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_allowed_chat_ids=os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").strip(),
+            stackchan_endpoint=os.getenv("STACKCHAN_ENDPOINT", "").strip().rstrip("/"),
+            stackchan_token=os.getenv("STACKCHAN_TOKEN", "").strip(),
+            openai_inbound_token=os.getenv(
+                "OPENAI_INBOUND_TOKEN",
+                os.getenv("STACKCHAN_TOKEN", ""),
+            ).strip(),
+            stackchan_agent_id=os.getenv(
+                "STACKCHAN_AGENT_ID",
+                os.getenv("CURRENT_AGENT_ID", os.getenv("DEFAULT_AGENT_ID", os.getenv("AGENT_ID", "azheng"))),
+            ).strip() or "azheng",
         )
 
         # 确保数据目录存在

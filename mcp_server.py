@@ -519,24 +519,17 @@ async def save_memory(
         except Exception:
             importance_value = 3
         # Standard function
-        try:
-            mem = await db.add_memory(
-                content=content,
-                agent_id=agent_id,
-                category=category or "core_profile",
-                tags=tag_text,
-                visibility=visibility or "private",
-                source=source or "claude_mcp",
-                source_agent_id=source_agent_id or agent_id,
-                raw_content=content,
-                importance=importance_value,
-                apply_filter=True,
-            )
-        except db.MemoryRejected as exc:
-            return json.dumps(
-                {"success": False, "filtered": True, "reason": exc.reason},
-                ensure_ascii=False,
-            )
+        mem = await db.add_memory(
+            content=content,
+            agent_id=agent_id,
+            category=category or "core_profile",
+            tags=tag_text,
+            visibility=visibility or "private",
+            source=source or "claude_mcp",
+            source_agent_id=source_agent_id or agent_id,
+            raw_content=content,
+            importance=importance_value,
+        )
         memory_id = str(mem.get("id") or "").strip()
         if not memory_id:
             return json.dumps({"success": False, "error": "Save memory returned no memory id."}, ensure_ascii=False)
@@ -813,6 +806,127 @@ async def search_grimoire(query: str, tome_id: str | None = None, type: str | No
         return json.dumps({"success": True, "results": results, "count": len(results)}, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# StackChan — drive the physical desktop robot.
+#
+# These tools let any Claude window (Claude.ai connector OR Claude Code, both
+# of which already connect to this MCP server) move/speak/express the device.
+#
+# Transport contract (kept deliberately simple so the device-side wire protocol
+# lives on the VPS, where it can be tested against the live 小智 server):
+#   POST  {STACKCHAN_ENDPOINT}/call
+#   headers: Authorization: Bearer {STACKCHAN_TOKEN}   (only if token set)
+#   body:    {"tool": "<device_tool_name>", "arguments": {...}}
+#   ->  any JSON; returned to the caller as-is.
+# The matching adapter on the VPS forwards this to the device's MCP 接入点.
+# See CODEX_TASK.md for the adapter + firmware tool names.
+# ---------------------------------------------------------------------------
+
+_STACKCHAN_TIMEOUT = 15.0
+
+
+async def _stackchan_call(device_tool: str, arguments: dict | None = None) -> str:
+    """Forward one device tool call to the StackChan bridge adapter."""
+    endpoint = (settings.stackchan_endpoint or "").strip()
+    if not endpoint:
+        return json.dumps(
+            {
+                "success": False,
+                "error": "StackChan not configured. Set STACKCHAN_ENDPOINT (and "
+                "STACKCHAN_TOKEN) to the VPS bridge adapter.",
+            },
+            ensure_ascii=False,
+        )
+    import httpx
+
+    headers = {"Content-Type": "application/json"}
+    if settings.stackchan_token:
+        headers["Authorization"] = f"Bearer {settings.stackchan_token}"
+    payload = {"tool": device_tool, "arguments": arguments or {}}
+    try:
+        async with httpx.AsyncClient(timeout=_STACKCHAN_TIMEOUT) as client:
+            resp = await client.post(f"{endpoint}/call", json=payload, headers=headers)
+        body: Any
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.text
+        ok = 200 <= resp.status_code < 300
+        return json.dumps(
+            {"success": ok, "status": resp.status_code, "tool": device_tool, "result": body},
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        return json.dumps(
+            {"success": False, "tool": device_tool, "error": str(e)}, ensure_ascii=False
+        )
+
+
+@mcp.tool()
+async def stackchan_say(text: str) -> str:
+    """让桌面机器人 StackChan 开口说一句话(用 YUI 的声音)。text 为要说的文字。"""
+    return await _stackchan_call("self.audio.play_text", {"text": text})
+
+
+@mcp.tool()
+async def stackchan_face(expression: str = "happy") -> str:
+    """切换 StackChan 的表情。常用:calm/thinking/happy/sleepy/shy/smug/pouty。"""
+    return await _stackchan_call("self.face.set", {"face": expression})
+
+
+@mcp.tool()
+async def stackchan_led(action: str = "auto", r: int = 0, g: int = 0, b: int = 0) -> str:
+    """控制情绪灯环。action: set(用 r/g/b 设颜色) / off / auto(跟随情绪)。"""
+    action = (action or "auto").lower()
+    if action == "off":
+        return await _stackchan_call("self.led.turn_off", {})
+    if action == "set":
+        return await _stackchan_call("self.led.set_color", {"r": r, "g": g, "b": b})
+    return await _stackchan_call("self.led.auto", {})
+
+
+@mcp.tool()
+async def stackchan_move(x: int = 0, y: int = 0, speed: int = 50) -> str:
+    """转头。x=左右(yaw,负左正右),y=上下(pitch),speed=0-100。"""
+    return await _stackchan_call("self.servo.move", {"x": x, "y": y, "speed": speed})
+
+
+@mcp.tool()
+async def stackchan_nod() -> str:
+    """点头(表示「是」)。"""
+    return await _stackchan_call("self.servo.nod", {})
+
+
+@mcp.tool()
+async def stackchan_shake() -> str:
+    """摇头(表示「不」)。"""
+    return await _stackchan_call("self.servo.shake", {})
+
+
+@mcp.tool()
+async def stackchan_home() -> str:
+    """头部回正中位。"""
+    return await _stackchan_call("self.servo.home", {})
+
+
+@mcp.tool()
+async def stackchan_track_face(enable: bool = True) -> str:
+    """按需开关人脸追踪(平时关闭以省电/降负载;需要时临时打开)。"""
+    return await _stackchan_call("self.servo.track_face", {"enable": bool(enable)})
+
+
+@mcp.tool()
+async def stackchan_snapshot() -> str:
+    """用 StackChan 的摄像头拍一张照片,返回图片信息/URL。"""
+    return await _stackchan_call("self.camera.capture", {})
+
+
+@mcp.tool()
+async def stackchan_status() -> str:
+    """查询 StackChan 连接与状态。"""
+    return await _stackchan_call("self.status", {})
 
 
 if __name__ == "__main__":
