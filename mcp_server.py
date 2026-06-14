@@ -519,17 +519,24 @@ async def save_memory(
         except Exception:
             importance_value = 3
         # Standard function
-        mem = await db.add_memory(
-            content=content,
-            agent_id=agent_id,
-            category=category or "core_profile",
-            tags=tag_text,
-            visibility=visibility or "private",
-            source=source or "claude_mcp",
-            source_agent_id=source_agent_id or agent_id,
-            raw_content=content,
-            importance=importance_value,
-        )
+        try:
+            mem = await db.add_memory(
+                content=content,
+                agent_id=agent_id,
+                category=category or "core_profile",
+                tags=tag_text,
+                visibility=visibility or "private",
+                source=source or "claude_mcp",
+                source_agent_id=source_agent_id or agent_id,
+                raw_content=content,
+                importance=importance_value,
+                apply_filter=True,
+            )
+        except db.MemoryRejected as exc:
+            return json.dumps(
+                {"success": False, "filtered": True, "reason": exc.reason},
+                ensure_ascii=False,
+            )
         memory_id = str(mem.get("id") or "").strip()
         if not memory_id:
             return json.dumps({"success": False, "error": "Save memory returned no memory id."}, ensure_ascii=False)
