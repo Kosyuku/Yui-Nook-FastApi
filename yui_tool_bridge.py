@@ -111,7 +111,6 @@ def _matches_grimoire_entry(entry: dict[str, Any], query: str) -> bool:
     return q in haystack
 
 
-@mcp.tool(name="diary.list_books")
 async def diary_list_books(agent_id: str = "", include_user_books: bool = True) -> str:
     """List diary books/notebooks visible in YUI."""
     try:
@@ -135,7 +134,6 @@ async def diary_list_books(agent_id: str = "", include_user_books: bool = True) 
         return _err(str(exc))
 
 
-@mcp.tool(name="diary.search_entries")
 async def diary_search_entries(
     query: str = "",
     agent_id: str = "",
@@ -177,7 +175,6 @@ async def diary_search_entries(
         return _err(str(exc))
 
 
-@mcp.tool(name="diary.get_entry")
 async def diary_get_entry(entry_id: str) -> str:
     """Get one diary entry with its notebook, comments, and annotations."""
     try:
@@ -206,7 +203,6 @@ async def diary_get_entry(entry_id: str) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="diary.create_entry")
 async def diary_create_entry(
     agent_id: str,
     content: str,
@@ -245,7 +241,6 @@ async def diary_create_entry(
         return _err(str(exc))
 
 
-@mcp.tool(name="diary.update_entry")
 async def diary_update_entry(
     entry_id: str,
     agent_id: str,
@@ -273,7 +268,6 @@ async def diary_update_entry(
         return _err(str(exc))
 
 
-@mcp.tool(name="diary.delete_entry")
 async def diary_delete_entry(entry_id: str, agent_id: str) -> str:
     """Delete an agent-owned diary entry."""
     try:
@@ -284,7 +278,6 @@ async def diary_delete_entry(entry_id: str, agent_id: str) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="diary.comment_entry")
 async def diary_comment_entry(
     entry_id: str,
     content: str,
@@ -307,7 +300,6 @@ async def diary_comment_entry(
         return _err(str(exc))
 
 
-@mcp.tool(name="diary.underline_entry")
 async def diary_underline_entry(
     entry_id: str,
     start_offset: int,
@@ -334,7 +326,6 @@ async def diary_underline_entry(
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.list_tomes")
 async def grimoire_list_tomes() -> str:
     """List all Grimoire tomes."""
     try:
@@ -345,7 +336,6 @@ async def grimoire_list_tomes() -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.get_tome")
 async def grimoire_get_tome(tome_id: str) -> str:
     """Get one Grimoire tome."""
     try:
@@ -358,7 +348,6 @@ async def grimoire_get_tome(tome_id: str) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.create_tome")
 async def grimoire_create_tome(
     title: str,
     title_en: str = "",
@@ -391,7 +380,6 @@ async def grimoire_create_tome(
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.update_tome")
 async def grimoire_update_tome(
     tome_id: str,
     title: str | None = None,
@@ -413,7 +401,6 @@ async def grimoire_update_tome(
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.list_entries")
 async def grimoire_list_entries(tome_id: str = "") -> str:
     """List Grimoire entries, optionally by tome."""
     try:
@@ -424,7 +411,6 @@ async def grimoire_list_entries(tome_id: str = "") -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.get_entry")
 async def grimoire_get_entry(entry_id: str) -> str:
     """Get one Grimoire entry."""
     try:
@@ -437,7 +423,6 @@ async def grimoire_get_entry(entry_id: str) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.create_entry")
 async def grimoire_create_entry(
     tome_id: str,
     title: str,
@@ -480,7 +465,6 @@ async def grimoire_create_entry(
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.update_entry")
 async def grimoire_update_entry(
     entry_id: str,
     title: str | None = None,
@@ -517,7 +501,6 @@ async def grimoire_update_entry(
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.delete_entry")
 async def grimoire_delete_entry(entry_id: str) -> str:
     """Delete a Grimoire entry."""
     try:
@@ -528,7 +511,6 @@ async def grimoire_delete_entry(entry_id: str) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="grimoire.search_entries")
 async def grimoire_search_entries(query: str, tome_id: str = "", type: str = "", limit: int = 20) -> str:
     """Search Grimoire entries by keyword."""
     try:
@@ -543,7 +525,6 @@ async def grimoire_search_entries(query: str, tome_id: str = "", type: str = "",
         return _err(str(exc))
 
 
-@mcp.tool(name="curio.list_items")
 async def curio_list_items(
     type: str = "",
     agent_id: str = "",
@@ -570,7 +551,6 @@ async def curio_list_items(
         return _err(str(exc))
 
 
-@mcp.tool(name="curio.get_item")
 async def curio_get_item(item_id: str) -> str:
     """Get one Curio item."""
     try:
@@ -583,7 +563,6 @@ async def curio_get_item(item_id: str) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="curio.save_item")
 async def curio_save_item(
     title: str,
     content: str,
@@ -635,7 +614,6 @@ async def curio_save_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="curio.update_item")
 async def curio_update_item(
     item_id: str,
     title: str | None = None,
@@ -678,7 +656,6 @@ async def curio_update_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="curio.delete_item")
 async def curio_delete_item(item_id: str) -> str:
     """Delete a Curio item."""
     try:
@@ -689,7 +666,6 @@ async def curio_delete_item(item_id: str) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="glean.list_items")
 async def glean_list_items(
     status: str = "",
     type: str = "",
@@ -714,7 +690,6 @@ async def glean_list_items(
         return _err(str(exc))
 
 
-@mcp.tool(name="glean.create_item")
 async def glean_create_item(
     title: str,
     type: str = "note",
@@ -747,7 +722,6 @@ async def glean_create_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="glean.update_item")
 async def glean_update_item(
     item_id: str,
     title: str | None = None,
@@ -776,7 +750,6 @@ async def glean_update_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="glean.delete_item")
 async def glean_delete_item(item_id: str) -> str:
     """Delete an extracted item."""
     try:
@@ -882,7 +855,6 @@ async def _module_create_item(
     return _ok(item=item, item_id=item.get("id"))
 
 
-@mcp.tool(name="inbox.list_items")
 async def inbox_list_items(status: str = "", type: str = "", agent_id: str = "", limit: int = 50, offset: int = 0) -> str:
     """List extracted items routed to Inbox/Glean."""
     try:
@@ -892,7 +864,6 @@ async def inbox_list_items(status: str = "", type: str = "", agent_id: str = "",
         return _err(str(exc))
 
 
-@mcp.tool(name="inbox.create_item")
 async def inbox_create_item(
     title: str,
     type: str = "note",
@@ -912,7 +883,6 @@ async def inbox_create_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="folio.list_items")
 async def folio_list_items(status: str = "", type: str = "", agent_id: str = "", limit: int = 50, offset: int = 0) -> str:
     """List Folio items, including extracted notes and R2-backed book media."""
     try:
@@ -922,7 +892,6 @@ async def folio_list_items(status: str = "", type: str = "", agent_id: str = "",
         return _err(str(exc))
 
 
-@mcp.tool(name="folio.create_item")
 async def folio_create_item(
     title: str,
     type: str = "note",
@@ -942,7 +911,6 @@ async def folio_create_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="perle.list_items")
 async def perle_list_items(status: str = "", type: str = "", agent_id: str = "", limit: int = 50, offset: int = 0) -> str:
     """List extracted items routed to Perle."""
     try:
@@ -952,7 +920,6 @@ async def perle_list_items(status: str = "", type: str = "", agent_id: str = "",
         return _err(str(exc))
 
 
-@mcp.tool(name="perle.create_item")
 async def perle_create_item(
     title: str,
     type: str = "note",
@@ -972,7 +939,6 @@ async def perle_create_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="drift.list_items")
 async def drift_list_items(status: str = "", type: str = "", agent_id: str = "", limit: int = 50, offset: int = 0) -> str:
     """List extracted items routed to Drift/Calendar."""
     try:
@@ -982,7 +948,6 @@ async def drift_list_items(status: str = "", type: str = "", agent_id: str = "",
         return _err(str(exc))
 
 
-@mcp.tool(name="drift.create_item")
 async def drift_create_item(
     title: str,
     type: str = "event",
@@ -1002,7 +967,6 @@ async def drift_create_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="media.list_items")
 async def media_list_items(type: str = "", owner_type: str = "", agent_id: str = "", limit: int = 100) -> str:
     """List media items used by Perle/Folio-style apps."""
     try:
@@ -1020,7 +984,6 @@ async def media_list_items(type: str = "", owner_type: str = "", agent_id: str =
         return _err(str(exc))
 
 
-@mcp.tool(name="media.create_item")
 async def media_create_item(
     storage_key: str,
     type: str = "other",
@@ -1061,7 +1024,6 @@ async def media_create_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="media.update_item")
 async def media_update_item(
     item_id: str,
     title: str | None = None,
@@ -1090,7 +1052,6 @@ async def media_update_item(
         return _err(str(exc))
 
 
-@mcp.tool(name="media.delete_item")
 async def media_delete_item(item_id: str) -> str:
     """Delete media metadata. This does not delete the R2 object."""
     try:
@@ -1142,7 +1103,6 @@ async def voice_speak(
 send_voice = voice_speak
 
 
-@mcp.tool(name="moments.list_posts")
 async def moments_list_posts(limit: int = 100, viewer_id: str = "", viewer_type: str = "user") -> str:
     """List visible Moments posts."""
     try:
@@ -1153,7 +1113,6 @@ async def moments_list_posts(limit: int = 100, viewer_id: str = "", viewer_type:
         return _err(str(exc))
 
 
-@mcp.tool(name="moments.get_post")
 async def moments_get_post(post_id: str) -> str:
     """Get one Moments post."""
     try:
@@ -1166,7 +1125,6 @@ async def moments_get_post(post_id: str) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="moments.create_post")
 async def moments_create_post(
     content: str,
     author_id: str,
@@ -1193,7 +1151,6 @@ async def moments_create_post(
         return _err(str(exc))
 
 
-@mcp.tool(name="moments.update_post")
 async def moments_update_post(
     post_id: str,
     author_id: str,
@@ -1220,7 +1177,6 @@ async def moments_update_post(
         return _err(str(exc))
 
 
-@mcp.tool(name="moments.delete_post")
 async def moments_delete_post(post_id: str, author_id: str, author_type: str = "agent") -> str:
     """Delete a Moments post owned by the author."""
     try:
@@ -1231,7 +1187,6 @@ async def moments_delete_post(post_id: str, author_id: str, author_type: str = "
         return _err(str(exc))
 
 
-@mcp.tool(name="moments.like_post")
 async def moments_like_post(post_id: str, actor_id: str, actor_type: str = "agent", actor_name: str = "") -> str:
     """Toggle a like on a Moments post."""
     try:
@@ -1244,7 +1199,6 @@ async def moments_like_post(post_id: str, actor_id: str, actor_type: str = "agen
         return _err(str(exc))
 
 
-@mcp.tool(name="moments.comment_post")
 async def moments_comment_post(
     post_id: str,
     text: str,
@@ -1269,7 +1223,6 @@ async def moments_comment_post(
         return _err(str(exc))
 
 
-@mcp.tool(name="parlor.list_rounds")
 async def parlor_list_rounds(status: str = "", limit: int = 50, offset: int = 0) -> str:
     """List Parlor rounds."""
     try:
@@ -1280,7 +1233,6 @@ async def parlor_list_rounds(status: str = "", limit: int = 50, offset: int = 0)
         return _err(str(exc))
 
 
-@mcp.tool(name="parlor.create_round")
 async def parlor_create_round(
     title: str,
     description: str = "",
@@ -1311,7 +1263,6 @@ async def parlor_create_round(
         return _err(str(exc))
 
 
-@mcp.tool(name="parlor.get_round")
 async def parlor_get_round(round_id: str, include_children: bool = True) -> str:
     """Get a Parlor round."""
     try:
@@ -1324,7 +1275,6 @@ async def parlor_get_round(round_id: str, include_children: bool = True) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="parlor.update_round")
 async def parlor_update_round(
     round_id: str,
     title: str | None = None,
@@ -1355,7 +1305,6 @@ async def parlor_update_round(
         return _err(str(exc))
 
 
-@mcp.tool(name="parlor.delete_round")
 async def parlor_delete_round(round_id: str) -> str:
     """Delete a Parlor round."""
     try:
@@ -1366,7 +1315,6 @@ async def parlor_delete_round(round_id: str) -> str:
         return _err(str(exc))
 
 
-@mcp.tool(name="parlor.add_seat")
 async def parlor_add_seat(
     round_id: str,
     agent_id: str,
@@ -1395,7 +1343,6 @@ async def parlor_add_seat(
         return _err(str(exc))
 
 
-@mcp.tool(name="parlor.speak")
 async def parlor_speak(round_id: str, content: str, agent_id: str = "user", seat_id: str = "", is_user: bool = True) -> str:
     """Add a Parlor turn."""
     try:
@@ -1412,7 +1359,6 @@ async def parlor_speak(round_id: str, content: str, agent_id: str = "user", seat
         return _err(str(exc))
 
 
-@mcp.tool(name="parlor.list_turns")
 async def parlor_list_turns(round_id: str, limit: int = 100, offset: int = 0) -> str:
     """List turns in a Parlor round."""
     try:
@@ -1421,6 +1367,241 @@ async def parlor_list_turns(round_id: str, limit: int = 100, offset: int = 0) ->
     except Exception as exc:
         logger.exception("parlor.list_turns failed")
         return _err(str(exc))
+
+
+# ============================================================
+# Consolidated action-routed tools
+# Each module exposes ONE tool that routes on `action`.
+# Pass action-specific arguments as a JSON object in `params`.
+# (Required args marked * in each docstring.)
+# ============================================================
+
+
+async def _dispatch(table: dict[str, Any], module: str, action: str, params: dict[str, Any] | None) -> str:
+    fn = table.get(action)
+    if not fn:
+        return _err(f"unknown {module} action: {action!r}", actions=sorted(table))
+    try:
+        return await fn(**(params or {}))
+    except TypeError as exc:
+        return _err(f"invalid params for {module}.{action}: {exc}")
+
+
+_DIARY_ACTIONS = {
+    "list_books": diary_list_books,
+    "search_entries": diary_search_entries,
+    "get_entry": diary_get_entry,
+    "create_entry": diary_create_entry,
+    "update_entry": diary_update_entry,
+    "delete_entry": diary_delete_entry,
+    "comment_entry": diary_comment_entry,
+    "underline_entry": diary_underline_entry,
+}
+
+
+@mcp.tool(name="diary")
+async def diary(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI diary. params per action:
+    - list_books: agent_id="", include_user_books=true
+    - search_entries: query="", agent_id="", notebook_id="", viewer_agent_id="", limit=20
+    - get_entry: entry_id*
+    - create_entry: agent_id*, content*, title="", tags=[], notebook_id="", visibility="public"
+    - update_entry: entry_id*, agent_id*, content?, title?, tags?, visibility?
+    - delete_entry: entry_id*, agent_id*
+    - comment_entry: entry_id*, content*, author_id*, author_type="agent"
+    - underline_entry: entry_id*, start_offset*, end_offset*, author_id*, author_type="agent", note=""
+    """
+    return await _dispatch(_DIARY_ACTIONS, "diary", action, params)
+
+
+_GRIMOIRE_ACTIONS = {
+    "list_tomes": grimoire_list_tomes,
+    "get_tome": grimoire_get_tome,
+    "create_tome": grimoire_create_tome,
+    "update_tome": grimoire_update_tome,
+    "list_entries": grimoire_list_entries,
+    "get_entry": grimoire_get_entry,
+    "create_entry": grimoire_create_entry,
+    "update_entry": grimoire_update_entry,
+    "delete_entry": grimoire_delete_entry,
+    "search_entries": grimoire_search_entries,
+}
+
+
+@mcp.tool(name="grimoire")
+async def grimoire(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI grimoire (worldbook). params per action:
+    - list_tomes: (none)
+    - get_tome: tome_id*
+    - create_tome: title*, title_en="", sub="", kind="", spine/cover/gilt=hex, sigil="", sigil_style="serifEn", palette={}
+    - update_tome: tome_id*, title?, title_en?, sub?, kind?
+    - list_entries: tome_id=""
+    - get_entry: entry_id*
+    - create_entry: tome_id*, title*, type="lore", title_en="", sub="", body="", status="seed", tags=[], fields={}, relations=[], cover/cover_ink=hex, cover_glyph=""
+    - update_entry: entry_id*, title?, type?, title_en?, sub?, body?, status?, tags?, fields?, relations?
+    - delete_entry: entry_id*
+    - search_entries: query*, tome_id="", type="", limit=20
+    """
+    return await _dispatch(_GRIMOIRE_ACTIONS, "grimoire", action, params)
+
+
+_CURIO_ACTIONS = {
+    "list_items": curio_list_items,
+    "get_item": curio_get_item,
+    "save_item": curio_save_item,
+    "update_item": curio_update_item,
+    "delete_item": curio_delete_item,
+}
+
+
+@mcp.tool(name="curio")
+async def curio(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI curio (artifacts/pages). params per action:
+    - list_items: type="", agent_id="", tag="", pinned?, surprise?, limit=50, offset=0
+    - get_item: item_id*
+    - save_item: title*, content*, description="", type="page", tags=[], agent_id="", session_id="", storage_mode="inline", cover_url="", is_pinned=false, is_surprise=false
+    - update_item: item_id*, title?, description?, type?, content?, tags?, agent_id?, session_id?, storage_mode?, cover_url?, is_pinned?, is_surprise?, metadata?
+    - delete_item: item_id*
+    """
+    return await _dispatch(_CURIO_ACTIONS, "curio", action, params)
+
+
+_GLEAN_ACTIONS = {
+    "list_items": glean_list_items,
+    "create_item": glean_create_item,
+    "update_item": glean_update_item,
+    "delete_item": glean_delete_item,
+}
+
+
+@mcp.tool(name="glean")
+async def glean(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI glean (extracted items across modules). params per action:
+    - list_items: status="", type="", target_module="", agent_id="", limit=50, offset=0
+    - create_item: title*, type="note", content="", source_excerpt="", target_module="inbox", status="accepted", agent_id="", session_id="", message_id="", metadata={}
+    - update_item: item_id*, title?, content?, type?, target_module?, status?, metadata?
+    - delete_item: item_id*
+    """
+    return await _dispatch(_GLEAN_ACTIONS, "glean", action, params)
+
+
+_INBOX_ACTIONS = {"list_items": inbox_list_items, "create_item": inbox_create_item}
+
+
+@mcp.tool(name="inbox")
+async def inbox(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI inbox (extracted items routed to inbox). params per action:
+    - list_items: status="", type="", agent_id="", limit=50, offset=0
+    - create_item: title*, type="note", content="", source_excerpt="", status="accepted", agent_id="", session_id="", message_id="", metadata={}
+    """
+    return await _dispatch(_INBOX_ACTIONS, "inbox", action, params)
+
+
+_FOLIO_ACTIONS = {"list_items": folio_list_items, "create_item": folio_create_item}
+
+
+@mcp.tool(name="folio")
+async def folio(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI folio (notes + R2-backed book media). params per action:
+    - list_items: status="", type="", agent_id="", limit=50, offset=0
+    - create_item: title*, type="note", content="", source_excerpt="", status="accepted", agent_id="", session_id="", message_id="", metadata={}
+    """
+    return await _dispatch(_FOLIO_ACTIONS, "folio", action, params)
+
+
+_PERLE_ACTIONS = {"list_items": perle_list_items, "create_item": perle_create_item}
+
+
+@mcp.tool(name="perle")
+async def perle(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI perle (extracted items routed to perle). params per action:
+    - list_items: status="", type="", agent_id="", limit=50, offset=0
+    - create_item: title*, type="note", content="", source_excerpt="", status="accepted", agent_id="", session_id="", message_id="", metadata={}
+    """
+    return await _dispatch(_PERLE_ACTIONS, "perle", action, params)
+
+
+_DRIFT_ACTIONS = {"list_items": drift_list_items, "create_item": drift_create_item}
+
+
+@mcp.tool(name="drift")
+async def drift(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI drift (calendar items). params per action:
+    - list_items: status="", type="", agent_id="", limit=50, offset=0
+    - create_item: title*, type="event", content="", source_excerpt="", status="accepted", agent_id="", session_id="", message_id="", metadata={}
+    """
+    return await _dispatch(_DRIFT_ACTIONS, "drift", action, params)
+
+
+_MEDIA_ACTIONS = {
+    "list_items": media_list_items,
+    "create_item": media_create_item,
+    "update_item": media_update_item,
+    "delete_item": media_delete_item,
+}
+
+
+@mcp.tool(name="media")
+async def media(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI media (R2-backed media metadata). params per action:
+    - list_items: type="", owner_type="", agent_id="", limit=100
+    - create_item: storage_key*, type="other", title="", owner_type="user", agent_id="", artist/album/author="", storage_provider="r2", cover_key="", mime_type="", size_bytes?, duration_seconds?, metadata={}
+    - update_item: item_id*, title?, artist?, album?, author?, cover_key?, metadata?
+    - delete_item: item_id* (does not delete R2 object)
+    """
+    return await _dispatch(_MEDIA_ACTIONS, "media", action, params)
+
+
+_MOMENTS_ACTIONS = {
+    "list_posts": moments_list_posts,
+    "get_post": moments_get_post,
+    "create_post": moments_create_post,
+    "update_post": moments_update_post,
+    "delete_post": moments_delete_post,
+    "like_post": moments_like_post,
+    "comment_post": moments_comment_post,
+}
+
+
+@mcp.tool(name="moments")
+async def moments(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI moments (social feed). params per action:
+    - list_posts: limit=100, viewer_id="", viewer_type="user"
+    - get_post: post_id*
+    - create_post: content*, author_id*, author_type="agent", visibility="public", image="", mood=""
+    - update_post: post_id*, author_id*, author_type="agent", visibility?, content?, image?, mood?
+    - delete_post: post_id*, author_id*, author_type="agent"
+    - like_post: post_id*, actor_id*, actor_type="agent", actor_name=""
+    - comment_post: post_id*, text*, actor_id*, actor_type="agent", actor_name=""
+    """
+    return await _dispatch(_MOMENTS_ACTIONS, "moments", action, params)
+
+
+_PARLOR_ACTIONS = {
+    "list_rounds": parlor_list_rounds,
+    "create_round": parlor_create_round,
+    "get_round": parlor_get_round,
+    "update_round": parlor_update_round,
+    "delete_round": parlor_delete_round,
+    "add_seat": parlor_add_seat,
+    "speak": parlor_speak,
+    "list_turns": parlor_list_turns,
+}
+
+
+@mcp.tool(name="parlor")
+async def parlor(action: str, params: dict[str, Any] | None = None) -> str:
+    """YUI parlor (multi-agent rounds). params per action:
+    - list_rounds: status="", limit=50, offset=0
+    - create_round: title*, description="", created_by="agent", mode="roundtable", auto_mode=false, max_turns_per_session=8, seats=[], opening=""
+    - get_round: round_id*, include_children=true
+    - update_round: round_id*, title?, description?, status?, mode?, auto_mode?, max_turns_per_session?, summary?
+    - delete_round: round_id*
+    - add_seat: round_id*, agent_id*, display_name="", model="", provider="", system_prompt="", color="", seat_order=0
+    - speak: round_id*, content*, agent_id="user", seat_id="", is_user=true
+    - list_turns: round_id*, limit=100, offset=0
+    """
+    return await _dispatch(_PARLOR_ACTIONS, "parlor", action, params)
 
 
 if __name__ == "__main__":

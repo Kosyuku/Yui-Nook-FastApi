@@ -32,7 +32,6 @@ def _backend_failure(kind: str = "database") -> str | None:
     )
 
 
-@mcp.tool()
 async def create_session(agent_id: str, title: str = "new session", source_app: str = "claude_mcp") -> str:
     """
     Create a new chat session for an agent.
@@ -51,7 +50,6 @@ async def create_session(agent_id: str, title: str = "new session", source_app: 
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def list_sessions(agent_id: str = None, limit: int = 50) -> str:
     """
     List recent sessions.
@@ -68,7 +66,6 @@ async def list_sessions(agent_id: str = None, limit: int = 50) -> str:
     return json.dumps(sessions, ensure_ascii=False)
 
 
-@mcp.tool()
 async def get_session(session_id: str) -> str:
     """
     Get details of a specific session.
@@ -79,7 +76,6 @@ async def get_session(session_id: str) -> str:
     return json.dumps(session, ensure_ascii=False)
 
 
-@mcp.tool()
 async def get_messages(session_id: str, limit: int = 50) -> str:
     """
     Get the history of messages for a given session.
@@ -89,7 +85,6 @@ async def get_messages(session_id: str, limit: int = 50) -> str:
     return json.dumps(messages, ensure_ascii=False)
 
 
-@mcp.tool()
 async def send_message(session_id: str, agent_id: str, message: str) -> str:
     """
     Sends a message to the specified session, invoking the standard AI response logic.
@@ -135,7 +130,6 @@ async def send_message(session_id: str, agent_id: str, message: str) -> str:
     return merged
 
 
-@mcp.tool()
 async def create_diary_notebook(
     agent_id: str,
     name: str = "",
@@ -164,7 +158,6 @@ async def create_diary_notebook(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def update_diary_notebook(
     notebook_id: str,
     agent_id: str,
@@ -195,7 +188,6 @@ async def update_diary_notebook(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def list_diary_notebooks(agent_id: str = None) -> str:
     """
     List diary notebooks, optionally filtered to one agent.
@@ -213,7 +205,6 @@ async def list_diary_notebooks(agent_id: str = None) -> str:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def list_diary_entries(notebook_id: str, viewer_agent_id: str = "", limit: int = 50) -> str:
     """
     List visible entries inside a diary notebook by notebook_id.
@@ -232,7 +223,6 @@ async def list_diary_entries(notebook_id: str, viewer_agent_id: str = "", limit:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def create_diary_entry(
     agent_id: str,
     content: str,
@@ -277,7 +267,6 @@ async def create_diary_entry(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def update_diary_entry(
     entry_id: str,
     agent_id: str,
@@ -309,7 +298,6 @@ async def update_diary_entry(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def delete_diary_entry(entry_id: str, agent_id: str) -> str:
     """
     Delete an entry owned by one agent's diary notebook.
@@ -326,7 +314,6 @@ async def delete_diary_entry(entry_id: str, agent_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def comment_diary_entry(entry_id: str, agent_id: str, content: str) -> str:
     """
     Comment on an agent diary entry as another agent.
@@ -348,7 +335,6 @@ async def comment_diary_entry(entry_id: str, agent_id: str, content: str) -> str
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def underline_diary_entry(
     entry_id: str,
     agent_id: str,
@@ -378,7 +364,6 @@ async def underline_diary_entry(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def search_diary(query: str, agent_id: str = None, limit: int = 10) -> str:
     """
     List or search diary entries.
@@ -412,7 +397,6 @@ def _artifact_should_use_r2(content: str, storage_mode: str) -> bool:
     )
 
 
-@mcp.tool()
 async def save_artifact(
     title: str,
     description: str = "",
@@ -463,7 +447,6 @@ async def save_artifact(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def list_artifacts(
     type: str = None,
     agent_id: str = None,
@@ -490,7 +473,6 @@ async def list_artifacts(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def save_memory(
     content: str,
     agent_id: str,
@@ -545,7 +527,6 @@ async def save_memory(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def search_memory(query: str, agent_id: str = None, limit: int = 10) -> str:
     """
     Search semantic memories for a given query string.
@@ -565,7 +546,6 @@ async def search_memory(query: str, agent_id: str = None, limit: int = 10) -> st
 # Grimoire 魔典 tools
 # ══════════════════════════════════════════════════════════
 
-@mcp.tool()
 async def list_grimoire_tomes() -> str:
     """
     List all grimoire tomes (典). Returns id, title, titleEn, sub, kind, count, lastEdited, palette, etc.
@@ -578,7 +558,6 @@ async def list_grimoire_tomes() -> str:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def get_grimoire_tome(tome_id: str) -> str:
     """
     Get details of a single grimoire tome by its id (e.g. "nighttide", "kitchen").
@@ -592,7 +571,6 @@ async def get_grimoire_tome(tome_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def create_grimoire_tome(
     title: str,
     title_en: str = "",
@@ -632,7 +610,6 @@ async def create_grimoire_tome(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def update_grimoire_tome(
     tome_id: str,
     title: str | None = None,
@@ -657,7 +634,6 @@ async def update_grimoire_tome(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def list_grimoire_entries(tome_id: str | None = None) -> str:
     """
     List grimoire entries (词条). Optionally filter by tome_id.
@@ -671,7 +647,6 @@ async def list_grimoire_entries(tome_id: str | None = None) -> str:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def get_grimoire_entry(entry_id: str) -> str:
     """
     Get full details of a single grimoire entry by id, including all fields, body text, and relations.
@@ -685,7 +660,6 @@ async def get_grimoire_entry(entry_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def create_grimoire_entry(
     tome_id: str,
     title: str,
@@ -731,7 +705,6 @@ async def create_grimoire_entry(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def update_grimoire_entry(
     entry_id: str,
     title: str | None = None,
@@ -766,7 +739,6 @@ async def update_grimoire_entry(
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def delete_grimoire_entry(entry_id: str) -> str:
     """
     Delete a grimoire entry by id. Also decrements the parent tome's entry count.
@@ -780,7 +752,6 @@ async def delete_grimoire_entry(entry_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 
-@mcp.tool()
 async def search_grimoire(query: str, tome_id: str | None = None, type: str | None = None) -> str:
     """
     Search grimoire entries by keyword. Matches against title, titleEn, sub, body, tags, and fields.
@@ -871,19 +842,16 @@ async def _stackchan_call(device_tool: str, arguments: dict | None = None) -> st
         )
 
 
-@mcp.tool()
 async def stackchan_say(text: str) -> str:
     """让桌面机器人 StackChan 开口说一句话(用 YUI 的声音)。text 为要说的文字。"""
     return await _stackchan_call("self.audio.play_text", {"text": text})
 
 
-@mcp.tool()
 async def stackchan_face(expression: str = "happy") -> str:
     """切换 StackChan 的表情。常用:calm/thinking/happy/sleepy/shy/smug/pouty。"""
     return await _stackchan_call("self.face.set", {"face": expression})
 
 
-@mcp.tool()
 async def stackchan_led(action: str = "auto", r: int = 0, g: int = 0, b: int = 0) -> str:
     """控制情绪灯环。action: set(用 r/g/b 设颜色) / off / auto(跟随情绪)。"""
     action = (action or "auto").lower()
@@ -894,46 +862,204 @@ async def stackchan_led(action: str = "auto", r: int = 0, g: int = 0, b: int = 0
     return await _stackchan_call("self.led.auto", {})
 
 
-@mcp.tool()
 async def stackchan_move(x: int = 0, y: int = 0, speed: int = 50) -> str:
     """转头。x=左右(yaw,负左正右),y=上下(pitch),speed=0-100。"""
     return await _stackchan_call("self.servo.move", {"x": x, "y": y, "speed": speed})
 
 
-@mcp.tool()
 async def stackchan_nod() -> str:
     """点头(表示「是」)。"""
     return await _stackchan_call("self.servo.nod", {})
 
 
-@mcp.tool()
 async def stackchan_shake() -> str:
     """摇头(表示「不」)。"""
     return await _stackchan_call("self.servo.shake", {})
 
 
-@mcp.tool()
 async def stackchan_home() -> str:
     """头部回正中位。"""
     return await _stackchan_call("self.servo.home", {})
 
 
-@mcp.tool()
 async def stackchan_track_face(enable: bool = True) -> str:
     """按需开关人脸追踪(平时关闭以省电/降负载;需要时临时打开)。"""
     return await _stackchan_call("self.servo.track_face", {"enable": bool(enable)})
 
 
-@mcp.tool()
 async def stackchan_snapshot() -> str:
     """用 StackChan 的摄像头拍一张照片,返回图片信息/URL。"""
     return await _stackchan_call("self.camera.capture", {})
 
 
-@mcp.tool()
 async def stackchan_status() -> str:
     """查询 StackChan 连接与状态。"""
     return await _stackchan_call("self.status", {})
+
+
+# ══════════════════════════════════════════════════════════
+# Consolidated action-routed tools
+# Each group exposes ONE tool that routes on `action`.
+# Pass action-specific arguments as a JSON object in `params`.
+# (Required args marked * in each docstring.)
+# ══════════════════════════════════════════════════════════
+
+
+async def _dispatch(table: dict[str, Any], group: str, action: str, params: dict[str, Any] | None) -> str:
+    fn = table.get(action)
+    if not fn:
+        return json.dumps(
+            {"success": False, "error": f"unknown {group} action: {action}", "actions": sorted(table)},
+            ensure_ascii=False,
+        )
+    try:
+        return await fn(**(params or {}))
+    except TypeError as exc:
+        return json.dumps(
+            {"success": False, "error": f"invalid params for {group}.{action}: {exc}"},
+            ensure_ascii=False,
+        )
+
+
+_SESSION_ACTIONS = {
+    "create_session": create_session,
+    "list_sessions": list_sessions,
+    "get_session": get_session,
+    "get_messages": get_messages,
+    "send_message": send_message,
+}
+
+
+@mcp.tool()
+async def session(action: str, params: dict[str, Any] | None = None) -> str:
+    """Chat sessions. params per action:
+    - create_session: agent_id*, title="new session", source_app="claude_mcp"
+    - list_sessions: agent_id=None, limit=50
+    - get_session: session_id*
+    - get_messages: session_id*, limit=50
+    - send_message: session_id*, agent_id*, message* (runs full AI response)
+    """
+    return await _dispatch(_SESSION_ACTIONS, "session", action, params)
+
+
+_DIARY_ACTIONS = {
+    "create_notebook": create_diary_notebook,
+    "update_notebook": update_diary_notebook,
+    "list_notebooks": list_diary_notebooks,
+    "list_entries": list_diary_entries,
+    "create_entry": create_diary_entry,
+    "update_entry": update_diary_entry,
+    "delete_entry": delete_diary_entry,
+    "comment_entry": comment_diary_entry,
+    "underline_entry": underline_diary_entry,
+    "search": search_diary,
+}
+
+
+@mcp.tool()
+async def diary(action: str, params: dict[str, Any] | None = None) -> str:
+    """Diary notebooks/entries. params per action:
+    - create_notebook: agent_id*, name="", description="", visibility="public", is_default=false
+    - update_notebook: notebook_id*, agent_id*, name?, description?, visibility?, is_default?
+    - list_notebooks: agent_id=None
+    - list_entries: notebook_id*, viewer_agent_id="", limit=50
+    - create_entry: agent_id*, content*, title=None, tags=[], notebook_id=None, visibility="public"
+    - update_entry: entry_id*, agent_id*, content?, title?, tags?, visibility?
+    - delete_entry: entry_id*, agent_id*
+    - comment_entry: entry_id*, agent_id*, content*
+    - underline_entry: entry_id*, agent_id*, start_offset*, end_offset*, note=""
+    - search: query*, agent_id=None, limit=10
+    """
+    return await _dispatch(_DIARY_ACTIONS, "diary", action, params)
+
+
+_CURIO_ACTIONS = {
+    "save_artifact": save_artifact,
+    "list_artifacts": list_artifacts,
+}
+
+
+@mcp.tool()
+async def curio(action: str, params: dict[str, Any] | None = None) -> str:
+    """Curio artifacts (saved pages/games/widgets). params per action:
+    - save_artifact: title*, description="", type="page", content="", tags=[], agent_id="azheng", session_id="", storage_mode="inline", cover_url="", is_pinned=false, is_surprise=false
+    - list_artifacts: type=None, agent_id=None, tag=None, pinned=None, surprise=None, limit=20
+    """
+    return await _dispatch(_CURIO_ACTIONS, "curio", action, params)
+
+
+_MEMORY_ACTIONS = {
+    "save_memory": save_memory,
+    "search_memory": search_memory,
+}
+
+
+@mcp.tool()
+async def memory(action: str, params: dict[str, Any] | None = None) -> str:
+    """User memories. params per action:
+    - save_memory: content*, agent_id*, source="claude_mcp", category="core_profile", tags=[], importance=3, visibility="private", source_agent_id=None
+    - search_memory: query*, agent_id=None, limit=10
+    """
+    return await _dispatch(_MEMORY_ACTIONS, "memory", action, params)
+
+
+_GRIMOIRE_ACTIONS = {
+    "list_tomes": list_grimoire_tomes,
+    "get_tome": get_grimoire_tome,
+    "create_tome": create_grimoire_tome,
+    "update_tome": update_grimoire_tome,
+    "list_entries": list_grimoire_entries,
+    "get_entry": get_grimoire_entry,
+    "create_entry": create_grimoire_entry,
+    "update_entry": update_grimoire_entry,
+    "delete_entry": delete_grimoire_entry,
+    "search_entries": search_grimoire,
+}
+
+
+@mcp.tool()
+async def grimoire(action: str, params: dict[str, Any] | None = None) -> str:
+    """Grimoire 魔典 (worldbook). params per action:
+    - list_tomes: (none)
+    - get_tome: tome_id*
+    - create_tome: title*, title_en="", sub="", kind="虚构世界", spine/cover/gilt=hex, sigil="⊹", sigil_style="serifEn", palette_bg/palette_accent/palette_tint=hex
+    - update_tome: tome_id*, title?, title_en?, sub?, kind?
+    - list_entries: tome_id=None
+    - get_entry: entry_id*
+    - create_entry: tome_id*, title*, type="character", title_en="", sub="", cover/cover_ink=hex, cover_glyph="", status="seed", tags=[], fields={}, body="", relations=[]
+    - update_entry: entry_id*, title?, title_en?, sub?, status?, tags?, fields?, body?, relations?
+    - delete_entry: entry_id*
+    - search_entries: query*, tome_id=None, type=None
+    """
+    return await _dispatch(_GRIMOIRE_ACTIONS, "grimoire", action, params)
+
+
+_STACKCHAN_ACTIONS = {
+    "say": stackchan_say,
+    "face": stackchan_face,
+    "led": stackchan_led,
+    "move": stackchan_move,
+    "nod": stackchan_nod,
+    "shake": stackchan_shake,
+    "home": stackchan_home,
+    "track_face": stackchan_track_face,
+    "snapshot": stackchan_snapshot,
+    "status": stackchan_status,
+}
+
+
+@mcp.tool()
+async def stackchan(action: str, params: dict[str, Any] | None = None) -> str:
+    """Drive the physical StackChan robot. params per action:
+    - say: text* (speak with YUI's voice)
+    - face: expression="happy" (calm/thinking/happy/sleepy/shy/smug/pouty)
+    - led: action="auto" (set/off/auto), r=0, g=0, b=0
+    - move: x=0 (yaw -left/+right), y=0 (pitch), speed=50
+    - nod: (none) · shake: (none) · home: (none)
+    - track_face: enable=true
+    - snapshot: (none, camera capture) · status: (none)
+    """
+    return await _dispatch(_STACKCHAN_ACTIONS, "stackchan", action, params)
 
 
 if __name__ == "__main__":

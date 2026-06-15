@@ -17,26 +17,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Consolidated action-routed groups (see mcp_server.py). Each group routes on `action`.
 REQUIRED_MCP_TOOLS = {
-    "create_session",
-    "list_sessions",
-    "get_session",
-    "get_messages",
-    "send_message",
-    "create_diary_notebook",
-    "update_diary_notebook",
-    "list_diary_notebooks",
-    "list_diary_entries",
-    "create_diary_entry",
-    "update_diary_entry",
-    "delete_diary_entry",
-    "comment_diary_entry",
-    "underline_diary_entry",
-    "search_diary",
-    "save_artifact",
-    "list_artifacts",
-    "save_memory",
-    "search_memory",
+    "session",
+    "diary",
+    "curio",
+    "memory",
+    "grimoire",
+    "stackchan",
 }
 
 
