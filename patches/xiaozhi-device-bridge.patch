@@ -1,0 +1,200 @@
+diff --git a/main/xiaozhi-server/core/api/device_call_handler.py b/main/xiaozhi-server/core/api/device_call_handler.py
+new file mode 100644
+index 00000000..81851f5d
+--- /dev/null
++++ b/main/xiaozhi-server/core/api/device_call_handler.py
+@@ -0,0 +1,84 @@
++"""Local HTTP endpoint for calling tools on the connected device."""
++from __future__ import annotations
++
++import os
++import json
++from aiohttp import web
++
++from config.logger import setup_logging
++from core.device_registry import get_connection, list_device_ids
++from core.providers.tools.device_mcp import call_mcp_tool
++from core.utils.util import sanitize_tool_name
++
++TAG = __name__
++
++
++class DeviceCallHandler:
++    def __init__(self, config: dict):
++        self.config = config
++        self.logger = setup_logging()
++
++    def _expected_token(self) -> str:
++        return (
++            os.getenv("STACKCHAN_TOKEN", "").strip()
++            or str(self.config.get("stackchan_token", "")).strip()
++        )
++
++    def _check_auth(self, request: web.Request) -> None:
++        expected = self._expected_token()
++        if not expected:
++            raise web.HTTPServiceUnavailable(text="STACKCHAN_TOKEN is not configured")
++
++        authorization = request.headers.get("Authorization", "")
++        token = authorization[7:] if authorization.startswith("Bearer ") else ""
++        if token != expected:
++            raise web.HTTPUnauthorized(text="Unauthorized")
++
++    async def handle_health(self, request: web.Request):
++        devices = await list_device_ids()
++        return web.json_response(
++            {
++                "ok": True,
++                "devices": devices,
++                "token_configured": bool(self._expected_token()),
++            }
++        )
++
++    async def handle_call(self, request: web.Request):
++        self._check_auth(request)
++        try:
++            payload = await request.json()
++        except json.JSONDecodeError as exc:
++            raise web.HTTPBadRequest(text="Invalid JSON") from exc
++
++        tool = str(payload.get("tool") or "").strip()
++        if not tool:
++            raise web.HTTPBadRequest(text="Missing tool")
++
++        arguments = payload.get("arguments") or {}
++        if not isinstance(arguments, dict):
++            raise web.HTTPBadRequest(text="arguments must be an object")
++
++        device_id = payload.get("device_id")
++        conn = await get_connection(str(device_id).strip() if device_id else None)
++        if conn is None:
++            devices = await list_device_ids()
++            raise web.HTTPNotFound(
++                text=json.dumps(
++                    {"error": "device not online or ambiguous", "devices": devices},
++                    ensure_ascii=False,
++                )
++            )
++
++        mcp_client = getattr(conn, "mcp_client", None)
++        if not mcp_client or not await mcp_client.is_ready():
++            raise web.HTTPConflict(text="device MCP is not ready")
++
++        tool_name = sanitize_tool_name(tool)
++        try:
++            result = await call_mcp_tool(conn, mcp_client, tool_name, arguments)
++        except Exception as exc:
++            self.logger.bind(tag=TAG).error(f"Device tool call failed: {exc}")
++            raise web.HTTPBadGateway(text=str(exc)) from exc
++
++        return web.json_response({"ok": True, "device_id": conn.device_id, "result": result})
+diff --git a/main/xiaozhi-server/core/connection.py b/main/xiaozhi-server/core/connection.py
+index 358818b4..1e3339f0 100644
+--- a/main/xiaozhi-server/core/connection.py
++++ b/main/xiaozhi-server/core/connection.py
+@@ -12,6 +12,7 @@ import traceback
+ import subprocess
+ import websockets
+ 
++from core.device_registry import register_connection, unregister_connection
+ from core.utils.util import (
+     extract_json_from_string,
+     check_vad_update,
+@@ -212,6 +213,7 @@ class ConnectionHandler:
+             )
+ 
+             self.device_id = self.headers.get("device-id", None)
++            await register_connection(self.device_id, self)
+ 
+             # 认证通过,继续处理
+             self.websocket = ws
+@@ -254,6 +256,7 @@ class ConnectionHandler:
+             return
+         finally:
+             try:
++                await unregister_connection(self.device_id, self)
+                 await self._save_and_close(ws)
+             except Exception as final_error:
+                 self.logger.bind(tag=TAG).error(f"最终清理时出错: {final_error}")
+diff --git a/main/xiaozhi-server/core/device_registry.py b/main/xiaozhi-server/core/device_registry.py
+new file mode 100644
+index 00000000..f4d482be
+--- /dev/null
++++ b/main/xiaozhi-server/core/device_registry.py
+@@ -0,0 +1,41 @@
++"""Track online device websocket connections for local control endpoints."""
++from __future__ import annotations
++
++import asyncio
++from typing import TYPE_CHECKING
++
++if TYPE_CHECKING:
++    from core.connection import ConnectionHandler
++
++
++_connections: dict[str, "ConnectionHandler"] = {}
++_lock = asyncio.Lock()
++
++
++async def register_connection(device_id: str | None, conn: "ConnectionHandler") -> None:
++    if not device_id:
++        return
++    async with _lock:
++        _connections[device_id] = conn
++
++
++async def unregister_connection(device_id: str | None, conn: "ConnectionHandler") -> None:
++    if not device_id:
++        return
++    async with _lock:
++        if _connections.get(device_id) is conn:
++            _connections.pop(device_id, None)
++
++
++async def get_connection(device_id: str | None = None) -> "ConnectionHandler | None":
++    async with _lock:
++        if device_id:
++            return _connections.get(device_id)
++        if len(_connections) == 1:
++            return next(iter(_connections.values()))
++        return None
++
++
++async def list_device_ids() -> list[str]:
++    async with _lock:
++        return sorted(_connections.keys())
+diff --git a/main/xiaozhi-server/core/http_server.py b/main/xiaozhi-server/core/http_server.py
+index feb96f3b..dc631604 100644
+--- a/main/xiaozhi-server/core/http_server.py
++++ b/main/xiaozhi-server/core/http_server.py
+@@ -1,6 +1,7 @@
+ import asyncio
+ from aiohttp import web
+ from config.logger import setup_logging
++from core.api.device_call_handler import DeviceCallHandler
+ from core.api.ota_handler import OTAHandler
+ from core.api.vision_handler import VisionHandler
+ 
+@@ -13,6 +14,7 @@ class SimpleHttpServer:
+         self.logger = setup_logging()
+         self.ota_handler = OTAHandler(config)
+         self.vision_handler = VisionHandler(config)
++        self.device_call_handler = DeviceCallHandler(config)
+ 
+     def _get_websocket_url(self, local_ip: str, port: int) -> str:
+         """获取websocket地址
+@@ -72,6 +74,14 @@ class SimpleHttpServer:
+                         web.options(
+                             "/mcp/vision/explain", self.vision_handler.handle_options
+                         ),
++                        web.get(
++                            "/xiaozhi/device/health",
++                            self.device_call_handler.handle_health,
++                        ),
++                        web.post(
++                            "/xiaozhi/device/call",
++                            self.device_call_handler.handle_call,
++                        ),
+                     ]
+                 )
+ 
