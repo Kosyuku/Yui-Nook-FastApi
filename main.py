@@ -79,7 +79,7 @@ app.add_middleware(
 
 _GATEWAY_SECRET = os.getenv("GATEWAY_SECRET", "").strip()
 # 不需要鉴权的路径前缀（健康检查、activity-events 来自 iOS 快捷指令）
-_AUTH_EXEMPT = {"/api/health", "/api/activity-events"}
+_AUTH_EXEMPT = {"/api/health", "/api/activity-events", "/api/usage"}
 
 @app.middleware("http")
 async def gateway_auth(request: Request, call_next):

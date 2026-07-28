@@ -1,8 +1,9 @@
-﻿"""新增 API 路由 — 待办/便签/主动消息/历史/意识循环"""
+"""新增 API 路由 — 待办/便签/主动消息/历史/意识循环"""
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from urllib.parse import urljoin
@@ -25,6 +26,123 @@ from tools import TOOLS_SCHEMA
 
 logger = logging.getLogger(__name__)
 extra_api = APIRouter(prefix="/api")
+
+
+def _usage_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _usage_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _usage_pct(used: float, limit: float, explicit: Any = None) -> float:
+    pct = _usage_float(explicit, -1)
+    if pct < 0 and limit > 0:
+        pct = used / limit * 100
+    return max(0.0, min(100.0, pct if pct >= 0 else 0.0))
+
+
+def _usage_item(label: str, *, used: Any = 0, limit: Any = 0, pct: Any = None, reset_at: str = "", source: str = "") -> dict[str, Any]:
+    used_value = _usage_float(used, 0)
+    limit_value = _usage_float(limit, 0)
+    item: dict[str, Any] = {
+        "label": str(label or "").strip(),
+        "pct": round(_usage_pct(used_value, limit_value, pct), 2),
+    }
+    if used_value:
+        item["used"] = used_value
+    if limit_value:
+        item["limit"] = limit_value
+    if reset_at:
+        item["resetAt"] = str(reset_at)
+    if source:
+        item["source"] = source
+    return item
+
+
+def _usage_env_items() -> list[dict[str, Any]]:
+    raw = os.getenv("YUI_USAGE_ITEMS_JSON") or os.getenv("USAGE_ITEMS_JSON") or ""
+    if raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                items = [
+                    _usage_item(
+                        item.get("label", ""),
+                        used=item.get("used", 0),
+                        limit=item.get("limit", 0),
+                        pct=item.get("pct"),
+                        reset_at=item.get("resetAt") or item.get("reset_at") or "",
+                        source=item.get("source") or "env",
+                    )
+                    for item in parsed
+                    if isinstance(item, dict) and str(item.get("label") or "").strip()
+                ]
+                if items:
+                    return items
+        except Exception as exc:
+            logger.warning("Invalid YUI_USAGE_ITEMS_JSON: %s", exc)
+
+    specs = [
+        ("YUI_USAGE_CLAUDE_CODE_5H", "Claude Code · 5h"),
+        ("YUI_USAGE_CODEX_5H", "Codex · 5h"),
+        ("YUI_USAGE_MONTHLY_API", "本月 API"),
+    ]
+    items: list[dict[str, Any]] = []
+    for prefix, label in specs:
+        env_label = os.getenv(f"{prefix}_LABEL", label)
+        pct = os.getenv(f"{prefix}_PCT")
+        used = os.getenv(f"{prefix}_USED", "0")
+        limit = os.getenv(f"{prefix}_LIMIT", "0")
+        reset_at = os.getenv(f"{prefix}_RESET_AT", "")
+        if pct not in (None, "") or used not in ("", "0") or limit not in ("", "0"):
+            items.append(_usage_item(env_label, used=used, limit=limit, pct=pct, reset_at=reset_at, source="env"))
+    return items
+
+
+async def _monthly_model_usage_item() -> dict[str, Any] | None:
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    total = 0
+    try:
+        if db._use_supabase_data():
+            rows = await db._supabase_select(
+                "model_usage_events",
+                select="total_tokens,created_at",
+                order="created_at.desc",
+                limit=5000,
+            )
+            for row in rows:
+                if str(row.get("created_at") or "") >= month_start:
+                    total += _usage_int(row.get("total_tokens"))
+        else:
+            conn = await db.get_db()
+            cursor = await conn.execute(
+                "SELECT COALESCE(SUM(total_tokens), 0) AS total FROM model_usage_events WHERE created_at >= ?",
+                (month_start,),
+            )
+            row = await cursor.fetchone()
+            total = _usage_int(row["total"] if row else 0)
+    except Exception as exc:
+        logger.debug("Monthly model usage unavailable: %s", exc)
+        return None
+
+    limit = _usage_float(os.getenv("YUI_USAGE_MONTHLY_API_LIMIT") or os.getenv("API_USAGE_MONTHLY_LIMIT"), 0)
+    pct_env = os.getenv("YUI_USAGE_MONTHLY_API_PCT")
+    if total <= 0 and not limit and pct_env in (None, ""):
+        return None
+    return _usage_item("本月 API", used=total, limit=limit, pct=pct_env, source="model_usage_events")
 
 
 # ── Pydantic Models ──
@@ -539,49 +657,12 @@ def _split_default_murmur_mock_contacts(contacts: Any) -> tuple[list[dict[str, A
     return real_contacts, removed, only_default_mock
 
 
-def _normalize_murmur_contact_id(value: Any) -> str:
-    return str(value or "").strip().lower()
-
-
-def _normalize_deleted_murmur_contact_ids(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    ids: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        contact_id = _normalize_murmur_contact_id(item)
-        if contact_id and contact_id not in seen:
-            seen.add(contact_id)
-            ids.append(contact_id)
-    return ids
-
-
-def _filter_deleted_murmur_contacts(contacts: list[dict[str, Any]], deleted_ids: list[str]) -> list[dict[str, Any]]:
-    deleted = set(deleted_ids)
-    if not deleted:
-        return contacts
-    return [
-        contact for contact in contacts
-        if _normalize_murmur_contact_id(contact.get("id") or contact.get("agent_id")) not in deleted
-    ]
-
-
 def _sanitize_murmur_sync_payload(payload: Any) -> tuple[dict[str, Any], int, bool]:
     safe_payload = payload.copy() if isinstance(payload, dict) else {}
-    deleted_ids = _normalize_deleted_murmur_contact_ids(safe_payload.get("deletedContactIds"))
-    restored_ids = _normalize_deleted_murmur_contact_ids(safe_payload.get("restoredContactIds"))
-    if restored_ids:
-        restored = set(restored_ids)
-        deleted_ids = [contact_id for contact_id in deleted_ids if contact_id not in restored]
-    safe_payload["deletedContactIds"] = deleted_ids
-    safe_payload["restoredContactIds"] = restored_ids
     if not isinstance(safe_payload.get("contacts"), list):
         return safe_payload, 0, False
     real_contacts, removed, only_default_mock = _split_default_murmur_mock_contacts(safe_payload.get("contacts"))
-    real_contacts = _filter_deleted_murmur_contacts(real_contacts, deleted_ids)
     if removed:
-        safe_payload["contacts"] = real_contacts
-    elif deleted_ids:
         safe_payload["contacts"] = real_contacts
     return safe_payload, removed, only_default_mock
 
@@ -1332,6 +1413,15 @@ async def get_recent_activity_events(
     return {"events": events}
 
 
+@extra_api.get("/usage")
+async def get_usage():
+    items = _usage_env_items()
+    monthly_item = await _monthly_model_usage_item()
+    if monthly_item and not any(item.get("label") == monthly_item.get("label") for item in items):
+        items.append(monthly_item)
+    return {"items": items}
+
+
 def _event_time(item: dict[str, Any]) -> str:
     return str(item.get("occurred_at") or item.get("created_at") or "")
 
@@ -1827,19 +1917,6 @@ async def sync_push(body: SyncPushPayload):
     if not isinstance(body.payload, dict):
         raise HTTPException(status_code=400, detail="payload must be an object")
     payload, removed_default_mock_contacts, only_default_mock = _sanitize_murmur_sync_payload(body.payload)
-    existing_payload = await _load_legacy_sync_payload()
-    existing_deleted_ids = _normalize_deleted_murmur_contact_ids(existing_payload.get("deletedContactIds"))
-    incoming_deleted_ids = _normalize_deleted_murmur_contact_ids(payload.get("deletedContactIds"))
-    restored_ids = set(_normalize_deleted_murmur_contact_ids(payload.get("restoredContactIds")))
-    merged_deleted_ids = [
-        contact_id for contact_id
-        in _normalize_deleted_murmur_contact_ids([*existing_deleted_ids, *incoming_deleted_ids])
-        if contact_id not in restored_ids
-    ]
-    if merged_deleted_ids:
-        payload["deletedContactIds"] = merged_deleted_ids
-        if isinstance(payload.get("contacts"), list):
-            payload["contacts"] = _filter_deleted_murmur_contacts(payload["contacts"], merged_deleted_ids)
 
     if only_default_mock:
         cleanup = await _cleanup_default_murmur_mock_sync_contacts()
@@ -3132,35 +3209,25 @@ async def promote_memory_candidate(
 
 
 @extra_api.delete("/consciousness/memory-candidates/{log_id}")
-async def dismiss_memory_candidate(
-    log_id: str,
-    agent_id: Optional[str] = Query(None),
-):
+async def dismiss_memory_candidate(log_id: str):
     """忽略候选：标记 cot_log status=dismissed，不写入 memory。"""
-    rows = await db.list_memory_candidates(agent_id=agent_id, status="candidate", limit=100)
-    row = next((r for r in rows if str(r.get("id") or "") == log_id), None)
-    if not row:
-        raise HTTPException(status_code=404, detail="候选不存在或已处理")
     ok = await db.update_cot_log_status(log_id, "dismissed")
     if not ok:
-        raise HTTPException(status_code=404, detail="候选不存在或已处理")
+        raise HTTPException(status_code=404, detail="候选不存在")
     return {"ok": True}
 
 
 # ==================== Grimoire 魔典 ====================
 
 class GrimTomeCreate(BaseModel):
-    id: Optional[str] = None
     title: str
     titleEn: str = ""
-    title_en: str = ""
     sub: str = ""
     spine: str = "#2C3E5C"
     cover: str = "#3A4D6F"
     gilt: str = "#C5A572"
     sigil: str = "⊹"
     sigilStyle: str = "serifEn"
-    sigil_style: str = ""
     kind: str = "虚构世界"
     palette: dict = {}
 
@@ -3168,32 +3235,25 @@ class GrimTomeCreate(BaseModel):
 class GrimTomeUpdate(BaseModel):
     title: Optional[str] = None
     titleEn: Optional[str] = None
-    title_en: Optional[str] = None
     sub: Optional[str] = None
     spine: Optional[str] = None
     cover: Optional[str] = None
     gilt: Optional[str] = None
     sigil: Optional[str] = None
     sigilStyle: Optional[str] = None
-    sigil_style: Optional[str] = None
     kind: Optional[str] = None
     palette: Optional[dict] = None
 
 
 class GrimEntryCreate(BaseModel):
-    id: Optional[str] = None
-    tome: str = ""
-    tome_id: str = ""
+    tome: str
     type: str = "lore"
     title: str
     titleEn: str = ""
-    title_en: str = ""
     sub: str = ""
     cover: str = "#3A4D6F"
     coverInk: str = "#F1E4BD"
-    cover_ink: str = ""
     coverGlyph: str = "·"
-    cover_glyph: str = ""
     status: str = "seed"
     tags: list = []
     fields: dict = {}
@@ -3202,18 +3262,13 @@ class GrimEntryCreate(BaseModel):
 
 
 class GrimEntryUpdate(BaseModel):
-    tome: Optional[str] = None
-    tome_id: Optional[str] = None
     type: Optional[str] = None
     title: Optional[str] = None
     titleEn: Optional[str] = None
-    title_en: Optional[str] = None
     sub: Optional[str] = None
     cover: Optional[str] = None
     coverInk: Optional[str] = None
-    cover_ink: Optional[str] = None
     coverGlyph: Optional[str] = None
-    cover_glyph: Optional[str] = None
     status: Optional[str] = None
     tags: Optional[list] = None
     fields: Optional[dict] = None
@@ -3223,39 +3278,13 @@ class GrimEntryUpdate(BaseModel):
 
 @extra_api.get("/grimoire/tomes")
 async def grim_list_tomes():
-    try:
-        tomes = await db.list_grimoire_tomes()
-    except Exception as exc:
-        logger.warning("grimoire list tomes failed: %s", exc)
-        tomes = []
+    tomes = await db.list_grimoire_tomes()
     return {"tomes": tomes}
 
 
 @extra_api.post("/grimoire/tomes")
 async def grim_create_tome(body: GrimTomeCreate):
-    payload = body.model_dump()
-    try:
-        tome = await db.create_grimoire_tome(**payload)
-    except Exception as exc:
-        logger.warning("grimoire create tome failed, returning transient tome: %s", exc)
-        now = datetime.now(timezone.utc).isoformat()
-        tome = {
-            "id": payload.get("id") or f"tome-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
-            "title": payload.get("title") or "新典",
-            "titleEn": payload.get("titleEn") or payload.get("title_en") or "",
-            "sub": payload.get("sub") or "",
-            "spine": payload.get("spine") or "#2C3E5C",
-            "cover": payload.get("cover") or "#3A4D6F",
-            "gilt": payload.get("gilt") or "#C5A572",
-            "sigil": payload.get("sigil") or "⊹",
-            "sigilStyle": payload.get("sigilStyle") or payload.get("sigil_style") or "serifEn",
-            "kind": payload.get("kind") or "虚构世界",
-            "count": 0,
-            "palette": payload.get("palette") or {},
-            "lastEdited": now,
-            "created_at": now,
-            "updated_at": now,
-        }
+    tome = await db.create_grimoire_tome(**body.model_dump())
     return {"tome": tome}
 
 
@@ -3286,41 +3315,13 @@ async def grim_delete_tome(tome_id: str):
 
 @extra_api.get("/grimoire/entries")
 async def grim_list_entries(tome_id: Optional[str] = None):
-    try:
-        entries = await db.list_grimoire_entries(tome_id=tome_id)
-    except Exception as exc:
-        logger.warning("grimoire list entries failed: %s", exc)
-        entries = []
+    entries = await db.list_grimoire_entries(tome_id=tome_id)
     return {"entries": entries}
 
 
 @extra_api.post("/grimoire/entries")
 async def grim_create_entry(body: GrimEntryCreate):
-    payload = body.model_dump()
-    try:
-        entry = await db.create_grimoire_entry(**payload)
-    except Exception as exc:
-        logger.warning("grimoire create entry failed, returning transient entry: %s", exc)
-        now = datetime.now(timezone.utc).isoformat()
-        entry = {
-            "id": payload.get("id") or f"entry-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
-            "tome": payload.get("tome") or payload.get("tome_id") or "",
-            "type": payload.get("type") or "lore",
-            "title": payload.get("title") or "新页",
-            "titleEn": payload.get("titleEn") or payload.get("title_en") or "",
-            "sub": payload.get("sub") or "",
-            "cover": payload.get("cover") or "#3A4D6F",
-            "coverInk": payload.get("coverInk") or payload.get("cover_ink") or "#F1E4BD",
-            "coverGlyph": payload.get("coverGlyph") or payload.get("cover_glyph") or "·",
-            "status": payload.get("status") or "seed",
-            "tags": payload.get("tags") or [],
-            "fields": payload.get("fields") or {},
-            "body": payload.get("body") or "",
-            "relations": payload.get("relations") or [],
-            "updated": now,
-            "created_at": now,
-            "updated_at": now,
-        }
+    entry = await db.create_grimoire_entry(**body.model_dump())
     return {"entry": entry}
 
 
