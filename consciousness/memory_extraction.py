@@ -261,7 +261,7 @@ def _validate_item(item: Any) -> dict[str, Any] | None:
 # ── 主入口 ────────────────────────────────────────────────────────────────────
 
 async def run_memory_extraction(agent_id: str) -> dict[str, Any]:
-    """从上次检查点以来的对话中提取记忆，写入 memory 表。
+    """从上次检查点以来的对话中提取记忆，写入候选队列。
 
     Returns:
         {
@@ -273,6 +273,7 @@ async def run_memory_extraction(agent_id: str) -> dict[str, Any]:
     """
     result: dict[str, Any] = {
         "extracted": 0,
+        "candidates": 0,
         "skipped": 0,
         "merged": 0,
         "messages_used": 0,
@@ -422,20 +423,19 @@ async def run_memory_extraction(agent_id: str) -> dict[str, Any]:
             result["merged"] += 1
             continue
 
-        # 6c. 写入（统一过滤 + DB 级精确去重在 add_memory 内）。
-        #     scope=source=当前 agent，绝不混用其他 agent。
+        # 6c. Automatic extraction is staged first.  Durable memory is created
+        # only when the user accepts a candidate in the memory panel.
         try:
-            await db.add_memory(
+            _, created = await db.add_memory_candidate(
                 content=content,
                 category=tag,
-                raw_content=content,
                 importance=item["importance"],
                 source="extraction",
                 agent_id=normalized_agent,
-                source_agent_id=normalized_agent,
-                visibility="private",
                 tags=tag,
-                apply_filter=True,
+                session_id=f"memory_extraction:{normalized_agent}",
+                reason="Automatic extraction from recent dialogue.",
+                source_message_ids=[str(message.get("id") or "") for message in all_new_messages],
             )
         except db.MemoryRejected as exc:
             logger.debug("memory_extraction: filtered (%s): %s", exc.reason, content[:60])
@@ -446,12 +446,16 @@ async def run_memory_extraction(agent_id: str) -> dict[str, Any]:
             result["skipped"] += 1
             continue
 
+        if not created:
+            result["merged"] += 1
+            continue
         if norm:
             seen_normalized.add(norm)
             dedup_pool.append((norm, tag))
         seen_hashes.add(h)
         result["extracted"] += 1
-        logger.info("memory_extraction: wrote [%s/imp%d] %s", tag, item["importance"], content[:60])
+        result["candidates"] += 1
+        logger.info("memory_extraction: staged [%s/imp%d] %s", tag, item["importance"], content[:60])
 
     # 7. 保存状态 + 推进 checkpoint
     await _save_seen_hashes(agent_id, seen_hashes)

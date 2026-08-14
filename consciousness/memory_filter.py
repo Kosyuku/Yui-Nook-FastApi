@@ -71,6 +71,24 @@ _FILLER_RE = tuple(re.compile(p, re.IGNORECASE) for p in _FILLER_PATTERNS)
 _URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
 _URL_OK_TAGS = frozenset({"project", "creation"})
 
+# Activity telemetry is useful to the short-lived activity/proactive layer, but
+# it is not a durable fact about the user or the relationship.  This pattern is
+# deliberately narrow: it only catches repeated app/page actions followed by an
+# unresolved-response observation, like the duplicate entries seen in memory.
+_TRANSIENT_OBSERVATION_RE = (
+    re.compile(
+        r"(?:当前角色|对方|她|他).{0,32}(?:连续|反复|多次|第?\d+次).{0,28}"
+        r"(?:打开|点击|浏览|查看|进入).{0,80}(?:未回应|没回应|暂无回应|尚未回应|"
+        r"需关注|需要关注|观察.{0,12}反应)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:opened|clicked|viewed|visited).{0,80}(?:repeatedly|multiple times).{0,100}"
+        r"(?:no response|awaiting response|observe.*reaction)",
+        re.IGNORECASE,
+    ),
+)
+
 
 # ── 主入口 ──────────────────────────────────────────────────────────────────
 
@@ -111,5 +129,7 @@ def should_store_memory(
     normalized_tag = str(tag or "").strip().lower()
     if _URL_RE.search(collapsed) and normalized_tag not in _URL_OK_TAGS:
         return False, "non_project_url"
+    if any(pattern.search(collapsed) for pattern in _TRANSIENT_OBSERVATION_RE):
+        return False, "transient_activity_observation"
 
     return True, "ok"

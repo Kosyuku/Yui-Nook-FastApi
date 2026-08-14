@@ -200,6 +200,7 @@ async def _run_state_summarizer(old_state: dict[str, Any], new_messages: list[di
 async def _run_memory_summarizer(
     *,
     agent_id: str,
+    session_id: str,
     new_messages: list[dict[str, Any]],
     memory_hint: str = "",
 ) -> int:
@@ -213,10 +214,11 @@ async def _run_memory_summarizer(
             "content": (
                 f"{summary_prompt}\n\n" if summary_prompt else ""
             ) + (
-                "You extract only durable long-term memories from dialogue. "
+                "You propose only durable long-term memories from dialogue. "
                 "Ignore transient emotions, one-off chatter, and unstable details. "
                 "Write memory content directly, without role labels like 用户, 助手, user, or assistant. "
                 "Use natural phrasing such as 今天没去上班 or 称呼当前角色为 Az. "
+                "Repeated app activity, lack of a reply, and things that still need observation are never memories. "
                 "Return strict JSON only: {\"memories\": [...]}."
             ),
         },
@@ -278,17 +280,23 @@ async def _run_memory_summarizer(
             importance_value = max(1, min(5, int(importance)))
         except Exception:
             importance_value = 3
-        await db.add_memory(
-            content=content,
-            raw_content=content,
-            category=category,
-            tags=str(item.get("tags") or "").strip(),
-            source="state_summary_auto",
-            agent_id=agent_id,
-            source_agent_id=agent_id,
-            importance=importance_value,
-        )
-        created += 1
+        try:
+            _, staged = await db.add_memory_candidate(
+                content=content,
+                category=category,
+                tags=str(item.get("tags") or "").strip(),
+                source="state_summary_auto",
+                agent_id=agent_id,
+                importance=importance_value,
+                session_id=session_id,
+                reason="Automatic idle-session summary.",
+                source_message_ids=[str(message.get("id") or "") for message in new_messages],
+            )
+        except db.MemoryRejected as exc:
+            logger.debug("Memory summarizer filtered (%s): %s", exc.reason, content[:80])
+            continue
+        if staged:
+            created += 1
     return created
 
 
@@ -340,6 +348,7 @@ async def summarize_idle_session(session_id: str, *, agent_id: str | None = None
         try:
             created = await _run_memory_summarizer(
                 agent_id=resolved_agent_id,
+                session_id=session_id,
                 new_messages=messages,
                 memory_hint=str(result.get("memory_hint") or "").strip(),
             )

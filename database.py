@@ -4589,12 +4589,11 @@ async def list_memory_candidates(
     status: str = "candidate",
     limit: int = 30,
 ) -> list[dict[str, Any]]:
-    """List daily_loop memory_candidate cot_log entries."""
+    """List pending memory candidates produced by automatic write paths."""
     safe_limit = max(1, min(int(limit or 30), 100))
     normalized_agent = normalize_agent_id(agent_id) if agent_id else ""
     if _use_supabase_data():
         filters: dict[str, str] = {
-            "source": "eq.daily_loop",
             "log_type": "eq.memory_candidate",
             "status": f"eq.{status}",
         }
@@ -4611,8 +4610,8 @@ async def list_memory_candidates(
             logger.debug("Supabase list_memory_candidates skipped: %s", exc)
             return []
     conn = await get_db()
-    where = ["source = ?", "log_type = ?", "status = ?"]
-    params: list[Any] = ["daily_loop", "memory_candidate", status]
+    where = ["log_type = ?", "status = ?"]
+    params: list[Any] = ["memory_candidate", status]
     if normalized_agent:
         where.append("agent_id = ?")
         params.append(normalized_agent)
@@ -4621,6 +4620,68 @@ async def list_memory_candidates(
     cursor = await conn.execute(query, params)
     rows = await cursor.fetchall()
     return [dict(row) for row in rows]
+
+
+async def add_memory_candidate(
+    content: str,
+    category: str,
+    *,
+    tags: str = "",
+    source: str = "auto",
+    agent_id: str | None = None,
+    importance: int | None = None,
+    session_id: str = "",
+    reason: str = "",
+    source_message_ids: list[str] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Stage an automatic memory proposal instead of writing durable memory.
+
+    Returns ``(candidate, created)``.  Exact duplicates of either a formal
+    memory or a pending candidate are not written again.
+    """
+    normalized_agent = normalize_agent_id(agent_id)
+    normalized_category = normalize_memory_category(category)
+    clean_content = _sanitize_memory_role_labels(content)
+    _memory_filter_candidate(clean_content, tag=tags or normalized_category, source=source)
+    normalized = _memory_normalize_content(clean_content)
+    if await _find_duplicate_memory(normalized_agent, normalized):
+        return {"content": clean_content, "status": "duplicate_formal"}, False
+
+    for row in await list_memory_candidates(agent_id=normalized_agent, status="candidate", limit=100):
+        try:
+            existing = json.loads(row.get("content") or "{}")
+        except Exception:
+            existing = {}
+        existing_content = str(existing.get("content") or row.get("summary") or "").strip()
+        if existing_content and _memory_normalize_content(existing_content) == normalized:
+            return row, False
+
+    try:
+        importance_value = max(1, min(5, int(importance or 3)))
+    except (TypeError, ValueError):
+        importance_value = 3
+    payload = {
+        "content": clean_content,
+        "category": normalized_category,
+        "tags": str(tags or normalized_category).strip(),
+        "importance": importance_value,
+        "source": str(source or "auto").strip(),
+        "reason": str(reason or "").strip()[:240],
+        "source_message_ids": [str(item) for item in (source_message_ids or []) if str(item)],
+        "normalized_content": normalized,
+    }
+    candidate = await add_cot_log(
+        session_id or f"memory_candidate:{normalized_agent}",
+        agent_id=normalized_agent,
+        source=str(source or "auto").strip(),
+        log_type="memory_candidate",
+        title="Memory candidate",
+        summary=clean_content,
+        content=json.dumps(payload, ensure_ascii=False),
+        status="candidate",
+        ttl_days=30,
+    )
+    return candidate, True
 
 
 async def update_cot_log_status(log_id: str, status: str) -> bool:
