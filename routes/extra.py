@@ -1,6 +1,7 @@
 ﻿"""新增 API 路由 — 待办/便签/主动消息/历史/意识循环"""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Response, UploadFile, File, Form, 
 from pydantic import BaseModel
 
 import ai_runtime
+import cc_usage_reader
 from config import settings
 import database as db
 import media_storage
@@ -1413,9 +1415,47 @@ async def get_recent_activity_events(
     return {"events": events}
 
 
+async def _claude_code_rolling_item() -> dict[str, Any] | None:
+    """从 Claude Code transcript 读 5h 滚动窗口的真实用量。
+
+    统计的是**整个订阅账号**（终端直接聊的、Codex 的、YUI bridge 的都算），
+    因为额度本来就是账号共享的。
+
+    额度上限官方没有公开数字，所以 limit 只能靠 YUI_USAGE_CLAUDE_CODE_5H_LIMIT
+    自己标定（观察几次触顶时的 used 值即可）；没标定时只报用量、不报百分比。
+    """
+    if os.getenv("YUI_USAGE_CC_ROLLING", "1").strip().lower() in ("0", "false", "off"):
+        return None
+    try:
+        hours = _usage_float(os.getenv("YUI_USAGE_CC_ROLLING_HOURS", "5"), 5.0) or 5.0
+        stats = await asyncio.to_thread(cc_usage_reader.read_rolling_usage, hours)
+    except Exception as exc:
+        logger.debug("Claude Code rolling usage unavailable: %s", exc)
+        return None
+
+    if not stats.get("messages"):
+        return None
+
+    label = os.getenv("YUI_USAGE_CLAUDE_CODE_5H_LABEL", f"Claude Code · {hours:g}h")
+    return _usage_item(
+        label,
+        used=stats["billable_total"],
+        limit=os.getenv("YUI_USAGE_CLAUDE_CODE_5H_LIMIT", "0"),
+        reset_at=stats["until"],
+        source="transcript",
+    )
+
+
 @extra_api.get("/usage")
 async def get_usage():
     items = _usage_env_items()
+
+    # transcript 是实测数据，比手填的环境变量可信，同名时覆盖掉后者
+    rolling_item = await _claude_code_rolling_item()
+    if rolling_item:
+        items = [i for i in items if i.get("label") != rolling_item.get("label")]
+        items.insert(0, rolling_item)
+
     monthly_item = await _monthly_model_usage_item()
     if monthly_item and not any(item.get("label") == monthly_item.get("label") for item in items):
         items.append(monthly_item)
