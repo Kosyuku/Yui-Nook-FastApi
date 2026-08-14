@@ -49,6 +49,10 @@ DEFAULT_TIMEOUT: float = float(os.getenv("CLAUDE_STREAM_TIMEOUT", "300"))
 SYSTEM_PROMPT_FILE: str = os.getenv("CLAUDE_STREAM_SYSTEM_PROMPT_FILE", "")
 MCP_CONFIG: str = os.getenv("CLAUDE_STREAM_MCP_CONFIG", "")
 THINKING_DISPLAY: str = os.getenv("CLAUDE_STREAM_THINKING", "summarized")
+# 推理量 low|medium|high|xhigh|max（§5）。空 = 用 CC 默认（adaptive）。
+# 注意：默认的 adaptive thinking 会对简单问题直接跳过思考，此时 thinking_delta
+# 为空是**正确行为**，不代表 --thinking-display 失效。
+EFFORT: str = os.getenv("CLAUDE_STREAM_EFFORT", "").strip().lower()
 IDLE_REAP_SECONDS: float = float(os.getenv("CLAUDE_STREAM_IDLE_REAP", "3600"))
 
 # ── 权限（教程 §9 三档）────────────────────────────────────────────────────
@@ -160,6 +164,8 @@ def _build_args(model: str, persona: str) -> list[str]:
         "--thinking-display", THINKING_DISPLAY,
         "--model", model,
     ]
+    if EFFORT:
+        args += ["--effort", EFFORT]
     args += _permission_args()
     if persona:
         args += ["--system-prompt-file", persona]
