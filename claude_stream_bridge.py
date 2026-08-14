@@ -48,6 +48,10 @@ DEFAULT_MODEL: str = os.getenv("CLAUDE_STREAM_MODEL", "opus")
 DEFAULT_TIMEOUT: float = float(os.getenv("CLAUDE_STREAM_TIMEOUT", "300"))
 SYSTEM_PROMPT_FILE: str = os.getenv("CLAUDE_STREAM_SYSTEM_PROMPT_FILE", "")
 MCP_CONFIG: str = os.getenv("CLAUDE_STREAM_MCP_CONFIG", "")
+# `--thinking-display` 是隐藏 flag（文档/--help/changelog 三处均无），无兼容承诺。
+# 已在 CC 2.1.144 实测：不带它思考文本被服务端吞掉（只回签名占位），带上
+# summarized 能拿到摘要。升级 CC 后请重跑 scripts/claude_stream_thinking_probe.py。
+# 官方在 v2.1.181+ 提供了 `/config thinking=` 新路，届时可优先走官方的。
 THINKING_DISPLAY: str = os.getenv("CLAUDE_STREAM_THINKING", "summarized")
 # 推理量 low|medium|high|xhigh|max（§5）。空 = 用 CC 默认（adaptive）。
 # 注意：默认的 adaptive thinking 会对简单问题直接跳过思考，此时 thinking_delta

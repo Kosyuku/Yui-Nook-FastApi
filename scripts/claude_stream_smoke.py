@@ -72,8 +72,16 @@ async def main() -> None:
     tools: list[str] = []
     done: dict = {}
 
+    # 必须用**真的需要动脑**的问题：adaptive thinking 会对简单问题直接跳过思考，
+    # 那时 thinking_delta 为空是正确行为，用简单题测会误报成 flag 失效。
+    # 顺便问 17×23 用于第二轮验上下文连续。
+    prompt = (
+        "农夫要把狼、羊、白菜运过河，船一次只能带一样；狼羊不能独处，羊菜也不能独处。"
+        "请给出完整步骤。另外顺便算一下 17 乘 23 等于几。"
+    )
+
     try:
-        async for ev in bridge.chat_events(KEY, "用一句话介绍你自己，然后想一想 17 乘 23 等于几。", reset=True):
+        async for ev in bridge.chat_events(KEY, prompt, reset=True):
             t = ev["type"]
             if t == "text":
                 text += ev["text"]
@@ -94,7 +102,8 @@ async def main() -> None:
         bool(thinking.strip()),
         "thinking_delta 非空",
         f"{len(thinking)} 字" if thinking.strip()
-        else "空 —— --thinking-display 可能在此版本失效，见教程附录 A.5",
+        else "空 —— 跑 claude_stream_thinking_probe.py 分诊："
+             "是没思考(adaptive)还是被吞(flag 失效)",
     )
     if tools:
         print(f"    工具调用: {', '.join(tools)}")
