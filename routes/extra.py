@@ -1,4 +1,4 @@
-"""新增 API 路由 — 待办/便签/主动消息/历史/意识循环"""
+﻿"""新增 API 路由 — 待办/便签/主动消息/历史/意识循环"""
 from __future__ import annotations
 
 import json
@@ -3142,7 +3142,7 @@ async def list_memory_candidates_endpoint(
     status: str = Query("candidate"),
     limit: int = Query(20, ge=1, le=100),
 ):
-    """列出 daily_loop 产出的记忆候选（等待人工或自动采纳）。"""
+    """列出所有自动写入路径产出的记忆候选。"""
     candidates = await db.list_memory_candidates(
         agent_id=agent_id,
         status=status,
@@ -3165,6 +3165,9 @@ async def list_memory_candidates_endpoint(
             "content": parsed.get("content") or row.get("summary") or "",
             "category": parsed.get("category") or parsed.get("tag") or "",
             "importance": parsed.get("importance") or 3,
+            "tags": parsed.get("tags") or parsed.get("tag") or "",
+            "source": parsed.get("source") or row.get("source") or "",
+            "reason": parsed.get("reason") or "",
         })
     return {"candidates": result, "total": len(result)}
 
@@ -3196,14 +3199,18 @@ async def promote_memory_candidate(
     importance = body.importance or int(parsed.get("importance") or 3)
     tags = body.tags or parsed.get("tag") or category
 
-    memory = await db.add_memory(
-        content=content,
-        category=category,
-        importance=importance,
-        tags=tags,
-        source="daily_loop_promoted",
-        agent_id=row.get("agent_id") or agent_id,
-    )
+    try:
+        memory = await db.add_memory(
+            content=content,
+            category=category,
+            importance=importance,
+            tags=tags,
+            source="daily_loop_promoted",
+            agent_id=row.get("agent_id") or agent_id,
+            apply_filter=True,
+        )
+    except db.MemoryRejected as exc:
+        raise HTTPException(status_code=400, detail=f"候选不满足正式记忆规则：{exc.reason}") from exc
     await db.update_cot_log_status(log_id, "promoted")
     return {"ok": True, "memory": memory}
 
