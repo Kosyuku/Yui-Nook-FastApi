@@ -71,7 +71,17 @@ def parse_model_usage(raw_usage: dict[str, Any] | None) -> dict[str, Any]:
         prompt_details.get("cached_tokens")
         or input_details.get("cached_tokens")
         or usage.get("cached_tokens")
+        # Claude Code 的 stream-json 用 Anthropic 原生键名
+        or usage.get("cache_read_input_tokens")
     )
+
+    # CC 的 input_tokens 不含缓存部分（一次 6 + 缓存 17570），直接算命中率会
+    # 得到 >100%。缓存读取本质上也是 prompt，补进去才能和其他 provider 可比。
+    if usage.get("cache_read_input_tokens") is not None and cached_tokens > prompt_tokens:
+        prompt_tokens += cached_tokens
+        if total_tokens < prompt_tokens + completion_tokens:
+            total_tokens = prompt_tokens + completion_tokens
+
     cache_hit_ratio = (cached_tokens / prompt_tokens) if prompt_tokens > 0 else 0.0
 
     return {

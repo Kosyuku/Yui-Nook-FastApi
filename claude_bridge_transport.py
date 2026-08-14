@@ -52,11 +52,17 @@ async def bridge_chat(
     reset: bool = False,
     timeout_seconds: float = 120,
     on_progress: Callable[[str], Any] | None = None,
+    on_event: Callable[[dict], Any] | None = None,
 ) -> BridgeResult:
     """发一条消息拿完整回复。
 
-    `on_progress` 统一成 tmux 的语义：收到的是**累计正文**（不是增量），
-    这样 routes 里现有的 diff 逻辑不用动。stream 侧内部累加后再回调。
+    两条回调，互不干扰：
+
+    - `on_progress(累计正文)` —— tmux 的语义（不是增量），routes 里现有的
+      diff 逻辑因此不用动。两条 transport 都会调。
+    - `on_event(规范化事件)` —— 结构化事件（工具调用、思考链、限流通知）。
+      **只有 stream transport 会调**；tmux 抓画面拿不到这些，静默不调。
+      所以调用方必须把它当"有则更好"，不能依赖它一定来。
     """
     transport = current_transport()
 
@@ -66,10 +72,12 @@ async def bridge_chat(
         accumulated: list[str] = []
 
         async def _relay(event: dict) -> None:
-            if on_progress is None or event.get("type") != "text":
-                return
-            accumulated.append(event["text"])
-            await _maybe_await(on_progress("".join(accumulated)))
+            if event.get("type") == "text":
+                accumulated.append(event["text"])
+                if on_progress is not None:
+                    await _maybe_await(on_progress("".join(accumulated)))
+            if on_event is not None:
+                await _maybe_await(on_event(event))
 
         result = await sb.claude_stream_chat(
             conversation_key,

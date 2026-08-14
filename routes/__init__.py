@@ -1324,6 +1324,67 @@ async def codex_chat(body: CodexChatRequest):
     }
 
 
+def _bridge_event_to_sse(event: dict) -> dict | None:
+    """把 bridge 的规范化事件翻成 SSE 帧。
+
+    正文（text）走已有的 `message` 事件，这里不重复发。返回 None = 不发。
+    前端收不到这些事件时应正常降级（tmux transport 下就一条都没有）。
+    """
+    etype = event.get("type")
+
+    if etype == "thinking":
+        return {"event": "thinking", "data": jsonlib.dumps(
+            {"content": event.get("text", "")}, ensure_ascii=False)}
+
+    if etype == "tool":
+        return {"event": "tool", "data": jsonlib.dumps({
+            "id": event.get("id", ""),
+            "name": event.get("name", ""),
+            "input": event.get("input") or {},
+        }, ensure_ascii=False)}
+
+    if etype == "tool_result":
+        content = event.get("content")
+        if not isinstance(content, str):
+            content = jsonlib.dumps(content, ensure_ascii=False) if content is not None else ""
+        return {"event": "tool_result", "data": jsonlib.dumps({
+            "id": event.get("id", ""),
+            # 工具返回可能非常大，前端只做卡片摘要，截断即可
+            "content": content[:2000],
+            "is_error": bool(event.get("is_error")),
+        }, ensure_ascii=False)}
+
+    if etype == "notice":
+        return {"event": "notice", "data": jsonlib.dumps({
+            "kind": event.get("kind", ""),
+            "error": event.get("error", ""),
+        }, ensure_ascii=False)}
+
+    return None
+
+
+async def _record_bridge_usage(result, *, agent_id: str, session_id: str) -> None:
+    """把 Claude Code bridge 一轮的 token 用量落库。
+
+    只有 stream transport 拿得到 usage（result 事件自带）；tmux 是抓画面的，
+    没有这个数据，此时静默跳过。记账失败绝不能影响已经成功的回复。
+    """
+    usage = getattr(result, "usage", None)
+    if not usage:
+        return
+    try:
+        await record_model_usage(
+            agent_id=agent_id,
+            session_id=session_id,
+            mode="chat",
+            provider=f"claude_code_{getattr(result, 'transport', '')}".rstrip("_"),
+            model=os.getenv("CLAUDE_STREAM_MODEL", "opus"),
+            raw_usage=usage,
+        )
+    except Exception as exc:
+        logger.warning("Claude Code bridge usage recording failed: %s", exc)
+
+
 @api.post("/claude-code/chat")
 async def claude_code_chat(body: ClaudeCodeChatRequest):
     """
@@ -1407,6 +1468,8 @@ async def claude_code_chat(body: ClaudeCodeChatRequest):
         logger.exception("Claude Code bridge persistence failed")
         raise HTTPException(status_code=502, detail=f"Claude Code replied but failed to save messages: {exc}") from exc
 
+    await _record_bridge_usage(result, agent_id=agent_id, session_id=session["id"])
+
     return {
         "conversation_key": result.conversation_key,
         "session_name": result.session_name,
@@ -1470,6 +1533,10 @@ async def claude_code_chat_stream(body: ClaudeCodeChatRequest):
         async def on_progress(partial: str):
             await progress_queue.put(("progress", partial))
 
+        async def on_event(event: dict):
+            # 只有 stream transport 会来；tmux 下这个回调永远不触发
+            await progress_queue.put(("event", event))
+
         async def run_bridge():
             try:
                 result = await bridge_chat(
@@ -1478,6 +1545,7 @@ async def claude_code_chat_stream(body: ClaudeCodeChatRequest):
                     reset=body.reset,
                     timeout_seconds=body.timeout_seconds or 120,
                     on_progress=on_progress,
+                    on_event=on_event,
                 )
                 await progress_queue.put(("done", result))
             except Exception as exc:
@@ -1498,6 +1566,12 @@ async def claude_code_chat_stream(body: ClaudeCodeChatRequest):
                 if delta:
                     sent_visible = visible
                     yield {"event": "message", "data": jsonlib.dumps({"content": delta}, ensure_ascii=False)}
+                continue
+
+            if kind == "event":
+                sse = _bridge_event_to_sse(payload)
+                if sse:
+                    yield sse
                 continue
 
             if kind == "error":
@@ -1542,6 +1616,8 @@ async def claude_code_chat_stream(body: ClaudeCodeChatRequest):
                 logger.exception("Claude Code stream persistence failed")
                 yield {"event": "error", "data": f"Claude Code replied but failed to save messages: {exc}"}
                 return
+
+            await _record_bridge_usage(result, agent_id=agent_id, session_id=session["id"])
 
             yield {"event": "done", "data": "[DONE]"}
             return
