@@ -15,7 +15,12 @@ from sse_starlette.sse import EventSourceResponse
 
 import ai_runtime
 from codex_bridge import codex_bridge_chat
-from claude_tmux_bridge import claude_tmux_chat, claude_tmux_reset, list_active_sessions, keepalive_all_sessions
+from claude_bridge_transport import (
+    bridge_chat,
+    bridge_keepalive,
+    bridge_reset,
+    bridge_sessions,
+)
 import database as db
 from models import router as model_router
 from models import OpenAICompatAdapter, EchoAdapter, ADAPTER_MAP
@@ -1367,7 +1372,7 @@ async def claude_code_chat(body: ClaudeCodeChatRequest):
         logger.warning("Claude Code auto memory capture failed: %s", exc)
 
     try:
-        result = await claude_tmux_chat(
+        result = await bridge_chat(
             conversation_key=body.conversation_key,
             content=body.content,
             reset=body.reset,
@@ -1467,7 +1472,7 @@ async def claude_code_chat_stream(body: ClaudeCodeChatRequest):
 
         async def run_bridge():
             try:
-                result = await claude_tmux_chat(
+                result = await bridge_chat(
                     conversation_key=body.conversation_key,
                     content=body.content,
                     reset=body.reset,
@@ -1546,22 +1551,21 @@ async def claude_code_chat_stream(body: ClaudeCodeChatRequest):
 
 @api.get("/claude-code/sessions")
 async def claude_code_sessions():
-    """列出所有活跃的 Claude Code tmux sessions 及消息计数。"""
-    return {"sessions": list_active_sessions(), "compact_every": int(os.getenv("CLAUDE_TMUX_COMPACT_EVERY", "30"))}
+    """列出当前 transport 下所有活跃会话（tmux session 或常驻进程）。"""
+    return bridge_sessions()
 
 
 @api.post("/claude-code/reset")
 async def claude_code_reset_session(body: ClaudeCodeChatRequest):
-    """Kill 掉对应的 tmux session，下次重新开始。"""
-    await claude_tmux_reset(body.conversation_key)
+    """结束该会话，下次重新开始。"""
+    await bridge_reset(body.conversation_key)
     return {"ok": True, "conversation_key": body.conversation_key}
 
 
 @api.post("/claude-code/keepalive")
 async def claude_code_keepalive():
-    """检查所有 session 里 claude 是否还活着，挂了就重启。不耗额度。"""
-    results = await asyncio.to_thread(keepalive_all_sessions)
-    return {"results": results}
+    """tmux：挂了就重启。stream：回收空闲进程。都不耗额度。"""
+    return await bridge_keepalive()
 
 
 async def _cc_keepalive_loop():
@@ -1569,7 +1573,7 @@ async def _cc_keepalive_loop():
     while True:
         await asyncio.sleep(600)
         try:
-            await asyncio.to_thread(keepalive_all_sessions)
+            await bridge_keepalive()
         except Exception as exc:
             logger.warning("CC keepalive failed: %s", exc)
 

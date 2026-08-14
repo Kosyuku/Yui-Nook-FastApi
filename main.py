@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+import claude_bridge_transport
 import consciousness
 import conversation_summary
 import database as db
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI):
     conversation_summary.stop_loop()
     await memory_async.stop_worker()
     await telegram_bot.stop()
+    await claude_bridge_transport.bridge_shutdown()
     await db.close_db()
     logger.info("Pyro-Gemini gateway stopped")
 
