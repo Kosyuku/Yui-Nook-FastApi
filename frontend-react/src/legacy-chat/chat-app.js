@@ -7026,6 +7026,8 @@
     state.aiSettingsSaving = false;
     state.memoryServiceEntries = Array.isArray(state.memoryServiceEntries) ? state.memoryServiceEntries : [];
     state.memoryServiceLoading = !!state.memoryServiceLoading;
+    state.memoryServiceView = state.memoryServiceView === 'map' ? 'map' : 'list';
+    state.memoryMapSelectedId = String(state.memoryMapSelectedId || '');
     state.slotVendorGroupOpen = (state.slotVendorGroupOpen && typeof state.slotVendorGroupOpen === 'object') ? state.slotVendorGroupOpen : {};
     state.providerModelVendorOpen = (state.providerModelVendorOpen && typeof state.providerModelVendorOpen === 'object') ? state.providerModelVendorOpen : {};
 
@@ -7611,6 +7613,66 @@
         </span>`;
     }
 
+    function memoryMapMeta(item) {
+        const category = String(item.category || 'recent_pending').toLowerCase();
+        const palette = {
+            core_profile: '#b66e7c', deep: '#737d9b', ephemeral: '#b6905b', recent_pending: '#7d9b86',
+            fact: '#737d9b', taste: '#b66e7c', mood: '#b6905b', stance: '#7d9b86',
+            lore: '#826b9e', moment: '#c58674', ritual: '#82936b', intimate: '#b66e7c',
+            project: '#638a9a', creation: '#a27961',
+        };
+        return { category, color: palette[category] || '#8b8a94' };
+    }
+
+    function memoryMapWords(item) {
+        return String(item.tags || item.category || '')
+            .toLowerCase().split(/[\s,，;；|/]+/).map(word => word.trim()).filter(word => word.length > 1);
+    }
+
+    function memoryMapEdges(entries) {
+        const edges = [];
+        entries.forEach((left, leftIndex) => entries.slice(leftIndex + 1).forEach((right, offset) => {
+            const rightIndex = leftIndex + offset + 1;
+            const shared = memoryMapWords(left).filter(word => memoryMapWords(right).includes(word));
+            if (shared.length || String(left.category || '') === String(right.category || '')) {
+                edges.push({ leftIndex, rightIndex, strength: Math.min(3, shared.length + 1) });
+            }
+        }));
+        return edges.slice(0, 42);
+    }
+
+    function memoryMapPoint(index, total) {
+        const angle = (Math.PI * 2 * index / Math.max(total, 1)) - Math.PI / 2;
+        const ring = index < 7 ? 30 : 41;
+        return { x: 50 + Math.cos(angle) * ring, y: 50 + Math.sin(angle) * ring };
+    }
+
+    function renderMemoryMap(entries) {
+        const selected = entries.find(item => String(item.id || '') === state.memoryMapSelectedId) || entries[0];
+        const points = entries.map((_, index) => memoryMapPoint(index, entries.length));
+        const edges = memoryMapEdges(entries);
+        return `
+          <div class="memory-map" role="region" aria-label="记忆星图">
+            <svg class="memory-map-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              ${edges.map(edge => `<line x1="${points[edge.leftIndex].x}" y1="${points[edge.leftIndex].y}" x2="${points[edge.rightIndex].x}" y2="${points[edge.rightIndex].y}" class="memory-map-line strength-${edge.strength}" />`).join('')}
+            </svg>
+            ${entries.map((item, index) => {
+                const point = points[index];
+                const meta = memoryMapMeta(item);
+                const active = String(item.id || '') === String(selected?.id || '');
+                const size = Math.max(28, Math.min(47, 25 + Number(item.importance || 3) * 4 + Number(item.temperature || 0) * .12));
+                const label = String(item.compressed_content || item.raw_content || item.content || '未命名记忆').slice(0, 14);
+                return `<button class="memory-map-node${active ? ' active' : ''}" data-action="memory-map-select" data-memory-id="${escapeHtml(String(item.id || ''))}" style="--node-x:${point.x}%;--node-y:${point.y}%;--node-size:${size}px;--node-color:${meta.color};" title="${escapeHtml(label)}"><span>${escapeHtml(label)}</span></button>`;
+            }).join('')}
+          </div>
+          ${selected ? `
+            <div class="memory-map-detail">
+              <div><strong>${escapeHtml(selected.compressed_content || selected.raw_content || selected.content || '')}</strong><em>${escapeHtml(memoryMapMeta(selected).category)} · ${renderMemoryTempBar(selected.temperature ?? 0)}</em></div>
+              <div class="ai-inline-actions"><button class="ghost-action" data-action="memory-service-edit" data-memory-id="${escapeHtml(String(selected.id || ''))}">编辑</button><button class="ghost-action" data-action="memory-service-delete" data-memory-id="${escapeHtml(String(selected.id || ''))}">删除</button></div>
+            </div>` : ''}
+        `;
+    }
+
     function renderMemoryServicePage() {
         const contact = byId(state.currentContactId) || state.contacts[0];
         const entries = Array.isArray(state.memoryServiceEntries) ? state.memoryServiceEntries : [];
@@ -7633,12 +7695,17 @@
           <div class="ai-inline-actions" style="margin-top:8px;">
             ${SORTS.map(s => `<button class="ghost-action${sort === s.key ? ' active' : ''}" data-action="memory-service-sort" data-sort="${s.key}">${s.label}</button>`).join('')}
           </div>
+          <div class="memory-service-view-switch" role="group" aria-label="记忆视图">
+            <button class="ghost-action${state.memoryServiceView === 'list' ? ' active' : ''}" data-action="memory-service-view" data-view="list">列表</button>
+            <button class="ghost-action${state.memoryServiceView === 'map' ? ' active' : ''}" data-action="memory-service-view" data-view="map">星图</button>
+          </div>
         </div>
         <div class="settings-group glass-frost ai-panel compact-panel">
           <h3>记忆列表</h3>
           ${state.memoryServiceLoading ? '<p class="section-eyebrow">正在加载…</p>' : ''}
-          ${!state.memoryServiceLoading && !entries.length ? '<p class="section-eyebrow">这个角色还没有记忆。</p>' : ''}
-          ${entries.map((item) => {
+          ${!state.memoryServiceLoading && !entries.length ? '<p class="section-eyebrow">这个角色还没有正式记忆，星图暂时没有星星。</p>' : ''}
+          ${state.memoryServiceView === 'map' && entries.length ? renderMemoryMap(entries) : ''}
+          ${state.memoryServiceView !== 'map' ? entries.map((item) => {
             const text = item.compressed_content || item.raw_content || item.content || '未命名记忆';
             const imp = item.importance ?? 3;
             const temp = item.temperature ?? 0;
@@ -7660,7 +7727,7 @@
                 <button class="ghost-action" data-action="memory-service-delete" data-memory-id="${escapeHtml(memoryId)}" ${memoryId ? '' : 'disabled'}>删除</button>
               </div>
             </div>`;
-          }).join('')}
+          }).join('') : ''}
         </div>
         ${candidates.length > 0 ? `
         <div class="settings-group glass-frost ai-panel compact-panel">
@@ -8699,6 +8766,16 @@
         if (action === 'memory-service-sort') {
             state.memoryServiceSort = target.dataset.sort || 'updated_at';
             loadMemoryService(state.currentContactId, { silent: true });
+            return;
+        }
+        if (action === 'memory-service-view') {
+            state.memoryServiceView = target.dataset.view === 'map' ? 'map' : 'list';
+            render();
+            return;
+        }
+        if (action === 'memory-map-select') {
+            state.memoryMapSelectedId = String(target.dataset.memoryId || '');
+            render();
             return;
         }
         if (action === 'memory-candidate-promote') { promoteMemoryCandidate(target.dataset.candidateId); return; }
