@@ -1,4 +1,7 @@
-"""Backfill local memory embedding cache for semantic retrieval.
+"""Backfill memory embeddings for semantic retrieval.
+
+Writes to whichever backend is configured: the local embedding cache on
+sqlite, or memories.embedding on Supabase.
 
 Usage:
   python scripts/backfill_memory_embeddings.py
@@ -6,8 +9,12 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 
-import database as db
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import database as db  # noqa: E402
 
 
 async def main() -> None:
