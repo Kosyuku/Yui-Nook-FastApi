@@ -1415,6 +1415,97 @@ async def get_recent_activity_events(
     return {"events": events}
 
 
+def _drift_pin_text(raw: str, limit: int = 60) -> str:
+    """把一条消息压成图钉上能看的一句话。"""
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "…"
+
+
+def _drift_bound(value: str, field: str) -> str:
+    """把日界归一成库里那种 '+00:00' 结尾的 UTC ISO 串。
+
+    区间是拿字符串比的（created_at 是 TEXT），所以后缀必须对齐：
+    前端 toISOString() 给的是 'Z' 结尾，而库里存的是 '+00:00'，
+    '0' < 'Z' 会让边界上那条记录被判在区间外。
+    """
+    try:
+        moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field} 不是合法的 ISO 时间: {value!r}") from exc
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).isoformat()
+
+
+@extra_api.get("/drift/day")
+async def get_drift_day(
+    start: str,
+    end: str,
+    agent_id: str = "",
+    limit: int = 200,
+    sources: str = "chat,drift",
+):
+    """Drift 的「今天」：一天之内带时刻的事件，喂给 timepaw 的散步路径。
+
+    start/end 是 UTC ISO 串，由前端拿**本地**日界换算好再传上来
+    （中国是 UTC+8，本地的今天在 UTC 里是横跨两天的，后端不猜时区）。
+    """
+    start = _drift_bound(start, "start")
+    end = _drift_bound(end, "end")
+    wanted = {s.strip() for s in str(sources or "").split(",") if s.strip()}
+    items: list[dict[str, Any]] = []
+
+    if "chat" in wanted:
+        try:
+            rows = await db.list_messages_between(
+                start, end, role="user", agent_id=agent_id or None, limit=limit
+            )
+        except Exception:
+            logger.exception("drift/day: 取聊天记录失败")
+            rows = []
+        for row in rows:
+            text = _drift_pin_text(row.get("content"))
+            if not text:
+                continue
+            items.append({
+                "id": f"chat-{row.get('id')}",
+                "ts": row.get("created_at", ""),
+                "text": text,
+                "kind": "chat",
+            })
+
+    if "drift" in wanted:
+        try:
+            rows = await db.list_extracted_items(
+                target_module="drift", agent_id=agent_id or None, limit=limit
+            )
+        except Exception:
+            logger.exception("drift/day: 取 drift 条目失败")
+            rows = []
+        for row in rows:
+            metadata = row.get("metadata") or {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            # 条目自己记了发生时刻就用它，否则退回落库时间
+            ts = str(metadata.get("ts") or row.get("created_at") or "")
+            if not (start <= ts < end):
+                continue
+            text = _drift_pin_text(row.get("title") or row.get("content"))
+            if not text:
+                continue
+            items.append({
+                "id": f"drift-{row.get('id')}",
+                "ts": ts,
+                "text": text,
+                "kind": "drift",
+            })
+
+    items.sort(key=lambda item: item["ts"])
+    return {"items": items[:limit]}
+
+
 async def _claude_code_rolling_item() -> dict[str, Any] | None:
     """从 Claude Code transcript 读 5h 滚动窗口的真实用量。
 

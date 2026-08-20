@@ -76,7 +76,8 @@ class AppConfig:
     embedding_base_url: str = ""
     embedding_api_key: str = ""
     embedding_model: str = ""
-    embedding_dimensions: int = 1536
+    # 0 = 不指定，用服务端默认维度。填了非 0 值会随请求发出，并在返回维度对不上时报错。
+    embedding_dimensions: int = 0
     supabase_memory_match_rpc: str = "match_memories"
 
     # ── 人设 ──
@@ -262,7 +263,7 @@ class AppConfig:
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL", os.getenv("CHAT_BASE_URL", "")),
             embedding_api_key=os.getenv("EMBEDDING_API_KEY", os.getenv("CHAT_API_KEY", "")),
             embedding_model=os.getenv("EMBEDDING_MODEL", ""),
-            embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS", "1536")),
+            embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS", "").strip() or 0),
             supabase_memory_match_rpc=os.getenv("SUPABASE_MEMORY_MATCH_RPC", "match_memories"),
             # 人设
             persona_name=os.getenv("PERSONA_NAME", "Pyro"),

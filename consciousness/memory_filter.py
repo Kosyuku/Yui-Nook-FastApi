@@ -64,9 +64,23 @@ _FILLER_PATTERNS = (
     r"^\s*(修|改|push|同步|截图|看图|继续|好|好的|嗯|啊|哦|行|晚安|早安|在吗?|收到)[~!！。,.，\s]*$",
 )
 
+# 「我来记录这条信息」这类**关于存储动作本身**的旁白：模型把自己的答话当成
+# 记忆内容写进去了，内容里没有任何关于用户的事实。
+# 与 _META_PATTERNS 的区别是这里**不锚定行首** —— 模型几乎总会带一个
+# 「好的，」「明白了，」之类的前缀，`^\s*我(来|先|...)` 因此匹配不到。
+_STORAGE_NARRATION_PATTERNS = (
+    r"(我来|我先|我这就|让我|我帮你|我把)[^。！？\n]{0,12}(记录|记下来|记下|存下来|存一下|收录)",
+    r"(记录|记下|存下)(这条|这段|这个|一下)(信息|内容|事|消息)?",
+    r"让我把[^。！？\n]{0,20}记(下来|录)",
+    r"\b(i'?ll|let me|i will)\s+(note|record|remember|save)\s+(this|that)\b",
+)
+
 _NOISE_RE = tuple(re.compile(p, re.IGNORECASE) for p in _NOISE_PATTERNS)
 _META_RE = tuple(re.compile(p, re.IGNORECASE) for p in _META_PATTERNS)
 _FILLER_RE = tuple(re.compile(p, re.IGNORECASE) for p in _FILLER_PATTERNS)
+_STORAGE_NARRATION_RE = tuple(
+    re.compile(p, re.IGNORECASE) for p in _STORAGE_NARRATION_PATTERNS
+)
 
 _URL_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
 _URL_OK_TAGS = frozenset({"project", "creation"})
@@ -125,6 +139,9 @@ def should_store_memory(
     for pattern in _META_RE:
         if pattern.search(collapsed):
             return False, "process_or_self_explanation"
+    for pattern in _STORAGE_NARRATION_RE:
+        if pattern.search(collapsed):
+            return False, "storage_narration"
 
     normalized_tag = str(tag or "").strip().lower()
     if _URL_RE.search(collapsed) and normalized_tag not in _URL_OK_TAGS:

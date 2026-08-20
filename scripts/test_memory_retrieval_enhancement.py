@@ -85,6 +85,8 @@ async def main() -> None:
         agent_id=agent_id,
         visibility="private",
         importance=3,
+        # 合成的 smoke-test 文本，跳过质量过滤以保证用例可重复。
+        apply_filter=False,
     )
     old_id = str(old_memory.get("id") or "")
     _print_memory_line("old-before", old_memory)
@@ -98,6 +100,8 @@ async def main() -> None:
         agent_id=agent_id,
         visibility="private",
         importance=3,
+        # 同上：合成文本，跳过过滤。
+        apply_filter=False,
     )
     related = list(new_memory.get("related_memories") or [])
     _print_memory_line("new", new_memory)

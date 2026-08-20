@@ -643,7 +643,9 @@ def _new_id() -> str:
 class MemoryRejected(Exception):
     """Raised when a candidate memory is filtered out before storage.
 
-    Only triggered for automatic sources (add_memory(..., apply_filter=True)).
+    ``add_memory`` filters by default.  Only paths where a human authored the
+    text verbatim opt out with ``apply_filter=False`` (the manual
+    ``POST /api/memories`` endpoint, and smoke tests that need determinism).
     """
 
     def __init__(self, reason: str):
@@ -1281,8 +1283,27 @@ def _vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{float(v):.10f}".rstrip("0").rstrip(".") for v in values) + "]"
 
 
+# 已经警告过的维度组合，避免在打分循环里刷屏。
+_warned_dimension_pairs: set[tuple[int, int]] = set()
+
+
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
-    if not left or not right or len(left) != len(right):
+    if not left or not right:
+        return 0.0
+    if len(left) != len(right):
+        # 换过 embedding 模型但没重跑 backfill 时会走到这里。返回 0 会让检索
+        # 悄悄退化成完全无效，所以至少要在日志里留下痕迹。这里不抛异常 ——
+        # 打分是循环调用的，抛出会直接搞垮整条检索链。
+        pair = (len(left), len(right))
+        if pair not in _warned_dimension_pairs:
+            _warned_dimension_pairs.add(pair)
+            logger.warning(
+                "Embedding dimension mismatch in similarity: %d vs %d. "
+                "库里混了不同模型产出的向量，相似度会被算成 0；"
+                "请重跑 scripts/backfill_memory_embeddings.py。",
+                len(left),
+                len(right),
+            )
         return 0.0
     dot = sum(a * b for a, b in zip(left, right))
     left_norm = math.sqrt(sum(a * a for a in left))
@@ -1845,6 +1866,13 @@ async def _fetch_embedding(text: str) -> list[float]:
         "model": settings.embedding_model,
         "input": text,
     }
+    # 维度是可选的：0 / 留空表示不发这个参数，用服务端默认（text-embedding-v3
+    # 默认 1024，OpenAI text-embedding-3-* 默认 1536）。填了就必须发出去 ——
+    # 否则配置写着 1536、实际存进库的是 1024，没有任何地方会发现。
+    expected_dimensions = int(getattr(settings, "embedding_dimensions", 0) or 0)
+    if expected_dimensions > 0:
+        payload["dimensions"] = expected_dimensions
+
     async with httpx.AsyncClient(timeout=45.0) as client:
         resp = await client.post(_embedding_endpoint(), headers=_embedding_headers(), json=payload)
         if resp.status_code >= 300:
@@ -1858,6 +1886,13 @@ async def _fetch_embedding(text: str) -> list[float]:
     embedding = items[0].get("embedding")
     if not isinstance(embedding, list) or not embedding:
         raise RuntimeError("Embedding response does not contain a valid vector")
+
+    # 写入前就拦住维度不符：混维向量进库后只会让相似度静默变成 0。
+    if expected_dimensions > 0 and len(embedding) != expected_dimensions:
+        raise RuntimeError(
+            f"Embedding dimension mismatch: model={settings.embedding_model} "
+            f"returned {len(embedding)}, EMBEDDING_DIMENSIONS={expected_dimensions}"
+        )
 
     return [float(x) for x in embedding]
 
@@ -5036,7 +5071,7 @@ async def add_memory(
     external_source: str | None = None,
     external_id: str | None = None,
     oauth_client_id: str | None = None,
-    apply_filter: bool = False,
+    apply_filter: bool = True,
 ) -> dict[str, Any]:
     normalized_agent = await resolve_agent_id(
         agent_id=agent_id,
@@ -5057,7 +5092,8 @@ async def add_memory(
     # 无到期时间统一存 NULL（而非 ''），否则 active 过滤会把空串当成已过期而隐藏记忆。
     expires_value = (expires_at or "").strip() or None
 
-    # 自动来源统一过滤：过程文本/工具说明/报错/临时状态/自我解释一律拒绝。
+    # 默认过滤：过程文本/工具说明/报错/临时状态/自我解释/存储旁白一律拒绝。
+    # 默认开启是有意的 —— 新增写入路径忘了传参时应该被拦，而不是静默绕过。
     candidate_text = raw_text or stored_content
     if apply_filter:
         _memory_filter_candidate(candidate_text, tag=tags or "", source=source or "")
@@ -7316,6 +7352,61 @@ async def get_messages_by_date(date: str, limit: int = 100) -> list[dict[str, An
         "LEFT JOIN sessions s ON m.session_id = s.id "
         "WHERE m.created_at LIKE ? ORDER BY m.created_at ASC LIMIT ?",
         (f"{date}%", limit),
+    )
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def list_messages_between(
+    start: str,
+    end: str,
+    *,
+    role: str | None = None,
+    agent_id: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """按 created_at 区间取消息（start 含、end 不含，都是 UTC ISO 串）。
+
+    跟 get_messages_by_date 的差别：那个是拿 UTC 日期前缀 LIKE 的，
+    时区一偏就把本地的一天切错。Drift 的「今天」是**本地**的一天，
+    所以由调用方把本地日界换算成 UTC 区间传进来。
+    """
+    if _use_supabase_data():
+        filters: dict[str, str] = {}
+        if role:
+            filters["role"] = f"eq.{role}"
+        if agent_id:
+            filters["agent_id"] = f"eq.{agent_id}"
+        rows = await _supabase_select(
+            settings.supabase_messages_table,
+            filters=filters or None,
+            order="created_at.asc",
+            limit=5000,
+        )
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            created_at = str(row.get("created_at", ""))
+            if not (start <= created_at < end):
+                continue
+            result.append(dict(row))
+            if len(result) >= limit:
+                break
+        return result
+
+    db = await get_db()
+    clauses = ["created_at >= ?", "created_at < ?"]
+    params: list[Any] = [start, end]
+    if role:
+        clauses.append("role = ?")
+        params.append(role)
+    if agent_id:
+        clauses.append("agent_id = ?")
+        params.append(agent_id)
+    params.append(limit)
+    cursor = await db.execute(
+        "SELECT id, session_id, agent_id, role, content, created_at FROM messages "
+        f"WHERE {' AND '.join(clauses)} ORDER BY created_at ASC LIMIT ?",
+        params,
     )
     rows = await cursor.fetchall()
     return [dict(row) for row in rows]

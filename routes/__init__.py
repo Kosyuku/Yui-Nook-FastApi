@@ -712,6 +712,8 @@ async def create_memory(body: MemoryCreate):
             compressed_content=body.compressed_content,
             importance=body.importance,
             expires_at=body.expires_at,
+            # 用户在记忆面板手写的内容，原样入库，不走自动来源的质量过滤。
+            apply_filter=False,
         )
     except db.AgentNeedsBinding as exc:
         raise HTTPException(status_code=409, detail=exc.payload())
