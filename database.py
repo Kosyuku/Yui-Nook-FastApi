@@ -220,6 +220,61 @@ CREATE INDEX IF NOT EXISTS idx_media_items_type_created
 CREATE INDEX IF NOT EXISTS idx_media_items_storage_key
     ON media_items(storage_key);
 
+CREATE TABLE IF NOT EXISTS folio_highlights (
+    id            TEXT PRIMARY KEY,
+    book_id       TEXT NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    chapter_index INTEGER NOT NULL DEFAULT 0,
+    start_offset  INTEGER NOT NULL,
+    end_offset    INTEGER NOT NULL,
+    quote_text    TEXT NOT NULL,
+    author_type   TEXT NOT NULL CHECK(author_type IN ('user', 'agent')),
+    author_id     TEXT NOT NULL,
+    author_name   TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_folio_highlights_book_chapter
+    ON folio_highlights(book_id, chapter_index, start_offset);
+
+CREATE TABLE IF NOT EXISTS folio_thoughts (
+    id            TEXT PRIMARY KEY,
+    highlight_id  TEXT NOT NULL REFERENCES folio_highlights(id) ON DELETE CASCADE,
+    author_type   TEXT NOT NULL CHECK(author_type IN ('user', 'agent')),
+    author_id     TEXT NOT NULL,
+    author_name   TEXT NOT NULL DEFAULT '',
+    content       TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_folio_thoughts_highlight
+    ON folio_thoughts(highlight_id, created_at);
+
+CREATE TABLE IF NOT EXISTS folio_comments (
+    id            TEXT PRIMARY KEY,
+    thought_id    TEXT NOT NULL REFERENCES folio_thoughts(id) ON DELETE CASCADE,
+    author_type   TEXT NOT NULL CHECK(author_type IN ('user', 'agent')),
+    author_id     TEXT NOT NULL,
+    author_name   TEXT NOT NULL DEFAULT '',
+    content       TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_folio_comments_thought
+    ON folio_comments(thought_id, created_at);
+
+CREATE TABLE IF NOT EXISTS folio_reading_positions (
+    id            TEXT PRIMARY KEY,
+    book_id       TEXT NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    actor_type    TEXT NOT NULL CHECK(actor_type IN ('user', 'agent')),
+    actor_id      TEXT NOT NULL,
+    chapter_index INTEGER NOT NULL DEFAULT 0,
+    char_offset   INTEGER NOT NULL DEFAULT 0,
+    updated_at    TEXT NOT NULL,
+    UNIQUE(book_id, actor_type, actor_id)
+);
+CREATE INDEX IF NOT EXISTS idx_folio_positions_book
+    ON folio_reading_positions(book_id, actor_type, actor_id);
+
 -- ========== new tables ==========
 
 CREATE TABLE IF NOT EXISTS context_summaries (
@@ -1724,6 +1779,7 @@ async def _supabase_select(
     select: str = "*",
     order: str | None = None,
     limit: int | None = None,
+    offset: int | None = None,
 ) -> list[dict[str, Any]]:
     params: dict[str, str] = {"select": select}
     if filters:
@@ -1732,6 +1788,8 @@ async def _supabase_select(
         params["order"] = order
     if limit is not None:
         params["limit"] = str(limit)
+    if offset is not None:
+        params["offset"] = str(offset)
     async with httpx.AsyncClient(timeout=20.0, trust_env=settings.supabase_httpx_trust_env) as client:
         resp = await client.get(_supabase_endpoint(table), headers=_supabase_headers(), params=params)
         if resp.status_code >= 300:
@@ -3475,7 +3533,9 @@ async def list_media_items(
     type: str | None = None,
     owner_type: str | None = None,
     agent_id: str | None = None,
+    metadata_source: str | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     filters: dict[str, str] = {}
     if type:
@@ -3486,13 +3546,18 @@ async def list_media_items(
             filters["owner_type"] = f"eq.{owner}"
     if agent_id:
         filters["agent_id"] = f"eq.{await require_agent(agent_id)}"
+    normalized_source = str(metadata_source or "").strip().lower()
+    if normalized_source:
+        filters["metadata->>source"] = f"eq.{normalized_source}"
     safe_limit = max(1, min(int(limit or 100), 500))
+    safe_offset = max(0, int(offset or 0))
     if _use_supabase_data():
         rows = await _supabase_select(
             settings.supabase_media_items_table,
             filters=filters or None,
             order="created_at.desc",
             limit=safe_limit,
+            offset=safe_offset,
         )
         return [item for item in (_normalize_media_item(row) for row in rows) if item]
     db = await get_db()
@@ -3509,11 +3574,14 @@ async def list_media_items(
     if agent_id:
         clauses.append("agent_id = ?")
         params.append(await require_agent(agent_id))
+    if normalized_source:
+        clauses.append("LOWER(json_extract(metadata, '$.source')) = ?")
+        params.append(normalized_source)
     sql = "SELECT * FROM media_items"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY created_at DESC LIMIT ?"
-    params.append(safe_limit)
+    sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    params.extend((safe_limit, safe_offset))
     cursor = await db.execute(sql, params)
     rows = await cursor.fetchall()
     return [item for item in (_normalize_media_item(dict(row)) for row in rows) if item]
@@ -3596,6 +3664,317 @@ async def delete_media_item(item_id: str) -> dict[str, Any] | None:
     result = await db.execute("DELETE FROM media_items WHERE id = ?", (item["id"],))
     await db.commit()
     return item if result.rowcount > 0 else None
+
+
+# ==================== Folio shared reading ====================
+
+def _folio_record_id(client_id: str | None = None) -> str:
+    value = str(client_id or "").strip()
+    if value and re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", value):
+        return value
+    return _new_id()
+
+
+async def _require_folio_book(book_id: str) -> dict[str, Any]:
+    book = await get_media_item(book_id)
+    metadata = book.get("metadata") if book and isinstance(book.get("metadata"), dict) else {}
+    if not book or book.get("type") != "book" or str(metadata.get("source") or "").lower() != "folio":
+        raise ValueError("Folio book not found")
+    return book
+
+
+async def _folio_author(author_type: str, author_id: str | None, author_name: str = "") -> tuple[str, str, str]:
+    actor_type = str(author_type or "").strip().lower()
+    if actor_type == "user":
+        return "user", "user", str(author_name or "我").strip() or "我"
+    if actor_type != "agent":
+        raise ValueError("author_type must be user or agent")
+    agent_id = await require_agent(author_id)
+    agent = await get_agent(agent_id)
+    name = str(author_name or (agent or {}).get("display_name") or agent_id).strip()
+    return "agent", agent_id, name
+
+
+def _normalize_folio_comment(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(row.get("id") or ""),
+        "authorType": str(row.get("author_type") or "user"),
+        "authorId": str(row.get("author_id") or ""),
+        "authorName": str(row.get("author_name") or ""),
+        "content": str(row.get("content") or ""),
+        "createdAt": str(row.get("created_at") or ""),
+        "updatedAt": str(row.get("updated_at") or ""),
+    }
+
+
+def _normalize_folio_thought(row: dict[str, Any], comments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "id": str(row.get("id") or ""),
+        "highlightId": str(row.get("highlight_id") or ""),
+        "authorType": str(row.get("author_type") or "user"),
+        "authorId": str(row.get("author_id") or ""),
+        "authorName": str(row.get("author_name") or ""),
+        "content": str(row.get("content") or ""),
+        "createdAt": str(row.get("created_at") or ""),
+        "updatedAt": str(row.get("updated_at") or ""),
+        "comments": comments or [],
+    }
+
+
+def _normalize_folio_highlight(row: dict[str, Any], thoughts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "id": str(row.get("id") or ""),
+        "bookId": str(row.get("book_id") or ""),
+        "chapterIndex": int(row.get("chapter_index") or 0),
+        "startOffset": int(row.get("start_offset") or 0),
+        "endOffset": int(row.get("end_offset") or 0),
+        "text": str(row.get("quote_text") or ""),
+        "authorType": str(row.get("author_type") or "user"),
+        "authorId": str(row.get("author_id") or ""),
+        "authorName": str(row.get("author_name") or ""),
+        "createdAt": str(row.get("created_at") or ""),
+        "updatedAt": str(row.get("updated_at") or ""),
+        "thoughts": thoughts or [],
+    }
+
+
+async def list_folio_highlights(book_id: str, *, chapter_index: int | None = None) -> list[dict[str, Any]]:
+    book = await _require_folio_book(book_id)
+    if _use_supabase_data():
+        filters = {"book_id": f"eq.{book['id']}"}
+        if chapter_index is not None:
+            filters["chapter_index"] = f"eq.{max(0, int(chapter_index))}"
+        highlight_rows = await _supabase_select(
+            settings.supabase_folio_highlights_table, filters=filters, order="chapter_index.asc,start_offset.asc"
+        )
+        if not highlight_rows:
+            return []
+        highlight_ids_filter = ",".join(str(row["id"]) for row in highlight_rows)
+        thought_rows = await _supabase_select(
+            settings.supabase_folio_thoughts_table,
+            filters={"highlight_id": f"in.({highlight_ids_filter})"},
+            order="created_at.asc",
+        )
+        if thought_rows:
+            thought_ids_filter = ",".join(str(row["id"]) for row in thought_rows)
+            comment_rows = await _supabase_select(
+                settings.supabase_folio_comments_table,
+                filters={"thought_id": f"in.({thought_ids_filter})"},
+                order="created_at.asc",
+            )
+        else:
+            comment_rows = []
+    else:
+        conn = await get_db()
+        sql = "SELECT * FROM folio_highlights WHERE book_id = ?"
+        params: list[Any] = [book["id"]]
+        if chapter_index is not None:
+            sql += " AND chapter_index = ?"
+            params.append(max(0, int(chapter_index)))
+        cursor = await conn.execute(sql + " ORDER BY chapter_index, start_offset", params)
+        highlight_rows = [dict(row) for row in await cursor.fetchall()]
+        if not highlight_rows:
+            return []
+        placeholders = ",".join("?" for _ in highlight_rows)
+        cursor = await conn.execute(
+            f"SELECT * FROM folio_thoughts WHERE highlight_id IN ({placeholders}) ORDER BY created_at",
+            [row["id"] for row in highlight_rows],
+        )
+        thought_rows = [dict(row) for row in await cursor.fetchall()]
+        if thought_rows:
+            placeholders = ",".join("?" for _ in thought_rows)
+            cursor = await conn.execute(
+                f"SELECT * FROM folio_comments WHERE thought_id IN ({placeholders}) ORDER BY created_at",
+                [row["id"] for row in thought_rows],
+            )
+            comment_rows = [dict(row) for row in await cursor.fetchall()]
+        else:
+            comment_rows = []
+
+    highlight_ids = {str(row.get("id") or "") for row in highlight_rows}
+    relevant_thoughts = [row for row in thought_rows if str(row.get("highlight_id") or "") in highlight_ids]
+    thought_ids = {str(row.get("id") or "") for row in relevant_thoughts}
+    relevant_comments = [row for row in comment_rows if str(row.get("thought_id") or "") in thought_ids]
+    comments_by_thought: dict[str, list[dict[str, Any]]] = {}
+    for row in relevant_comments:
+        comments_by_thought.setdefault(str(row.get("thought_id") or ""), []).append(_normalize_folio_comment(row))
+    thoughts_by_highlight: dict[str, list[dict[str, Any]]] = {}
+    for row in relevant_thoughts:
+        thought_id = str(row.get("id") or "")
+        thoughts_by_highlight.setdefault(str(row.get("highlight_id") or ""), []).append(
+            _normalize_folio_thought(row, comments_by_thought.get(thought_id, []))
+        )
+    return [
+        _normalize_folio_highlight(row, thoughts_by_highlight.get(str(row.get("id") or ""), []))
+        for row in highlight_rows
+    ]
+
+
+async def create_folio_highlight(
+    book_id: str,
+    *,
+    chapter_index: int,
+    start_offset: int,
+    end_offset: int,
+    quote_text: str,
+    author_type: str,
+    author_id: str | None = None,
+    author_name: str = "",
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    book = await _require_folio_book(book_id)
+    start = max(0, int(start_offset))
+    end = max(0, int(end_offset))
+    quote = str(quote_text or "").strip()
+    if end <= start or not quote:
+        raise ValueError("highlight range and quote_text are required")
+    actor_type, actor_id, actor_name = await _folio_author(author_type, author_id, author_name)
+    record_id = _folio_record_id(client_id)
+    now = _now()
+    payload = {
+        "id": record_id,
+        "book_id": book["id"],
+        "chapter_index": max(0, int(chapter_index)),
+        "start_offset": start,
+        "end_offset": end,
+        "quote_text": quote,
+        "author_type": actor_type,
+        "author_id": actor_id,
+        "author_name": actor_name,
+        "created_at": now,
+        "updated_at": now,
+    }
+    if _use_supabase_data():
+        existing = await _supabase_select(settings.supabase_folio_highlights_table, filters={"id": f"eq.{record_id}"}, limit=1)
+        row = existing[0] if existing else await _supabase_insert_verified(settings.supabase_folio_highlights_table, payload)
+    else:
+        conn = await get_db()
+        await conn.execute(
+            """INSERT OR IGNORE INTO folio_highlights
+               (id, book_id, chapter_index, start_offset, end_offset, quote_text, author_type, author_id, author_name, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            tuple(payload.values()),
+        )
+        await conn.commit()
+        cursor = await conn.execute("SELECT * FROM folio_highlights WHERE id = ?", (record_id,))
+        row = dict(await cursor.fetchone())
+    if str(row.get("book_id") or "") != book["id"]:
+        raise ValueError("client_id already belongs to another book")
+    return _normalize_folio_highlight(row)
+
+
+async def add_folio_thought(
+    highlight_id: str,
+    *,
+    content: str,
+    author_type: str,
+    author_id: str | None = None,
+    author_name: str = "",
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    text = str(content or "").strip()
+    if not text:
+        raise ValueError("thought content is required")
+    actor_type, actor_id, actor_name = await _folio_author(author_type, author_id, author_name)
+    if _use_supabase_data():
+        parents = await _supabase_select(settings.supabase_folio_highlights_table, filters={"id": f"eq.{highlight_id}"}, limit=1)
+    else:
+        conn = await get_db()
+        cursor = await conn.execute("SELECT id FROM folio_highlights WHERE id = ?", (highlight_id,))
+        parent = await cursor.fetchone()
+        parents = [dict(parent)] if parent else []
+    if not parents:
+        raise ValueError("Folio highlight not found")
+    record_id = _folio_record_id(client_id)
+    now = _now()
+    payload = {"id": record_id, "highlight_id": highlight_id, "author_type": actor_type, "author_id": actor_id, "author_name": actor_name, "content": text, "created_at": now, "updated_at": now}
+    if _use_supabase_data():
+        existing = await _supabase_select(settings.supabase_folio_thoughts_table, filters={"id": f"eq.{record_id}"}, limit=1)
+        row = existing[0] if existing else await _supabase_insert_verified(settings.supabase_folio_thoughts_table, payload)
+    else:
+        await conn.execute("""INSERT OR IGNORE INTO folio_thoughts (id, highlight_id, author_type, author_id, author_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tuple(payload.values()))
+        await conn.commit()
+        cursor = await conn.execute("SELECT * FROM folio_thoughts WHERE id = ?", (record_id,))
+        row = dict(await cursor.fetchone())
+    if str(row.get("highlight_id") or "") != str(highlight_id):
+        raise ValueError("client_id already belongs to another highlight")
+    return _normalize_folio_thought(row)
+
+
+async def add_folio_comment(
+    thought_id: str,
+    *,
+    content: str,
+    author_type: str,
+    author_id: str | None = None,
+    author_name: str = "",
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    text = str(content or "").strip()
+    if not text:
+        raise ValueError("comment content is required")
+    actor_type, actor_id, actor_name = await _folio_author(author_type, author_id, author_name)
+    if _use_supabase_data():
+        parents = await _supabase_select(settings.supabase_folio_thoughts_table, filters={"id": f"eq.{thought_id}"}, limit=1)
+    else:
+        conn = await get_db()
+        cursor = await conn.execute("SELECT id FROM folio_thoughts WHERE id = ?", (thought_id,))
+        parent = await cursor.fetchone()
+        parents = [dict(parent)] if parent else []
+    if not parents:
+        raise ValueError("Folio thought not found")
+    record_id = _folio_record_id(client_id)
+    now = _now()
+    payload = {"id": record_id, "thought_id": thought_id, "author_type": actor_type, "author_id": actor_id, "author_name": actor_name, "content": text, "created_at": now, "updated_at": now}
+    if _use_supabase_data():
+        existing = await _supabase_select(settings.supabase_folio_comments_table, filters={"id": f"eq.{record_id}"}, limit=1)
+        row = existing[0] if existing else await _supabase_insert_verified(settings.supabase_folio_comments_table, payload)
+    else:
+        await conn.execute("""INSERT OR IGNORE INTO folio_comments (id, thought_id, author_type, author_id, author_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tuple(payload.values()))
+        await conn.commit()
+        cursor = await conn.execute("SELECT * FROM folio_comments WHERE id = ?", (record_id,))
+        row = dict(await cursor.fetchone())
+    if str(row.get("thought_id") or "") != str(thought_id):
+        raise ValueError("client_id already belongs to another thought")
+    return _normalize_folio_comment(row)
+
+
+async def set_folio_reading_position(
+    book_id: str,
+    *,
+    actor_type: str,
+    actor_id: str | None,
+    chapter_index: int,
+    char_offset: int = 0,
+) -> dict[str, Any]:
+    book = await _require_folio_book(book_id)
+    normalized_type, normalized_id, _ = await _folio_author(actor_type, actor_id)
+    position_id = hashlib.sha256(f"{book['id']}|{normalized_type}|{normalized_id}".encode("utf-8")).hexdigest()[:32]
+    payload = {"id": position_id, "book_id": book["id"], "actor_type": normalized_type, "actor_id": normalized_id, "chapter_index": max(0, int(chapter_index)), "char_offset": max(0, int(char_offset)), "updated_at": _now()}
+    if _use_supabase_data():
+        row = await _supabase_insert_verified(settings.supabase_folio_reading_positions_table, payload, on_conflict="id")
+    else:
+        conn = await get_db()
+        await conn.execute("""INSERT INTO folio_reading_positions (id, book_id, actor_type, actor_id, chapter_index, char_offset, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET chapter_index = excluded.chapter_index, char_offset = excluded.char_offset, updated_at = excluded.updated_at""", tuple(payload.values()))
+        await conn.commit()
+        row = payload
+    return {"bookId": row["book_id"], "actorType": row["actor_type"], "actorId": row["actor_id"], "chapterIndex": int(row.get("chapter_index") or 0), "charOffset": int(row.get("char_offset") or 0), "updatedAt": str(row.get("updated_at") or "")}
+
+
+async def get_folio_reading_position(book_id: str, *, actor_type: str, actor_id: str | None) -> dict[str, Any] | None:
+    book = await _require_folio_book(book_id)
+    normalized_type, normalized_id, _ = await _folio_author(actor_type, actor_id)
+    if _use_supabase_data():
+        rows = await _supabase_select(settings.supabase_folio_reading_positions_table, filters={"book_id": f"eq.{book['id']}", "actor_type": f"eq.{normalized_type}", "actor_id": f"eq.{normalized_id}"}, limit=1)
+        row = rows[0] if rows else None
+    else:
+        conn = await get_db()
+        cursor = await conn.execute("SELECT * FROM folio_reading_positions WHERE book_id = ? AND actor_type = ? AND actor_id = ? LIMIT 1", (book["id"], normalized_type, normalized_id))
+        value = await cursor.fetchone()
+        row = dict(value) if value else None
+    if not row:
+        return None
+    return {"bookId": row["book_id"], "actorType": row["actor_type"], "actorId": row["actor_id"], "chapterIndex": int(row.get("chapter_index") or 0), "charOffset": int(row.get("char_offset") or 0), "updatedAt": str(row.get("updated_at") or "")}
 
 
 # ==================== ???? ====================

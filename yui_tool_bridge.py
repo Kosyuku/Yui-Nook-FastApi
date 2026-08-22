@@ -772,60 +772,226 @@ async def _module_list_items(module: str, status: str, type: str, agent_id: str,
     return _ok(items=items, count=len(items))
 
 
-def _folio_media_book_as_item(book: dict[str, Any]) -> dict[str, Any]:
+def _is_folio_book(book: dict[str, Any] | None) -> bool:
+    if not book or str(book.get("type") or "").strip().lower() != "book":
+        return False
+    metadata = book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
+    return str(metadata.get("source") or "").strip().lower() == "folio"
+
+
+def _public_folio_book(book: dict[str, Any]) -> dict[str, Any]:
     metadata = book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
     return {
-        "id": f"media:{book.get('id')}",
-        "source": "media",
-        "target_module": "folio",
-        "status": "accepted",
-        "type": "book",
-        "title": book.get("title") or metadata.get("original_filename") or book.get("storage_key") or "Untitled book",
-        "content": "",
-        "source_excerpt": book.get("storage_key") or "",
-        "agent_id": book.get("agent_id") or "",
-        "metadata": {
-            **metadata,
-            "media_item_id": book.get("id"),
-            "owner_type": book.get("owner_type") or "",
-            "storage_provider": book.get("storage_provider") or "",
-            "storage_key": book.get("storage_key") or "",
-            "mime_type": book.get("mime_type") or "",
-            "size_bytes": book.get("size_bytes"),
-        },
+        "id": str(book.get("id") or ""),
+        "title": book.get("title") or metadata.get("original_filename") or "Untitled book",
+        "author": book.get("author") or "",
+        "mime_type": book.get("mime_type") or "",
+        "size_bytes": book.get("size_bytes"),
+        "language": metadata.get("language") or "",
+        "description": metadata.get("description") or "",
         "created_at": book.get("created_at") or "",
         "updated_at": book.get("updated_at") or "",
     }
 
 
-async def _folio_list_items(status: str, type: str, agent_id: str, limit: int, offset: int) -> str:
-    extracted_items = await db.list_extracted_items(
-        status=status or None,
-        type=type or None,
-        target_module="folio",
-        agent_id=agent_id or None,
-        limit=limit,
-        offset=offset,
-    )
-    normalized_type = str(type or "").strip().lower()
-    normalized_status = str(status or "").strip().lower()
-    include_books = normalized_type in {"", "book", "books", "novel", "text"} and normalized_status in {"", "accepted"}
-    media_books: list[dict[str, Any]] = []
-    if include_books:
-        media_books = await db.list_media_items(
+def _decode_folio_book(data: bytes, mime_type: str) -> str:
+    normalized_mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+    if normalized_mime in {"application/pdf", "application/epub+zip", "application/zip"}:
+        raise ValueError(f"Folio book format is not readable as text: {normalized_mime}")
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    return data.decode("utf-8-sig", errors="replace")
+
+
+async def list_folio_books(limit: int = 50, offset: int = 0) -> str:
+    """List public Folio books. Returns book IDs and display metadata only."""
+    try:
+        safe_limit = max(1, min(int(limit or 50), 100))
+        safe_offset = max(0, int(offset or 0))
+        books = await db.list_media_items(
             type="book",
-            limit=limit,
+            metadata_source="folio",
+            limit=safe_limit,
+            offset=safe_offset,
         )
-    book_items = [_folio_media_book_as_item(book) for book in media_books]
-    items = [*book_items, *extracted_items]
-    return _ok(
-        items=items,
-        count=len(items),
-        books=media_books,
-        book_count=len(media_books),
-        extracted_items=extracted_items,
-        extracted_count=len(extracted_items),
-    )
+        public_books = [_public_folio_book(book) for book in books if _is_folio_book(book)]
+        return _ok(
+            books=public_books,
+            count=len(public_books),
+            offset=safe_offset,
+            limit=safe_limit,
+            has_more=len(public_books) == safe_limit,
+        )
+    except Exception:
+        logger.exception("list_folio_books failed")
+        return _err("Folio bookshelf is unavailable")
+
+
+async def read_folio_book(book_id: str, offset: int = 0, limit: int = 12000) -> str:
+    """Read a Folio book page by public book ID. Offset and limit count text characters."""
+    try:
+        book = await db.get_media_item(str(book_id or "").strip())
+        if not _is_folio_book(book):
+            return _err("Folio book not found")
+        safe_offset = max(0, int(offset or 0))
+        safe_limit = max(1, min(int(limit or 12000), 30000))
+        data = await asyncio.to_thread(
+            media_storage.r2_client.get_object_bytes,
+            str(book.get("storage_key") or ""),
+        )
+        content = _decode_folio_book(data, str(book.get("mime_type") or ""))
+        page = content[safe_offset : safe_offset + safe_limit]
+        next_offset = safe_offset + len(page)
+        return _ok(
+            book=_public_folio_book(book),
+            content=page,
+            offset=safe_offset,
+            limit=safe_limit,
+            next_offset=next_offset if next_offset < len(content) else None,
+            has_more=next_offset < len(content),
+            total_characters=len(content),
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+    except Exception:
+        logger.exception("read_folio_book failed")
+        return _err("Folio book content is unavailable")
+
+
+async def list_folio_highlights(book_id: str, chapter_index: int = -1) -> str:
+    """List shared highlights, thoughts, and replies for a Folio book."""
+    try:
+        normalized_chapter = None if int(chapter_index) < 0 else int(chapter_index)
+        highlights = await db.list_folio_highlights(book_id, chapter_index=normalized_chapter)
+        return _ok(highlights=highlights, count=len(highlights), chapter_index=normalized_chapter)
+    except ValueError as exc:
+        return _err(str(exc))
+    except Exception:
+        logger.exception("list_folio_highlights failed")
+        return _err("Folio shared notes are unavailable")
+
+
+async def create_folio_highlight(
+    book_id: str,
+    chapter_index: int,
+    start_offset: int,
+    end_offset: int,
+    text: str,
+    agent_id: str,
+    author_name: str = "",
+) -> str:
+    """Create an agent-authored highlight in a Folio book."""
+    try:
+        highlight = await db.create_folio_highlight(
+            book_id,
+            chapter_index=chapter_index,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            quote_text=text,
+            author_type="agent",
+            author_id=agent_id,
+            author_name=author_name,
+        )
+        return _ok(highlight=highlight)
+    except (ValueError, db.AgentResolutionError) as exc:
+        return _err(str(exc))
+    except Exception:
+        logger.exception("create_folio_highlight failed")
+        return _err("Could not save the Folio highlight")
+
+
+async def add_folio_thought(highlight_id: str, content: str, agent_id: str, author_name: str = "") -> str:
+    """Add an agent-authored thought to a shared Folio highlight."""
+    try:
+        thought = await db.add_folio_thought(
+            highlight_id,
+            content=content,
+            author_type="agent",
+            author_id=agent_id,
+            author_name=author_name,
+        )
+        return _ok(thought=thought)
+    except (ValueError, db.AgentResolutionError) as exc:
+        return _err(str(exc))
+    except Exception:
+        logger.exception("add_folio_thought failed")
+        return _err("Could not save the Folio thought")
+
+
+async def reply_folio_thought(thought_id: str, content: str, agent_id: str, author_name: str = "") -> str:
+    """Reply as an agent to a shared Folio thought."""
+    try:
+        comment = await db.add_folio_comment(
+            thought_id,
+            content=content,
+            author_type="agent",
+            author_id=agent_id,
+            author_name=author_name,
+        )
+        return _ok(comment=comment)
+    except (ValueError, db.AgentResolutionError) as exc:
+        return _err(str(exc))
+    except Exception:
+        logger.exception("reply_folio_thought failed")
+        return _err("Could not save the Folio reply")
+
+
+async def read_folio_shared_context(
+    book_id: str,
+    chapter_index: int = -1,
+    offset: int = 0,
+    limit: int = 12000,
+) -> str:
+    """Read a Folio text page together with shared annotations."""
+    try:
+        book = await db.get_media_item(str(book_id or "").strip())
+        if not _is_folio_book(book):
+            return _err("Folio book not found")
+        safe_offset = max(0, int(offset or 0))
+        safe_limit = max(1, min(int(limit or 12000), 30000))
+        data = await asyncio.to_thread(media_storage.r2_client.get_object_bytes, str(book.get("storage_key") or ""))
+        content = _decode_folio_book(data, str(book.get("mime_type") or ""))
+        page = content[safe_offset : safe_offset + safe_limit]
+        next_offset = safe_offset + len(page)
+        normalized_chapter = None if int(chapter_index) < 0 else int(chapter_index)
+        highlights = await db.list_folio_highlights(book_id, chapter_index=normalized_chapter)
+        return _ok(
+            book=_public_folio_book(book),
+            content=page,
+            highlights=highlights,
+            chapter_index=normalized_chapter,
+            offset=safe_offset,
+            next_offset=next_offset if next_offset < len(content) else None,
+            has_more=next_offset < len(content),
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+    except Exception:
+        logger.exception("read_folio_shared_context failed")
+        return _err("Folio shared context is unavailable")
+
+
+async def update_folio_reading_position(
+    book_id: str,
+    chapter_index: int,
+    agent_id: str,
+    char_offset: int = 0,
+) -> str:
+    """Save an agent's independent reading position in a Folio book."""
+    try:
+        position = await db.set_folio_reading_position(
+            book_id,
+            actor_type="agent",
+            actor_id=agent_id,
+            chapter_index=chapter_index,
+            char_offset=char_offset,
+        )
+        return _ok(position=position)
+    except (ValueError, db.AgentResolutionError) as exc:
+        return _err(str(exc))
+    except Exception:
+        logger.exception("update_folio_reading_position failed")
+        return _err("Could not save the Folio reading position")
 
 
 async def _module_create_item(
@@ -884,9 +1050,9 @@ async def inbox_create_item(
 
 
 async def folio_list_items(status: str = "", type: str = "", agent_id: str = "", limit: int = 50, offset: int = 0) -> str:
-    """List Folio items, including extracted notes and R2-backed book media."""
+    """List extracted notes routed to Folio. Use list_folio_books for books."""
     try:
-        return await _folio_list_items(status, type, agent_id, limit, offset)
+        return await _module_list_items("folio", status, type, agent_id, limit, offset)
     except Exception as exc:
         logger.exception("folio.list_items failed")
         return _err(str(exc))
@@ -1497,14 +1663,33 @@ async def inbox(action: str, params: dict[str, Any] | None = None) -> str:
     return await _dispatch(_INBOX_ACTIONS, "inbox", action, params)
 
 
-_FOLIO_ACTIONS = {"list_items": folio_list_items, "create_item": folio_create_item}
+_FOLIO_ACTIONS = {
+    "list_items": folio_list_items,
+    "create_item": folio_create_item,
+    "list_books": list_folio_books,
+    "read_book": read_folio_book,
+    "list_highlights": list_folio_highlights,
+    "create_highlight": create_folio_highlight,
+    "add_thought": add_folio_thought,
+    "reply_thought": reply_folio_thought,
+    "read_shared_context": read_folio_shared_context,
+    "update_position": update_folio_reading_position,
+}
 
 
 @mcp.tool(name="folio")
 async def folio(action: str, params: dict[str, Any] | None = None) -> str:
-    """YUI folio (notes + R2-backed book media). params per action:
+    """YUI folio (notes + R2-backed books). params per action:
     - list_items: status="", type="", agent_id="", limit=50, offset=0
     - create_item: title*, type="note", content="", source_excerpt="", status="accepted", agent_id="", session_id="", message_id="", metadata={}
+    - list_books: limit=50, offset=0
+    - read_book: book_id*, offset=0, limit=12000
+    - list_highlights: book_id*, chapter_index=-1
+    - create_highlight: book_id*, chapter_index*, start_offset*, end_offset*, text*, agent_id*, author_name=""
+    - add_thought: highlight_id*, content*, agent_id*, author_name=""
+    - reply_thought: thought_id*, content*, agent_id*, author_name=""
+    - read_shared_context: book_id*, chapter_index=-1, offset=0, limit=12000
+    - update_position: book_id*, chapter_index*, agent_id*, char_offset=0
     """
     return await _dispatch(_FOLIO_ACTIONS, "folio", action, params)
 

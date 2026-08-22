@@ -10,6 +10,16 @@ import database as db
 import media_storage
 from config import settings
 from routes import chat, ChatRequest
+from yui_tool_bridge import (
+    add_folio_thought,
+    create_folio_highlight,
+    list_folio_books,
+    list_folio_highlights,
+    read_folio_book,
+    read_folio_shared_context,
+    reply_folio_thought,
+    update_folio_reading_position,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1032,6 +1042,27 @@ async def grimoire(action: str, params: dict[str, Any] | None = None) -> str:
     - search_entries: query*, tome_id=None, type=None
     """
     return await _dispatch(_GRIMOIRE_ACTIONS, "grimoire", action, params)
+
+
+_FOLIO_ACTIONS = {
+    "list_books": list_folio_books,
+    "read_book": read_folio_book,
+    "list_highlights": list_folio_highlights,
+    "create_highlight": create_folio_highlight,
+    "add_thought": add_folio_thought,
+    "reply_thought": reply_folio_thought,
+    "read_shared_context": read_folio_shared_context,
+    "update_position": update_folio_reading_position,
+}
+
+
+@mcp.tool()
+async def folio(action: str, params: dict[str, Any] | None = None) -> str:
+    """Folio public R2-backed books. params per action:
+    - list_books: limit=50, offset=0
+    - read_book: book_id*, offset=0, limit=12000
+    """
+    return await _dispatch(_FOLIO_ACTIONS, "folio", action, params)
 
 
 _STACKCHAN_ACTIONS = {
