@@ -135,6 +135,13 @@ class R2Client:
             ContentType=mime_type or "application/octet-stream",
         )
 
+    def get_object_bytes(self, storage_key: str) -> bytes:
+        response = self.client().get_object(Bucket=settings.r2_bucket, Key=storage_key)
+        body = response.get("Body")
+        if body is None:
+            raise RuntimeError("R2 object response has no body")
+        return body.read()
+
     def delete_object(self, storage_key: str) -> None:
         self.client().delete_object(Bucket=settings.r2_bucket, Key=storage_key)
 

@@ -24,6 +24,7 @@ REQUIRED_MCP_TOOLS = {
     "curio",
     "memory",
     "grimoire",
+    "folio",
     "stackchan",
 }
 

@@ -1077,7 +1077,11 @@ async def chat(body: ChatRequest):
                                 "event": "tool_call",
                                 "data": jsonlib.dumps({"name": func_name, "status": "running"}, ensure_ascii=False),
                             }
-                            result = await execute_tool_with_guard(func_name, args)
+                            result = await execute_tool_with_guard(
+                                func_name,
+                                args,
+                                trusted_agent_id=resolved_agent_id,
+                            )
                         else:
                             tool_status = "error"
                             result = jsonlib.dumps({"error": f"Tool {func_name} not found"})

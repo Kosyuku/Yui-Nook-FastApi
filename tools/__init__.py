@@ -723,7 +723,7 @@ def register_tool(schema: dict, executor: Callable):
 register_app_tools(register_tool, set(TOOL_EXECUTORS))
 
 
-async def execute_tool_with_guard(name: str, args: dict) -> str:
+async def execute_tool_with_guard(name: str, args: dict, *, trusted_agent_id: str = "") -> str:
     """
     Unified tool execution gateway:
     - timeout
@@ -738,12 +738,21 @@ async def execute_tool_with_guard(name: str, args: dict) -> str:
     timeout_s = max(1.0, settings.tool_timeout_seconds)
     max_log_chars = max(60, settings.tool_log_max_result_chars)
     executor = TOOL_EXECUTORS[name]
+    execution_args = dict(args or {})
+    if trusted_agent_id:
+        schema = next(
+            (item for item in TOOLS_SCHEMA if item.get("function", {}).get("name") == name),
+            None,
+        )
+        properties = (schema or {}).get("function", {}).get("parameters", {}).get("properties", {})
+        if "agent_id" in properties:
+            execution_args["agent_id"] = trusted_agent_id
     last_error = ""
     started = time.perf_counter()
 
     for attempt in range(retries + 1):
         try:
-            result = await asyncio.wait_for(executor(args), timeout=timeout_s)
+            result = await asyncio.wait_for(executor(execution_args), timeout=timeout_s)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             preview = str(result)
             if len(preview) > max_log_chars:

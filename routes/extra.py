@@ -547,6 +547,29 @@ class MediaItemLyricsPayload(BaseModel):
     lyrics_filename: str = ""
 
 
+class FolioHighlightCreatePayload(BaseModel):
+    chapter_index: int
+    start_offset: int
+    end_offset: int
+    text: str
+    client_id: Optional[str] = None
+
+
+class FolioThoughtCreatePayload(BaseModel):
+    content: str
+    client_id: Optional[str] = None
+
+
+class FolioCommentCreatePayload(BaseModel):
+    content: str
+    client_id: Optional[str] = None
+
+
+class FolioPositionPayload(BaseModel):
+    chapter_index: int
+    char_offset: int = 0
+
+
 class AgentResolvePayload(BaseModel):
     agent_id: Optional[str] = None
     session_id: Optional[str] = None
@@ -884,6 +907,90 @@ async def delete_media_item(item_id: str, delete_object: bool = False):
     if not item:
         raise HTTPException(status_code=404, detail="media item not found")
     return {"ok": True, "item": item, "deleted_objects": deleted_objects}
+
+
+@extra_api.get("/folio/books/{book_id}/highlights")
+async def get_folio_highlights(book_id: str, chapter_index: Optional[int] = Query(None, ge=0)):
+    try:
+        highlights = await db.list_folio_highlights(book_id, chapter_index=chapter_index)
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {"highlights": highlights}
+
+
+@extra_api.post("/folio/books/{book_id}/highlights")
+async def create_folio_highlight(book_id: str, body: FolioHighlightCreatePayload):
+    try:
+        highlight = await db.create_folio_highlight(
+            book_id,
+            chapter_index=body.chapter_index,
+            start_offset=body.start_offset,
+            end_offset=body.end_offset,
+            quote_text=body.text,
+            author_type="user",
+            author_id="user",
+            author_name="我",
+            client_id=body.client_id,
+        )
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {"highlight": highlight}
+
+
+@extra_api.post("/folio/highlights/{highlight_id}/thoughts")
+async def create_folio_thought(highlight_id: str, body: FolioThoughtCreatePayload):
+    try:
+        thought = await db.add_folio_thought(
+            highlight_id,
+            content=body.content,
+            author_type="user",
+            author_id="user",
+            author_name="我",
+            client_id=body.client_id,
+        )
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {"thought": thought}
+
+
+@extra_api.post("/folio/thoughts/{thought_id}/comments")
+async def create_folio_comment(thought_id: str, body: FolioCommentCreatePayload):
+    try:
+        comment = await db.add_folio_comment(
+            thought_id,
+            content=body.content,
+            author_type="user",
+            author_id="user",
+            author_name="我",
+            client_id=body.client_id,
+        )
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {"comment": comment}
+
+
+@extra_api.get("/folio/books/{book_id}/position")
+async def get_folio_user_position(book_id: str):
+    try:
+        position = await db.get_folio_reading_position(book_id, actor_type="user", actor_id="user")
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {"position": position}
+
+
+@extra_api.put("/folio/books/{book_id}/position")
+async def put_folio_user_position(book_id: str, body: FolioPositionPayload):
+    try:
+        position = await db.set_folio_reading_position(
+            book_id,
+            actor_type="user",
+            actor_id="user",
+            chapter_index=body.chapter_index,
+            char_offset=body.char_offset,
+        )
+    except Exception as exc:
+        raise _media_http_error(exc)
+    return {"position": position}
 
 
 @extra_api.get("/agents")

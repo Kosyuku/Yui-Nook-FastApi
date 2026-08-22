@@ -56,6 +56,10 @@ class AppConfig:
     supabase_rp_messages_table: str = "rp_messages"
     supabase_activity_events_table: str = "activity_events"
     supabase_media_items_table: str = "media_items"
+    supabase_folio_highlights_table: str = "folio_highlights"
+    supabase_folio_thoughts_table: str = "folio_thoughts"
+    supabase_folio_comments_table: str = "folio_comments"
+    supabase_folio_reading_positions_table: str = "folio_reading_positions"
     supabase_extracted_items_table: str = "extracted_items"
     supabase_artifact_items_table: str = "artifact_items"
     media_storage_provider: str = "r2"
@@ -234,6 +238,10 @@ class AppConfig:
             supabase_rp_messages_table=os.getenv("SUPABASE_RP_MESSAGES_TABLE", "rp_messages"),
             supabase_activity_events_table=os.getenv("SUPABASE_ACTIVITY_EVENTS_TABLE", "activity_events"),
             supabase_media_items_table=os.getenv("SUPABASE_MEDIA_ITEMS_TABLE", "media_items"),
+            supabase_folio_highlights_table=os.getenv("SUPABASE_FOLIO_HIGHLIGHTS_TABLE", "folio_highlights"),
+            supabase_folio_thoughts_table=os.getenv("SUPABASE_FOLIO_THOUGHTS_TABLE", "folio_thoughts"),
+            supabase_folio_comments_table=os.getenv("SUPABASE_FOLIO_COMMENTS_TABLE", "folio_comments"),
+            supabase_folio_reading_positions_table=os.getenv("SUPABASE_FOLIO_READING_POSITIONS_TABLE", "folio_reading_positions"),
             supabase_extracted_items_table=os.getenv("SUPABASE_EXTRACTED_ITEMS_TABLE", "extracted_items"),
             supabase_artifact_items_table=os.getenv("SUPABASE_ARTIFACT_ITEMS_TABLE", "artifact_items"),
             media_storage_provider=os.getenv("MEDIA_STORAGE_PROVIDER", "r2").strip().lower() or "r2",
