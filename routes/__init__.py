@@ -9,12 +9,22 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 import ai_runtime
-from codex_bridge import codex_bridge_chat
+from codex_bridge import (
+    codex_bridge_chat,
+    codex_bridge_interrupt,
+    codex_bridge_respond,
+    codex_bridge_shutdown,
+    codex_bridge_start,
+    codex_bridge_status,
+    codex_bridge_subscribe,
+    codex_bridge_threads,
+    codex_bridge_unsubscribe,
+)
 from claude_bridge_transport import (
     bridge_chat,
     bridge_keepalive,
@@ -469,6 +479,16 @@ class CodexChatRequest(BaseModel):
     timeout_seconds: Optional[int] = None
     agent_id: Optional[str] = None
     persona: Optional[str] = None
+
+
+class CodexInterruptRequest(BaseModel):
+    thread_id: str
+    turn_id: Optional[str] = None
+
+
+class CodexServerResponseRequest(BaseModel):
+    request_id: str
+    result: dict
 
 
 class ClaudeCodeChatRequest(BaseModel):
@@ -1324,6 +1344,95 @@ async def codex_chat(body: CodexChatRequest):
         "assistant_message": assistant_message,
         "prompt_debug": built_prompt.debug if (settings.prompt_debug and built_prompt) else None,
     }
+
+
+@api.get("/codex/control/status")
+async def codex_control_status():
+    return codex_bridge_status()
+
+
+@api.post("/codex/control/start")
+async def codex_control_start():
+    try:
+        return await codex_bridge_start()
+    except Exception as exc:
+        logger.exception("Codex app-server start failed")
+        raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
+
+
+@api.post("/codex/control/stop")
+async def codex_control_stop():
+    await codex_bridge_shutdown()
+    return codex_bridge_status()
+
+
+@api.post("/codex/control/restart")
+async def codex_control_restart():
+    try:
+        await codex_bridge_shutdown()
+        return await codex_bridge_start()
+    except Exception as exc:
+        logger.exception("Codex app-server restart failed")
+        raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
+
+
+@api.get("/codex/control/threads")
+async def codex_control_threads(limit: int = 50):
+    try:
+        return await codex_bridge_threads(limit)
+    except Exception as exc:
+        logger.exception("Codex app-server thread list failed")
+        raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
+
+
+@api.post("/codex/control/interrupt")
+async def codex_control_interrupt(body: CodexInterruptRequest):
+    try:
+        result = await codex_bridge_interrupt(body.thread_id, body.turn_id)
+        return {"ok": True, "result": result}
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or repr(exc)) from exc
+
+
+@api.post("/codex/control/respond")
+async def codex_control_respond(body: CodexServerResponseRequest):
+    try:
+        await codex_bridge_respond(body.request_id, body.result)
+        return {"ok": True}
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or repr(exc)) from exc
+
+
+@api.get("/codex/control/events")
+async def codex_control_events(request: Request, thread_id: Optional[str] = None):
+    """Authenticated SSE feed used by the future terminal/control-console page."""
+    try:
+        await codex_bridge_start()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or repr(exc)) from exc
+
+    queue = codex_bridge_subscribe((thread_id or "").strip() or None)
+
+    async def event_generator():
+        try:
+            yield {
+                "event": "status",
+                "data": jsonlib.dumps(codex_bridge_status(), ensure_ascii=False),
+            }
+            while not await request.is_disconnected():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": "{}"}
+                    continue
+                yield {
+                    "event": "codex",
+                    "data": jsonlib.dumps(event, ensure_ascii=False),
+                }
+        finally:
+            codex_bridge_unsubscribe(queue, (thread_id or "").strip() or None)
+
+    return EventSourceResponse(event_generator())
 
 
 def _bridge_event_to_sse(event: dict) -> dict | None:
